@@ -1,0 +1,15 @@
+.transaction-list {
+    padding: 0 20px;
+  }
+  
+  /* Add header styles if needed */
+  .transaction-header {
+    display: grid;
+    grid-template-columns: 1fr 3fr 2fr 1fr 2fr;
+    font-weight: bold;
+  }
+  
+  .transaction-header > div {
+    padding: 0 10px;
+  }
+  

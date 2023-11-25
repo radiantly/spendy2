@@ -1,0 +1,22 @@
+.transaction-item {
+    display: grid;
+    grid-template-columns: 1fr 3fr 1fr 1fr 1fr;
+    padding: 10px 0;
+    border-bottom: 1px solid #eee;
+    align-items: center;
+  }
+  
+  .transaction-item > div {
+    padding: 0 10px;
+  }
+  
+  .description {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  
+  .category-pill {
+    margin-left: 10px; /* Spacing between description and category pill */
+  }
+  
