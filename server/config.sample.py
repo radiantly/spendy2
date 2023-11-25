@@ -1,0 +1,2 @@
+OPENAI_API_KEY = ""
+MAX_RETRIES = 1
