@@ -1,10 +1,8 @@
-import asyncio
-from aiosmtpd.controller import Controller
 from email.parser import BytesParser
 from email.policy import default
 
 
-class CustomHandler:
+class EmailHandler:
     async def handle_DATA(self, server, session, envelope):
         print("Mail received!\n")
 
@@ -32,13 +30,3 @@ class CustomHandler:
             print(f'Plain text body: {msg.get_payload(decode=True).decode("utf-8")}')
 
         return "250 Message accepted for delivery"
-
-
-async def main():
-    controller = Controller(CustomHandler(), hostname="0.0.0.0", port=25)
-    controller.start()
-    await asyncio.Future()  # This will keep the server running
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
