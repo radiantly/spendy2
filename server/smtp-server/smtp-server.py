@@ -1,37 +1,44 @@
-import smtpd
-import asyncore
-from email.parser import Parser
+import asyncio
+from aiosmtpd.controller import Controller
+from email.parser import BytesParser
+from email.policy import default
 
 
-class SimpleSMTPServer(smtpd.SMTPServer):
-    def process_message(self, peer, mailfrom, rcpttos, data, **kwargs):
-        print("Receiving message from:", peer)
-        print("From:", mailfrom)
-        print("To:", rcpttos)
-
-        # Decode data from bytes to string
-        data_str = data.decode("utf-8")
+class CustomHandler:
+    async def handle_DATA(self, server, session, envelope):
+        print("Mail received!\n")
 
         # Parse the email content
-        message = Parser().parsestr(data_str)
+        parser = BytesParser(policy=default)
+        msg = parser.parsebytes(envelope.content)
 
-        # Extract the subject
-        subject = message.get("Subject")
-        print("Subject:", subject)
+        print(f"From: {envelope.mail_from}")
+        print(f"To: {envelope.rcpt_tos}")
 
-        # Extract and print only the plaintext content
-        if message.is_multipart():
-            for part in message.walk():
-                content_type = part.get_content_type()
-                content_disposition = part.get("Content-Disposition")
-                if content_type == "text/plain" and not content_disposition:
-                    print(part.get_payload(decode=True).decode())
+        # Extract subject
+        subject = msg["Subject"]
+        print(f"Subject: {subject}")
+
+        # Extract and print plaintext content
+        if msg.is_multipart():
+            for part in msg.walk():
+                # Each part is either a text or an attachment or other type
+                if part.get_content_type() == "text/plain":
+                    print(
+                        f'Plain text body: {part.get_payload(decode=True).decode("utf-8")}'
+                    )
         else:
-            print(message.get_payload(decode=True).decode())
+            # For non-multipart emails, just print the payload
+            print(f'Plain text body: {msg.get_payload(decode=True).decode("utf-8")}')
 
-        return "250 Ok"
+        return "250 Message accepted for delivery"
 
 
-server = SimpleSMTPServer(("0.0.0.0", 25), None)
+async def main():
+    controller = Controller(CustomHandler(), hostname="0.0.0.0", port=25)
+    controller.start()
+    await asyncio.Future()  # This will keep the server running
 
-asyncore.loop()
+
+if __name__ == "__main__":
+    asyncio.run(main())
