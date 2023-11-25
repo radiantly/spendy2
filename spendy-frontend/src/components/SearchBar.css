@@ -1,8 +1,9 @@
 .search-bar input {
-    width: 100%;
-    padding: 10px;
-    margin: 20px 0;
-    box-sizing: border-box;
-    border: none;
-  }
-  
+  width: 100%;
+  padding: 10px;
+  margin: 20px 0;
+  box-sizing: border-box;
+  border: none;
+  outline: none;
+  font-size: inherit;
+}

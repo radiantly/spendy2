@@ -19,7 +19,7 @@ function TransactionsPage() {
   );
 
   return (
-    <div className="app">
+    <div className="container">
       <Header totalSpending={totalSpending} />
       <SearchBar searchTerm={searchTerm} handleSearch={handleSearch} />
       <TransactionList searchTerm={searchTerm} transactions={mockData} />

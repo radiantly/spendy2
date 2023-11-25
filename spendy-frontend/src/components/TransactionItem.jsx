@@ -2,20 +2,16 @@ import React from "react";
 import "./TransactionItem.css";
 import { getCategoryColor } from "./categoryColors";
 
-const TransactionItem = ({ transaction }) => {
+const TransactionItem = ({ transaction, visible }) => {
   const categoryColors = getCategoryColor(transaction.category);
 
   const categoryStyle = {
     backgroundColor: categoryColors.light,
     color: categoryColors.dark,
-    borderRadius: "15px",
-    padding: "3px 10px",
-    display: "inline-block",
-    margin: "0 5px",
   };
 
   return (
-    <div className="transaction-item">
+    <div className={"transaction-item " + (visible ? "" : "hidden")}>
       <div className="date">{transaction.date}</div>
       <div className="description">
         {transaction.description}

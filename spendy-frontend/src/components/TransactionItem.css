@@ -1,22 +1,31 @@
 .transaction-item {
-    display: grid;
-    grid-template-columns: 1fr 3fr 1fr 1fr 1fr;
-    padding: 10px 0;
-    border-bottom: 1px solid #eee;
-    align-items: center;
-  }
-  
-  .transaction-item > div {
-    padding: 0 10px;
-  }
-  
-  .description {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  
-  .category-pill {
-    margin-left: 10px; /* Spacing between description and category pill */
-  }
-  
+  display: grid;
+  grid-template-columns: 1fr 3fr 1fr 1fr 1fr;
+  padding: 7px 0;
+  align-items: center;
+  transition: background-color 0.1s ease;
+}
+
+.transaction-item > div {
+  padding: 0 10px;
+}
+
+.description {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.category-pill {
+  margin-left: 10px; /* Spacing between description and category pill */
+  border-radius: 15px;
+  padding: 2px 9px;
+  display: inline-block;
+  margin: 0 5px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.transaction-item:hover {
+  background-color: #fafafa;
+}
