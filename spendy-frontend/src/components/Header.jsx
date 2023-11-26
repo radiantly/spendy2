@@ -1,10 +1,10 @@
-import React from "react";
 import "./Header.css";
+import Logo from "./Logo";
 
 const Header = ({ totalSpending }) => {
   return (
     <header className="header">
-      <h1>Spendy</h1>
+      <Logo />
       <div className="total-spending">
         ₹{totalSpending} spent in November 2023
       </div>

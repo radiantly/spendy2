@@ -114,6 +114,12 @@ def extract_transaction(email_body: str) -> dict | None:
             pass
 
 
+async def process_mail(mail: dict):
+    details = extract_transaction(mail["body"])
+    if "transaction" in details and details["transaction"]:
+        print(details)
+
+
 # Example
 if __name__ == "__main__":
     example_email = """Dear Customer,
