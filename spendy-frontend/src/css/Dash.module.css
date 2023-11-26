@@ -8,17 +8,46 @@
   font-weight: 300;
 }
 
-.symbol {
-  font-size: 32px;
+.amount {
+  display: flex;
+  gap: 5px;
 }
 
-.amount {
+.symbol {
+  font-size: 32px;
+
+  /* Open Sans doesn't have the rupee symbol */
+  font-family: "Noto Sans", sans-serif;
+}
+
+.number {
   font-size: 64px;
   line-height: 1;
-  padding: 0 10px 0 10px;
 }
 
 .timeframe {
   font-size: 32px;
   align-self: flex-end;
+}
+
+@media screen and (max-width: 600px) {
+  .dash {
+    padding: 25px 0;
+  }
+  .statbox {
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+  }
+  .number {
+    font-size: 48px;
+  }
+  .spentin {
+    display: none;
+  }
+  .timeframe {
+    align-self: center;
+    font-size: 12px;
+    font-weight: 600;
+  }
 }

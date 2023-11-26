@@ -3,6 +3,8 @@ import {
   statbox,
   symbol,
   amount,
+  number,
+  spentin,
   timeframe,
 } from "../css/Dash.module.css";
 
@@ -11,9 +13,13 @@ const Dash = ({ totalSpending }) => {
   return (
     <div className={dash}>
       <div className={statbox}>
-        <span className={symbol}>₹</span>
-        <span className={amount}>{spend}</span>
-        <span className={timeframe}>spent in November 2023</span>
+        <div className={amount}>
+          <span className={symbol}>₹</span>
+          <span className={number}>{spend}</span>
+        </div>
+        <div className={timeframe}>
+          <span className={spentin}>spent in </span>November 2023
+        </div>
       </div>
     </div>
   );
