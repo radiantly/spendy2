@@ -5,8 +5,11 @@ import SearchBar from "../components/SearchBar";
 import TransactionList from "../components/TransactionList";
 import mockData from "./mockData.json"; // Your mock transaction data
 import "./TransactionsPage.css";
+import { useLoaderData } from "react-router-dom";
 
 function TransactionsPage() {
+  const transactions = useLoaderData();
+  console.log("Loader data:", transactions);
   const [searchTerm, setSearchTerm] = useState("");
 
   const handleSearch = (event) => {

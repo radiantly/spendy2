@@ -13,6 +13,7 @@ async def root():
 
 @api.post("/user")
 async def create_user(user: User):
+    user.username = user.username.lower()
     try:
         with Session(engine) as session:
             session.add(user)

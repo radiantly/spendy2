@@ -39,8 +39,7 @@ function LoginRegisterPage() {
         link: "/register",
       };
 
-  const register = async (e) => {
-    e.preventDefault();
+  const register = async () => {
     const keypair = generateKeyPair(password);
     console.debug("generated keypair", keypair);
 
@@ -60,21 +59,29 @@ function LoginRegisterPage() {
       `Failed to create an account. The username ${username} may already be in use.`
     );
   };
-  const login = () => {};
+  const login = async () => {
+    const keypair = generateKeyPair(password);
+
+    localStorage.setItem("user", JSON.stringify({ username, keypair }));
+    return navigate("/");
+  };
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+
+    return isRegister ? register() : login();
+  };
 
   return (
     <div className={container}>
-      <form
-        className={box}
-        onSubmit={(e) => (isRegister ? register(e) : login(e))}
-      >
+      <form className={box} onSubmit={handleSubmit}>
         <Logo />
         <Info text={infoText || txt.info} />
         <input
           placeholder="Username"
           required
           value={username}
-          onInput={(e) => setUsername(e.target.value)}
+          onInput={(e) => setUsername(e.target.value.toLowerCase())}
           maxLength={32}
         />
         <input
