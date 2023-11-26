@@ -1,0 +1,24 @@
+.dash {
+  text-align: center;
+  color: #343434;
+}
+
+.statbox {
+  display: flex;
+  font-weight: 300;
+}
+
+.symbol {
+  font-size: 32px;
+}
+
+.amount {
+  font-size: 64px;
+  line-height: 1;
+  padding: 0 10px 0 10px;
+}
+
+.timeframe {
+  font-size: 32px;
+  align-self: flex-end;
+}

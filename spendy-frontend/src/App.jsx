@@ -1,17 +1,12 @@
 import {
-  BrowserRouter as Router,
-  Route,
-  Routes,
   redirect,
   createBrowserRouter,
-  createRoutesFromElements,
   RouterProvider,
 } from "react-router-dom";
 import TransactionsPage from "./pages/TransactionsPage";
 import "./App.css";
 import LoginRegisterPage from "./pages/LoginRegisterPage";
-import { postJSON } from "./utils";
-import forge from "node-forge";
+import { decryptText, fromPem, postJSON } from "./utils";
 
 const router = createBrowserRouter([
   {
@@ -27,10 +22,23 @@ const router = createBrowserRouter([
         throw redirect("/login");
       }
 
-      return postJSON("/api/transactions", {
+      const response = await postJSON("/api/transactions", {
         username: user.username,
         public_key: user.keypair.publicKey,
       });
+
+      if (response.status != 200) {
+        localStorage.removeItem("user");
+        throw redirect("/login");
+      }
+
+      const keypair = fromPem(user.keypair);
+      const transactions = await response.json();
+      return transactions.map(({ id, date, encrypted }) => ({
+        id,
+        date: new Date(date),
+        details: decryptText(keypair.privateKey, encrypted),
+      }));
     },
     element: <TransactionsPage />,
   },

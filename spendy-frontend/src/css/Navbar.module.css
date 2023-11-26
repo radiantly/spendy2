@@ -1,0 +1,6 @@
+nav {
+  display: flex;
+  align-items: center;
+  min-height: min(17vh, 17vw);
+  padding: 10px 0;
+}

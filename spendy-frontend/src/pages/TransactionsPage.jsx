@@ -1,11 +1,12 @@
 import { useState } from "react";
 
-import Header from "../components/Header";
 import SearchBar from "../components/SearchBar";
 import TransactionList from "../components/TransactionList";
 import mockData from "./mockData.json"; // Your mock transaction data
-import "./TransactionsPage.css";
+import { container } from "../css/TransactionsPage.module.css";
 import { useLoaderData } from "react-router-dom";
+import Navbar from "../components/Navbar";
+import Dash from "../components/Dash";
 
 function TransactionsPage() {
   const transactions = useLoaderData();
@@ -22,8 +23,9 @@ function TransactionsPage() {
   );
 
   return (
-    <div className="container">
-      <Header totalSpending={totalSpending} />
+    <div className={container}>
+      <Navbar />
+      <Dash totalSpending={totalSpending} />
       <SearchBar searchTerm={searchTerm} handleSearch={handleSearch} />
       <TransactionList searchTerm={searchTerm} transactions={mockData} />
     </div>

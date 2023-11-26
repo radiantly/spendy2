@@ -1,17 +1,16 @@
 import json
 import re
+from datetime import datetime
 
 from openai import OpenAI
-from datetime import datetime
 from sqlmodel import Session, select
 
-from .database import engine, User, Transaction
-
 from .config import MAX_RETRIES, OPENAI_API_KEY
+from .database import Transaction, User, engine
 from .encryption import encrypt_transaction
 
-
 client = OpenAI(api_key=OPENAI_API_KEY)
+
 
 def sanitize_email_text(email_text: str):
     return re.sub(r"[\n\r\t ]+", " ", email_text).strip()
@@ -47,7 +46,7 @@ Dear Customer, Rs.329.00 has been debited from account **2981 to VPA jason13201-
     "transaction": true,
     "type": "UPI",
     "amount": 329.00,
-    "party": "jason13201-1@okaxis"
+    "party": "jason13201-1@okaxis",
     "currency": "INR"
 }
 
@@ -113,6 +112,7 @@ def extract_transaction(email_body: str) -> dict | None:
         retries += 1
         try:
             response = send_gpt_request(prompt)
+            print("chatgpt response:", response)
             transaction = json.loads(response)
             if is_valid_transaction(transaction):
                 return transaction
@@ -122,23 +122,29 @@ def extract_transaction(email_body: str) -> dict | None:
 
 async def process_mail(mail: dict):
     target_username = mail["to"][0].split("@")[0].lower()
-    
+
     with Session(engine) as session:
         statement = select(User.public_key).where(User.username == target_username)
         results = session.exec(statement)
         user_public_key = results.first()
-        
+
         if not user_public_key:
             print(f"User {target_username} not found.")
             return
         details = extract_transaction(mail["body"])
-        print(details)
         if "transaction" in details and details["transaction"]:
-            encrypted_transaction = encrypt_transaction(user_public_key, json.dumps(details))
-            print("Encrypted transaction",encrypted_transaction)
-            transaction = Transaction(owner=target_username, date=datetime.now(), encrypted=encrypted_transaction)
+            encrypted_transaction = encrypt_transaction(
+                user_public_key, json.dumps(details)
+            )
+            print("Encrypted transaction", encrypted_transaction)
+            transaction = Transaction(
+                owner=target_username,
+                date=datetime.now(),
+                encrypted=encrypted_transaction,
+            )
             session.add(transaction)
             session.commit()
+
 
 # Example
 if __name__ == "__main__":

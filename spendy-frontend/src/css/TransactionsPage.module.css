@@ -1,0 +1,6 @@
+.container {
+  width: min(95vw, 1200px);
+  display: flex;
+  flex-grow: 1;
+  flex-direction: column;
+}

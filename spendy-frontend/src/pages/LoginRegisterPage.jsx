@@ -1,10 +1,4 @@
-import {
-  Link,
-  useMatch,
-  redirect,
-  useNavigate,
-  useLocation,
-} from "react-router-dom";
+import { Link, useMatch, useNavigate, useLocation } from "react-router-dom";
 import Logo from "../components/Logo";
 import {
   container,
@@ -15,7 +9,6 @@ import {
 } from "../css/LoginRegisterPage.module.css";
 import { useEffect, useRef, useState } from "react";
 import { generateKeyPair, postJSON, toPem } from "../utils";
-import forge from "node-forge";
 function LoginRegisterPage() {
   const isRegister = useMatch("/register");
   const navigate = useNavigate();
@@ -40,6 +33,7 @@ function LoginRegisterPage() {
   useEffect(() => setFeedback(loc?.state?.feedback), [loc]);
 
   const register = async ({ publicKey }) => {
+    setFeedback("Creating account..");
     const response = await postJSON("/api/user", {
       username,
       public_key: publicKey,
@@ -55,10 +49,11 @@ function LoginRegisterPage() {
       });
 
     setFeedback(
-      `Failed to create an account. The username ${username} may already be in use.`
+      `Failed to create account. The username ${username} may already be in use.`
     );
   };
   const login = async (keypair) => {
+    setFeedback("Logging in..");
     localStorage.setItem("user", JSON.stringify({ username, keypair }));
     return navigate("/");
   };
