@@ -13,7 +13,7 @@ import {
   alternateAction,
   info,
 } from "../css/LoginRegisterPage.module.css";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { generateKeyPair, postJSON, toPem } from "../utils";
 import forge from "node-forge";
 function LoginRegisterPage() {
@@ -36,6 +36,7 @@ function LoginRegisterPage() {
       };
 
   const [feedback, setFeedback] = useState(null);
+  const feedbackRef = useRef(null);
   useEffect(() => setFeedback(loc?.state?.feedback), [loc]);
 
   const register = async ({ publicKey }) => {
@@ -65,10 +66,18 @@ function LoginRegisterPage() {
   const handleSubmit = (e) => {
     e.preventDefault();
 
-    const keypair = toPem(generateKeyPair(password));
-    console.debug("generated keypair", keypair);
+    // manually set feedback because generating a keypair using node forge
+    // freezes the main thread
+    feedbackRef.current.classList.remove("hidden");
+    feedbackRef.current.innerText =
+      "Generating keypair - this may take a few seconds.";
 
-    return isRegister ? register(keypair) : login(keypair);
+    setTimeout(() => {
+      const keypair = toPem(generateKeyPair(password));
+      console.debug("generated keypair", keypair);
+
+      isRegister ? register(keypair) : login(keypair);
+    }, 0);
   };
 
   return (
@@ -96,7 +105,10 @@ function LoginRegisterPage() {
           value={password}
           onInput={(e) => setPassword(e.target.value)}
         />
-        <div className={[info, feedback ? "" : "hidden"].join(" ")}>
+        <div
+          className={[info, feedback ? "" : "hidden"].join(" ")}
+          ref={feedbackRef}
+        >
           {feedback}
         </div>
         <div className={submitRow}>
