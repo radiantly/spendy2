@@ -29,7 +29,7 @@ const router = createBrowserRouter([
 
       return postJSON("/api/transactions", {
         username: user.username,
-        public_key: forge.pki.publicKeyToPem(user.keypair.publicKey),
+        public_key: user.keypair.publicKey,
       });
     },
     element: <TransactionsPage />,

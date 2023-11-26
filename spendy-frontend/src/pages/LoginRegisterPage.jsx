@@ -13,25 +13,21 @@ import {
   alternateAction,
   info,
 } from "../css/LoginRegisterPage.module.css";
-import { useState } from "react";
-import { generateKeyPair, postJSON } from "../utils";
+import { useEffect, useState } from "react";
+import { generateKeyPair, postJSON, toPem } from "../utils";
 import forge from "node-forge";
 function LoginRegisterPage() {
   const isRegister = useMatch("/register");
   const navigate = useNavigate();
   const loc = useLocation();
-  const [infoText, setInfoText] = useState(loc?.state?.info);
+
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-
   const txt = isRegister
     ? {
         submit: "Create account",
         alternate: "Sign in",
         link: "/login",
-        info: `Choose a username and send your transactional emails to ${
-          username || "username"
-        }@${location.hostname}`,
       }
     : {
         submit: "Login",
@@ -39,29 +35,29 @@ function LoginRegisterPage() {
         link: "/register",
       };
 
-  const register = async () => {
-    const keypair = generateKeyPair(password);
-    console.debug("generated keypair", keypair);
+  const [feedback, setFeedback] = useState(null);
+  useEffect(() => setFeedback(loc?.state?.feedback), [loc]);
 
+  const register = async ({ publicKey }) => {
     const response = await postJSON("/api/user", {
       username,
-      public_key: forge.pki.publicKeyToPem(keypair.publicKey),
+      public_key: publicKey,
     });
 
     console.log(response);
 
     if (response.status == 200)
       return navigate("/login", {
-        state: { info: "Your account has been created, login below:" },
+        state: {
+          feedback: "Your account has been created, you can login now.",
+        },
       });
 
-    setInfoText(
+    setFeedback(
       `Failed to create an account. The username ${username} may already be in use.`
     );
   };
-  const login = async () => {
-    const keypair = generateKeyPair(password);
-
+  const login = async (keypair) => {
     localStorage.setItem("user", JSON.stringify({ username, keypair }));
     return navigate("/");
   };
@@ -69,14 +65,23 @@ function LoginRegisterPage() {
   const handleSubmit = (e) => {
     e.preventDefault();
 
-    return isRegister ? register() : login();
+    const keypair = toPem(generateKeyPair(password));
+    console.debug("generated keypair", keypair);
+
+    return isRegister ? register(keypair) : login(keypair);
   };
 
   return (
     <div className={container}>
       <form className={box} onSubmit={handleSubmit}>
         <Logo />
-        <Info text={infoText || txt.info} />
+        {isRegister && (
+          <div
+            className={info}
+          >{`Choose a username and send your transactional emails to ${
+            username || "username"
+          }@${location.hostname}`}</div>
+        )}
         <input
           placeholder="Username"
           required
@@ -91,6 +96,9 @@ function LoginRegisterPage() {
           value={password}
           onInput={(e) => setPassword(e.target.value)}
         />
+        <div className={[info, feedback ? "" : "hidden"].join(" ")}>
+          {feedback}
+        </div>
         <div className={submitRow}>
           <input type="submit" value={txt.submit} />
           <Link className={alternateAction} to={txt.link}>
@@ -100,11 +108,6 @@ function LoginRegisterPage() {
       </form>
     </div>
   );
-}
-
-function Info({ text }) {
-  if (!text) return null;
-  return <div className={info}>{text}</div>;
 }
 
 export default LoginRegisterPage;
