@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import SearchBar from "../components/SearchBar";
 import TransactionList from "../components/TransactionList";
@@ -17,7 +17,36 @@ function TransactionsPage() {
     setSearchTerm(event.target.value);
   };
 
-  const totalSpending = mockData.reduce(
+  function parseTransactionData(data) {
+    // Check if the data is an array
+    if (!Array.isArray(data)) {
+      return "Invalid data";
+    }
+
+    // Map each transaction to its parsed form
+    return data.map(transaction => {
+      let details;
+      try {
+        details = JSON.parse(transaction.details);
+      } catch (e) {
+        return "Error parsing transaction details for transaction ID " + transaction.id;
+      }
+
+      // Extract and return the relevant information
+      return {
+        id: transaction.id,
+        date: transaction.date,
+        type: details.type,
+        amount: details.amount,
+        party: details.party,
+        currency: details.currency
+      };
+    });
+  }
+
+  const parsedtransactions = useMemo(() => parseTransactionData(transactions), [transactions])
+
+  const totalSpending = parsedtransactions.reduce(
     (acc, transaction) => acc + transaction.amount,
     0
   );
@@ -27,7 +56,7 @@ function TransactionsPage() {
       <Navbar />
       <Dash totalSpending={totalSpending} />
       <SearchBar searchTerm={searchTerm} handleSearch={handleSearch} />
-      <TransactionList searchTerm={searchTerm} transactions={mockData} />
+      <TransactionList searchTerm={searchTerm} transactions={parsedtransactions} />
     </div>
   );
 }

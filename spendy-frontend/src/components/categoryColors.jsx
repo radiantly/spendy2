@@ -1,5 +1,5 @@
 const categoryColorsPalette = {
-  Entertainment: { light: "#FFD1DC", dark: "#FF69B4" },
+  None: { light: "#FFD1DC", dark: "#FF69B4" },
   Electronics: { light: "#D0F0C0", dark: "#3CB371" },
   Miscellaneous: { light: "#FFFFE0", dark: "#FFD700" },
   Food: { light: "#FFE4E1", dark: "#FF4500" },

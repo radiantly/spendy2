@@ -10,7 +10,7 @@ const TransactionList = ({ searchTerm, transactions }) => {
         <TransactionItem
           key={transaction.id}
           transaction={transaction}
-          visible={transaction.description
+          visible={transaction.party
             .toLowerCase()
             .includes(searchTerm.toLowerCase())}
         />

@@ -3,7 +3,7 @@ import "./TransactionItem.css";
 import { getCategoryColor } from "./categoryColors";
 
 const TransactionItem = ({ transaction, visible }) => {
-  const categoryColors = getCategoryColor(transaction.category);
+  const categoryColors = getCategoryColor("None");
 
   const categoryStyle = {
     backgroundColor: categoryColors.light,
@@ -12,16 +12,16 @@ const TransactionItem = ({ transaction, visible }) => {
 
   return (
     <div className={"transaction-item " + (visible ? "" : "hidden")}>
-      <div className="date">{transaction.date}</div>
+      <div className="date">{transaction.date.toDateString()}</div>
       <div className="description">
-        {transaction.description}
+        {transaction.party}
         <span className="category-pill" style={categoryStyle}>
-          {transaction.category}
+          {"None"}
         </span>
       </div>
       <div className="amount">₹{transaction.amount}</div>
-      <div className="mode-of-payment">{transaction.modeOfPayment}</div>
-      <div className="sender-receiver">{transaction.senderReceiver}</div>
+      <div className="mode-of-payment">{transaction.type}</div>
+
     </div>
   );
 };
