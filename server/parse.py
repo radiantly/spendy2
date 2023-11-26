@@ -1,8 +1,9 @@
 import json
 import re
 
-from config import MAX_RETRIES, OPENAI_API_KEY
 from openai import OpenAI
+
+from .config import MAX_RETRIES, OPENAI_API_KEY
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 

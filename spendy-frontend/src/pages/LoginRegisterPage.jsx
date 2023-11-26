@@ -8,6 +8,7 @@ import {
   info,
 } from "../css/LoginRegisterPage.module.css";
 import { useState } from "react";
+import { generateKeyPair, postJSON } from "../utils";
 function LoginRegisterPage() {
   const isRegister = useMatch("/register");
   const [username, setUsername] = useState("");
@@ -28,9 +29,24 @@ function LoginRegisterPage() {
         link: "/register",
       };
 
+  const register = (e) => {
+    const keypair = generateKeyPair(password);
+    console.debug("generated keypair", keypair);
+
+    // postJSON("/api/user", {
+    //   username,
+
+    // })
+    e.preventDefault();
+  };
+  const login = () => {};
+
   return (
     <div className={container}>
-      <form className={box}>
+      <form
+        className={box}
+        onSubmit={(e) => (isRegister ? register(e) : login(e))}
+      >
         <Logo />
         <Info text={txt.info} />
         <input

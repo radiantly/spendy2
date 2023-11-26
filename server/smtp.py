@@ -2,7 +2,7 @@ import asyncio
 from email.parser import BytesParser
 from email.policy import default
 
-from parse import process_mail
+from .parse import process_mail
 
 
 def parse_mail(envelope):
