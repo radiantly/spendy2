@@ -1,3 +1,5 @@
 __pycache__
 
 server/config.py
+
+database.db
