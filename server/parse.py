@@ -20,7 +20,7 @@ def build_prompt(email_body: str):
     return (
         """### Instruction:
 
-You are given email text from a bank. Your job is to identify whether the email is a transactional mail or not. If it is transactional, extract the amount credited/debited, and who it was sent or received from.
+You are given email text from a bank. Your job is to identify whether the email is a transactional mail or not. If it is transactional, extract the amount credited/debited, and who it was sent or received from. Finally, label the transaction. For example, transactions that include zomato or swiggy can be labeled as "food", while zepto or blinkit can be labeled as "grocery". Amazon and Flipkart can be labeled as "shopping".
 
 ### Email:
 
@@ -30,10 +30,11 @@ Dear Card Member, Thank you for using your HDFC Bank Credit Card ending 4952 for
 
 {
     "transaction": true,
-    "type": "CREDIT_CARD",
+    "type": "Credit Card",
     "amount": 338.00,
     "party": "SWIGGY",
-    "currency": "INR"
+    "currency": "INR",
+    "labels": ["food"]
 }
 
 ### Email:
@@ -47,7 +48,8 @@ Dear Customer, Rs.329.00 has been debited from account **2981 to VPA jason13201-
     "type": "UPI",
     "amount": 329.00,
     "party": "jason13201-1@okaxis",
-    "currency": "INR"
+    "currency": "INR",
+    "labels": []
 }
 
 ### Email:

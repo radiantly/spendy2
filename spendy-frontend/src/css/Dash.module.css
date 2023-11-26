@@ -39,6 +39,9 @@
     align-items: center;
     gap: 10px;
   }
+  .symbol {
+    font-size: 28px;
+  }
   .number {
     font-size: 48px;
   }
