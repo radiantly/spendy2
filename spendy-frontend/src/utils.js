@@ -22,4 +22,4 @@ export const postJSON = (url, body) =>
       "Content-Type": "application/json",
     },
     body: JSON.stringify(body),
-  }).then((r) => r.json());
+  });

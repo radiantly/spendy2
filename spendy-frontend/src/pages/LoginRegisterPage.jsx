@@ -1,4 +1,10 @@
-import { Link, useMatch } from "react-router-dom";
+import {
+  Link,
+  useMatch,
+  redirect,
+  useNavigate,
+  useLocation,
+} from "react-router-dom";
 import Logo from "../components/Logo";
 import {
   container,
@@ -9,8 +15,12 @@ import {
 } from "../css/LoginRegisterPage.module.css";
 import { useState } from "react";
 import { generateKeyPair, postJSON } from "../utils";
+import forge from "node-forge";
 function LoginRegisterPage() {
   const isRegister = useMatch("/register");
+  const navigate = useNavigate();
+  const loc = useLocation();
+  const [infoText, setInfoText] = useState(loc?.state?.info);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
 
@@ -29,15 +39,26 @@ function LoginRegisterPage() {
         link: "/register",
       };
 
-  const register = (e) => {
+  const register = async (e) => {
+    e.preventDefault();
     const keypair = generateKeyPair(password);
     console.debug("generated keypair", keypair);
 
-    // postJSON("/api/user", {
-    //   username,
+    const response = await postJSON("/api/user", {
+      username,
+      public_key: forge.pki.publicKeyToPem(keypair.publicKey),
+    });
 
-    // })
-    e.preventDefault();
+    console.log(response);
+
+    if (response.status == 200)
+      return navigate("/login", {
+        state: { info: "Your account has been created, login below:" },
+      });
+
+    setInfoText(
+      `Failed to create an account. The username ${username} may already be in use.`
+    );
   };
   const login = () => {};
 
@@ -48,7 +69,7 @@ function LoginRegisterPage() {
         onSubmit={(e) => (isRegister ? register(e) : login(e))}
       >
         <Logo />
-        <Info text={txt.info} />
+        <Info text={infoText || txt.info} />
         <input
           placeholder="Username"
           required

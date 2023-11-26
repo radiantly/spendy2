@@ -9,4 +9,9 @@ export default defineConfig({
       localsConvention: "camelCaseOnly",
     },
   },
+  server: {
+    proxy: {
+      "/api": "http://localhost:8000",
+    },
+  },
 });
