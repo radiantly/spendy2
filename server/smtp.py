@@ -15,12 +15,12 @@ def parse_mail(envelope):
     mail["from"] = envelope.mail_from
     mail["to"] = envelope.rcpt_tos
 
-    print("From:", mail["from"])
-    print("To:", mail["to"])
+    print("Received email:", mail["from"], " => ",mail["to"] )
+
 
     # Extract subject
     mail["subject"] = msg["Subject"]
-    print("Subject:", mail["subject"])
+    # print("Subject:", mail["subject"])
 
     # Extract and print plaintext content
     if msg.is_multipart():
@@ -32,8 +32,8 @@ def parse_mail(envelope):
         # For non-multipart emails, just print the payload
         mail["body"] = msg.get_payload(decode=True).decode("utf-8")
 
-    if "body" in mail:
-        print(f"Plain text body:", mail["body"])
+    # if "body" in mail:
+    #     print(f"Plain text body:", mail["body"])
 
     return mail
 
