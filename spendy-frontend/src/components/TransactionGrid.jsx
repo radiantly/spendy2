@@ -12,6 +12,7 @@ import {
   headerDivider,
   searchBar,
   searchActive,
+  menuActive,
 } from "../css/TransactionGrid.module.css";
 import { getCurrencyPrefix } from "../currency";
 import { toNiceDateString } from "../utils";
@@ -19,9 +20,12 @@ import { FaSearch } from "react-icons/fa";
 import { FaEllipsisH } from "react-icons/fa";
 import Search from "./Search";
 import { useState } from "react";
+import Menu from "./Menu";
+import { AnimatePresence } from "framer-motion";
 const TransactionGrid = ({ transactions, updateTransactions }) => {
   const [searchInput, setSearchInput] = useState("");
   const [filterList, setFilterList] = useState([]);
+  const [activeMenuIdx, setActiveMenuIdx] = useState(null);
   return (
     <div
       className={[tgrid, searchInput ? searchActive : ""].join(" ")}
@@ -68,8 +72,19 @@ const TransactionGrid = ({ transactions, updateTransactions }) => {
               })
             }
           />
-          <div className={moreActions}>
+          <div
+            className={[
+              moreActions,
+              activeMenuIdx === i ? menuActive : "",
+            ].join(" ")}
+            onClick={() => setActiveMenuIdx(activeMenuIdx === i ? null : i)}
+          >
             <FaEllipsisH />
+            <AnimatePresence>
+              {activeMenuIdx === i ? (
+                <Menu triggerHide={() => setActiveMenuIdx(null)} />
+              ) : null}
+            </AnimatePresence>
           </div>
         </div>
       ))}

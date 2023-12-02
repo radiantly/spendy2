@@ -1,0 +1,31 @@
+.menu {
+  position: absolute;
+  top: 100%;
+  right: -25%;
+  z-index: 42;
+  display: flex;
+  flex-direction: column;
+  background-color: rgba(255, 255, 255, 0.75);
+
+  font-family: "Open Sans", sans-serif;
+  color: #7abacf;
+  font-size: 14px;
+  font-weight: 600;
+  border-radius: 15px;
+  user-select: none;
+}
+
+.row {
+  padding-right: 30px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+}
+
+.row:hover {
+  background: rgba(122, 186, 207, 0.05);
+}
+
+.row > svg {
+  padding: 15px;
+}

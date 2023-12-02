@@ -1,5 +1,6 @@
 .tgrid {
-  border-radius: 15px;
+  --outer-radius: 15px;
+  border-radius: var(--outer-radius);
   background: rgba(255, 255, 255, 0.5);
 
   display: grid;
@@ -7,7 +8,6 @@
   color: #7abacf;
   font-size: 14px;
   font-weight: 600;
-  overflow: hidden;
 }
 
 .row {
@@ -19,6 +19,14 @@
   text-transform: uppercase;
   grid-row-start: 1;
   transition: opacity 0.2s ease;
+}
+
+.header > .date {
+  border-top-left-radius: var(--outer-radius);
+}
+
+.header > .more-actions {
+  border-top-right-radius: var(--outer-radius);
 }
 
 .tgrid > .search-bar {
@@ -50,7 +58,6 @@
 
   white-space: nowrap;
   text-overflow: ellipsis;
-  overflow: hidden;
 }
 
 .date {
@@ -93,7 +100,25 @@ input.remarks {
 .row > .more-actions {
   grid-column-start: 10;
   padding: 0;
+}
+
+.row:not(.header) > .more-actions {
   justify-content: center;
+  transition: background-color 0.2s ease;
+  cursor: pointer;
+  position: relative;
+}
+
+.row:not(.header) > .more-actions:hover {
+  background: rgba(122, 186, 207, 0.05);
+}
+
+.more-actions > svg {
+  transition: transform 0.2s ease;
+}
+
+.more-actions.menu-active > svg {
+  transform: rotate(90deg);
 }
 
 .content-divider {
