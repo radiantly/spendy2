@@ -21,7 +21,6 @@ const TransactionItem = ({ transaction, visible }) => {
       </div>
       <div className="amount">₹{transaction.amount}</div>
       <div className="mode-of-payment">{transaction.type}</div>
-
     </div>
   );
 };

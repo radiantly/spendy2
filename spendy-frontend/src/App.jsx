@@ -33,12 +33,15 @@ const router = createBrowserRouter([
       }
 
       const keypair = fromPem(user.keypair);
-      const transactions = await response.json();
-      return transactions.map(({ id, date, encrypted }) => ({
-        id,
-        date: new Date(date),
-        details: decryptText(keypair.privateKey, encrypted),
-      }));
+      const encryptedTransactions = await response.json();
+      const transactions = encryptedTransactions.map(
+        ({ id, date, encrypted }) => ({
+          id,
+          date: new Date(date),
+          ...JSON.parse(decryptText(keypair.privateKey, encrypted)),
+        })
+      );
+      return transactions;
     },
     element: <TransactionsPage />,
   },

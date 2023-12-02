@@ -4,10 +4,7 @@
   padding: 7px 0;
   align-items: center;
   transition: background-color 0.1s ease;
-}
-
-.transaction-item > div {
-  padding: 0 10px;
+  font-size: 0.9rem;
 }
 
 .description {
@@ -19,10 +16,10 @@
 .category-pill {
   margin-left: 10px; /* Spacing between description and category pill */
   border-radius: 15px;
-  padding: 2px 9px;
+  padding: 2px 8px;
   display: inline-block;
-  margin: 0 5px;
-  font-size: 12px;
+  margin: 0 4px;
+  font-size: 11px;
   font-weight: 600;
 }
 

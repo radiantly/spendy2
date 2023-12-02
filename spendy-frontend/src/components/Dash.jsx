@@ -18,7 +18,7 @@ const Dash = ({ totalSpending }) => {
           <span className={number}>{spend}</span>
         </div>
         <div className={timeframe}>
-          <span className={spentin}>spent in </span>November 2023
+          <span className={spentin}>&nbsp;spent in </span>November 2023
         </div>
       </div>
     </div>
