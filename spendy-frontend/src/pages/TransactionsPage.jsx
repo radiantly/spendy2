@@ -8,6 +8,7 @@ import Navbar from "../components/Navbar";
 import NewDash from "../components/NewDash";
 import { useImmer } from "use-immer";
 import TransactionGrid from "../components/TransactionGrid";
+import { toINR } from "../currency";
 
 function TransactionsPage() {
   const loadedTransactions = useLoaderData();
@@ -22,7 +23,7 @@ function TransactionsPage() {
   };
 
   const totalSpending = transactions.reduce(
-    (acc, transaction) => acc + transaction.amount,
+    (acc, transaction) => acc + toINR(transaction.currency, transaction.amount),
     0
   );
 
@@ -34,7 +35,10 @@ function TransactionsPage() {
         {/* <Dash totalSpending={totalSpending} /> */}
         {/* <SearchBar searchTerm={searchTerm} handleSearch={handleSearch} /> */}
         {/* <TransactionList searchTerm={searchTerm} transactions={transactions} /> */}
-        <TransactionGrid transactions={transactions} />
+        <TransactionGrid
+          transactions={transactions}
+          updateTransactions={updateTransactions}
+        />
       </div>
     </div>
   );

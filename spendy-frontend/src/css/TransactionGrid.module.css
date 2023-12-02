@@ -59,7 +59,7 @@
 }
 
 .row:not(.header) > .amount::before {
-  content: "Rs";
+  content: attr(data-currency-prefix);
   padding-right: 5px;
 }
 

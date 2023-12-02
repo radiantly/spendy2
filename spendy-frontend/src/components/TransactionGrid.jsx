@@ -11,9 +11,10 @@ import {
   contentDivider,
   headerDivider,
 } from "../css/TransactionGrid.module.css";
+import { getCurrencyPrefix } from "../currency";
 import { toNiceDateString } from "../utils";
 import { VscEllipsis } from "react-icons/vsc";
-const TransactionGrid = ({ transactions }) => {
+const TransactionGrid = ({ transactions, updateTransactions }) => {
   return (
     <div
       className={tgrid}
@@ -28,15 +29,28 @@ const TransactionGrid = ({ transactions }) => {
         <div className={moreActions}></div>
       </div>
 
-      {transactions.map((transaction) => (
+      {transactions.map((transaction, index) => (
         <div className={row} key={transaction.id}>
           <div className={date} title={transaction.date.toLocaleString()}>
             {toNiceDateString(transaction.date)}
           </div>
           <div className={payee}>{transaction.party}</div>
           <div className={mode}>{transaction.type}</div>
-          <div className={amount}>{transaction.amount}</div>
-          <input className={remarks} />
+          <div
+            className={amount}
+            data-currency-prefix={getCurrencyPrefix(transaction.currency)}
+          >
+            {transaction.amount}
+          </div>
+          <input
+            className={remarks}
+            value={transaction.remarks}
+            onInput={(e) =>
+              updateTransactions((t) => {
+                t[index].remarks = e.target.value;
+              })
+            }
+          />
           <div className={moreActions}>
             <VscEllipsis />
           </div>
