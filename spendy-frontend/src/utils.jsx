@@ -45,3 +45,24 @@ export const postJSON = (url, body) =>
     },
     body: JSON.stringify(body),
   });
+
+const nth = (num) => ["th", "st", "nd", "rd"][num % 10 <= 3 ? num % 10 : 0];
+
+const DAY = 24 * 60 * 60 * 1000;
+
+export const toNiceDateString = (then) => {
+  const now = Date.now();
+
+  if (now - then < DAY) return "Today";
+  if (now - then < DAY * 2) return "Yesterday";
+
+  const date = then.getDate();
+  const month = then.toLocaleString("default", { month: "short" });
+  const year = then.getFullYear() % 100;
+  return (
+    <>
+      {date}
+      <span className="nth">{nth(date)}</span>&nbsp;{month}, {year}
+    </>
+  );
+};

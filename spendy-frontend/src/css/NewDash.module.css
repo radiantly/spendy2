@@ -1,0 +1,21 @@
+.container {
+  border-radius: 15px;
+  background: rgba(255, 255, 255, 0.75);
+  padding: 45px;
+  gap: 15px;
+
+  display: flex;
+
+  flex-direction: column;
+  color: #9fcedc;
+}
+
+.amount {
+  font-size: 64px;
+  font-weight: 300;
+}
+.timeframe {
+  font-size: 15px;
+  font-weight: 600;
+  padding-left: 6px;
+}

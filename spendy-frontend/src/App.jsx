@@ -6,7 +6,7 @@ import {
 import TransactionsPage from "./pages/TransactionsPage";
 import "./App.css";
 import LoginRegisterPage from "./pages/LoginRegisterPage";
-import { decryptText, fromPem, postJSON } from "./utils";
+import { decryptText, fromPem, postJSON } from "./utils.jsx";
 
 const router = createBrowserRouter([
   {

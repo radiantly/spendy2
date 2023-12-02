@@ -1,0 +1,68 @@
+.tgrid {
+  border-radius: 15px;
+  background: rgba(255, 255, 255, 0.5);
+
+  display: grid;
+  grid-template-columns: 1fr repeat(4, 2px 1fr) 40px;
+  color: #7abacf;
+  font-size: 14px;
+  font-weight: 600;
+  overflow: hidden;
+}
+
+.row {
+  display: contents;
+}
+.header > div,
+.header-divider {
+  background: rgba(255, 255, 255, 0.5);
+  text-transform: uppercase;
+  grid-row-start: 1;
+}
+
+.row > div {
+  display: flex;
+  align-items: center;
+  padding: 0 20px;
+  order: 1;
+}
+
+.date {
+  grid-column-start: 1;
+  justify-content: center;
+}
+
+.date > :global(.nth) {
+  font-size: 10px;
+  transform: translateY(-2px);
+}
+
+.payee {
+  grid-column-start: 3;
+}
+.mode {
+  grid-column-start: 5;
+  justify-content: center;
+}
+.amount {
+  grid-column-start: 7;
+  justify-content: flex-end;
+}
+
+.row:not(.header) > .amount::before {
+  content: "Rs";
+  padding-right: 5px;
+}
+
+.remarks {
+  grid-column-start: 9;
+}
+
+.more-actions {
+  grid-column-start: 10;
+}
+
+.content-divider {
+  grid-row: 2 / -1;
+  border-right: 2px dashed #9fcedc;
+}

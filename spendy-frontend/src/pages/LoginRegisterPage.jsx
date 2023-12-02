@@ -8,7 +8,7 @@ import {
   info,
 } from "../css/LoginRegisterPage.module.css";
 import { useEffect, useRef, useState } from "react";
-import { generateKeyPair, postJSON, toPem } from "../utils";
+import { generateKeyPair, postJSON, toPem } from "../utils.jsx";
 function LoginRegisterPage() {
   const isRegister = useMatch("/register");
   const navigate = useNavigate();

@@ -2,11 +2,12 @@ import { useEffect, useState } from "react";
 
 import SearchBar from "../components/SearchBar";
 import TransactionList from "../components/TransactionList";
-import { container } from "../css/TransactionsPage.module.css";
+import { bgContainer, container } from "../css/TransactionsPage.module.css";
 import { useLoaderData } from "react-router-dom";
 import Navbar from "../components/Navbar";
-import Dash from "../components/Dash";
+import NewDash from "../components/NewDash";
 import { useImmer } from "use-immer";
+import TransactionGrid from "../components/TransactionGrid";
 
 function TransactionsPage() {
   const loadedTransactions = useLoaderData();
@@ -26,11 +27,15 @@ function TransactionsPage() {
   );
 
   return (
-    <div className={container}>
-      <Navbar />
-      <Dash totalSpending={totalSpending} />
-      <SearchBar searchTerm={searchTerm} handleSearch={handleSearch} />
-      <TransactionList searchTerm={searchTerm} transactions={transactions} />
+    <div className={bgContainer}>
+      <div className={container}>
+        {/* <Navbar /> */}
+        <NewDash totalSpending={totalSpending} />
+        {/* <Dash totalSpending={totalSpending} /> */}
+        {/* <SearchBar searchTerm={searchTerm} handleSearch={handleSearch} /> */}
+        {/* <TransactionList searchTerm={searchTerm} transactions={transactions} /> */}
+        <TransactionGrid transactions={transactions} />
+      </div>
     </div>
   );
 }

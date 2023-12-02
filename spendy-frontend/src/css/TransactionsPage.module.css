@@ -1,6 +1,16 @@
+.bg-container {
+  flex-grow: 1;
+  align-self: stretch;
+  background: linear-gradient(180deg, #fff -1.42%, rgba(255, 255, 255, 0) 100%),
+    linear-gradient(106deg, #77a1d3 0.59%, #79cbca 50.3%, #e684ae 100%);
+  display: flex;
+  justify-content: center;
+}
+
 .container {
   width: min(95vw, 1200px);
   display: flex;
-  flex-grow: 1;
   flex-direction: column;
+  padding-top: 120px;
+  gap: 30px;
 }
