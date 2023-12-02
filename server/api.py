@@ -36,3 +36,27 @@ async def get_transactions(user: User) -> list[Transaction]:
         stmt = select(Transaction).where(Transaction.owner == user.username)
         results = session.exec(stmt)
         return [transaction for transaction in results]
+
+
+@api.post("/transaction/")
+async def update_transaction(updated_transaction: Transaction):
+    with Session(engine) as session:
+        stmt = select(Transaction).where(Transaction.id == updated_transaction.id)
+        transaction = session.exec(stmt).first()
+
+        if not transaction:
+            raise HTTPException(status_code=404, detail="Transaction not found")
+
+        if transaction.owner != updated_transaction.owner:
+            raise HTTPException(
+                status_code=403, detail="Unauthorized to update this transaction"
+            )
+
+        for key, value in updated_transaction.dict().items():
+            setattr(transaction, key, value)
+
+        session.add(transaction)
+        session.commit()
+        session.refresh(transaction)
+
+        return transaction
