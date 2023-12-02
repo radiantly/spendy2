@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 
-import SearchBar from "../components/SearchBar";
 import TransactionList from "../components/TransactionList";
 import { bgContainer, container } from "../css/TransactionsPage.module.css";
 import { useLoaderData } from "react-router-dom";
@@ -13,14 +12,9 @@ import { toINR } from "../currency";
 function TransactionsPage() {
   const loadedTransactions = useLoaderData();
   const [transactions, updateTransactions] = useImmer([]);
-  useEffect(() => updateTransactions(loadedTransactions));
+  useEffect(() => updateTransactions(loadedTransactions), [loadedTransactions]);
 
   console.log("Loader data:", transactions);
-  const [searchTerm, setSearchTerm] = useState("");
-
-  const handleSearch = (event) => {
-    setSearchTerm(event.target.value);
-  };
 
   const totalSpending = transactions.reduce(
     (acc, transaction) => acc + toINR(transaction.currency, transaction.amount),

@@ -10,16 +10,33 @@ import {
   moreActions,
   contentDivider,
   headerDivider,
+  searchBar,
+  searchActive,
 } from "../css/TransactionGrid.module.css";
 import { getCurrencyPrefix } from "../currency";
 import { toNiceDateString } from "../utils";
-import { VscEllipsis } from "react-icons/vsc";
+import { FaSearch } from "react-icons/fa";
+import { FaEllipsisH } from "react-icons/fa";
+import Search from "./Search";
+import { useState } from "react";
 const TransactionGrid = ({ transactions, updateTransactions }) => {
+  const [searchInput, setSearchInput] = useState("");
+  const [filterList, setFilterList] = useState([]);
   return (
     <div
-      className={tgrid}
-      style={{ gridTemplateRows: `repeat(${transactions.length + 1}, 40px)` }}
+      className={[tgrid, searchInput ? searchActive : ""].join(" ")}
+      style={{ gridTemplateRows: `repeat(${filterList.length + 1}, 40px)` }}
     >
+      <label className={searchBar}>
+        <FaSearch />
+        <Search
+          searchInput={searchInput}
+          setSearchInput={setSearchInput}
+          transactions={transactions}
+          setFilterList={setFilterList}
+        />
+      </label>
+
       <div className={[header, row].join(" ")}>
         <div className={date}>date</div>
         <div className={payee}>payee</div>
@@ -29,30 +46,30 @@ const TransactionGrid = ({ transactions, updateTransactions }) => {
         <div className={moreActions}></div>
       </div>
 
-      {transactions.map((transaction, index) => (
-        <div className={row} key={transaction.id}>
-          <div className={date} title={transaction.date.toLocaleString()}>
-            {toNiceDateString(transaction.date)}
+      {filterList.map((i) => (
+        <div className={row} key={transactions[i].id}>
+          <div className={date} title={transactions[i].date.toLocaleString()}>
+            {toNiceDateString(transactions[i].date)}
           </div>
-          <div className={payee}>{transaction.party}</div>
-          <div className={mode}>{transaction.type}</div>
+          <div className={payee}>{transactions[i].party}</div>
+          <div className={mode}>{transactions[i].type}</div>
           <div
             className={amount}
-            data-currency-prefix={getCurrencyPrefix(transaction.currency)}
+            data-currency-prefix={getCurrencyPrefix(transactions[i].currency)}
           >
-            {transaction.amount}
+            {transactions[i].amount}
           </div>
           <input
             className={remarks}
-            value={transaction.remarks}
+            value={transactions[i].remarks}
             onInput={(e) =>
               updateTransactions((t) => {
-                t[index].remarks = e.target.value;
+                t[i].remarks = e.target.value;
               })
             }
           />
           <div className={moreActions}>
-            <VscEllipsis />
+            <FaEllipsisH />
           </div>
         </div>
       ))}

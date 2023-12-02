@@ -18,6 +18,23 @@
   background: rgba(255, 255, 255, 0.5);
   text-transform: uppercase;
   grid-row-start: 1;
+  transition: opacity 0.2s ease;
+}
+
+.tgrid > .search-bar {
+  transition: opacity 0.2s ease;
+}
+
+.tgrid > .search-bar,
+.tgrid.search-active > .header > div,
+.tgrid.search-active > .header-divider {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.tgrid.search-active > .search-bar {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .row > * {
@@ -82,4 +99,29 @@ input.remarks {
 .content-divider {
   grid-row: 2 / -1;
   border-right: 2px dashed #9fcedc;
+}
+
+.search-bar {
+  grid-column: 1 / -1;
+  grid-row-start: 1;
+  display: flex;
+  align-items: center;
+  border-bottom: 2px dashed #9fcedc;
+}
+
+.search-bar > svg {
+  width: 40px;
+}
+
+.search-bar > input {
+  /* Font details for <input /> */
+  font-family: "Open Sans", sans-serif;
+  color: #7abacf;
+  font-size: 14px;
+  font-weight: 600;
+
+  outline: none;
+  border: none;
+  flex-grow: 1;
+  background: transparent;
 }
