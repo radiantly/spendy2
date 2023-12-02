@@ -12,6 +12,7 @@ import {
   headerDivider,
 } from "../css/TransactionGrid.module.css";
 import { toNiceDateString } from "../utils";
+import { VscEllipsis } from "react-icons/vsc";
 const TransactionGrid = ({ transactions }) => {
   return (
     <div
@@ -35,8 +36,10 @@ const TransactionGrid = ({ transactions }) => {
           <div className={payee}>{transaction.party}</div>
           <div className={mode}>{transaction.type}</div>
           <div className={amount}>{transaction.amount}</div>
-          <div className={remarks}></div>
-          <div className={moreActions}></div>
+          <input className={remarks} />
+          <div className={moreActions}>
+            <VscEllipsis />
+          </div>
         </div>
       ))}
 

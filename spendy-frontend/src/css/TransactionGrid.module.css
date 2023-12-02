@@ -3,7 +3,7 @@
   background: rgba(255, 255, 255, 0.5);
 
   display: grid;
-  grid-template-columns: 1fr repeat(4, 2px 1fr) 40px;
+  grid-template-columns: 1fr 2px 2fr 2px 1fr 2px 1fr 2px 2fr 40px;
   color: #7abacf;
   font-size: 14px;
   font-weight: 600;
@@ -20,11 +20,20 @@
   grid-row-start: 1;
 }
 
-.row > div {
+.row > * {
+  /* Font details for <input /> */
+  font-family: "Open Sans", sans-serif;
+  color: #7abacf;
+  font-size: 14px;
+  font-weight: 600;
+
   display: flex;
   align-items: center;
   padding: 0 20px;
-  order: 1;
+
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  overflow: hidden;
 }
 
 .date {
@@ -58,8 +67,16 @@
   grid-column-start: 9;
 }
 
-.more-actions {
+input.remarks {
+  border: none;
+  outline: none;
+  background-color: transparent;
+}
+
+.row > .more-actions {
   grid-column-start: 10;
+  padding: 0;
+  justify-content: center;
 }
 
 .content-divider {
