@@ -43,6 +43,11 @@ const router = createBrowserRouter([
           ...JSON.parse(decryptText(keypair.privateKey, encrypted)),
         })
       );
+      for (const transaction of transactions) {
+        if (transaction.remarks == "" && transaction.labels) {
+          transaction.remarks = transaction.labels.join(" ");
+        }
+      }
       return transactions;
     },
     element: <TransactionsPage />,
