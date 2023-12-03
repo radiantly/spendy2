@@ -1,0 +1,103 @@
+.row {
+  display: contents;
+}
+
+.row > * {
+  /* Font details for <input /> */
+  font-family: "Open Sans", sans-serif;
+  color: #7abacf;
+  font-size: 14px;
+  font-weight: 600;
+
+  display: flex;
+  align-items: center;
+  padding: 0 20px;
+
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.row.header > div {
+  background: rgba(255, 255, 255, 0.5);
+  text-transform: uppercase;
+  grid-row-start: 1;
+  transition: opacity 0.2s ease;
+}
+
+:global(.search-active) > .header > div {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.row.header > .date {
+  border-top-left-radius: var(--outer-radius);
+}
+
+.row.header > .more-actions {
+  border-top-right-radius: var(--outer-radius);
+}
+
+.row.blurred > *:not(.more-actions) {
+  filter: blur(4px);
+}
+
+.row > .date {
+  grid-column-start: 1;
+  justify-content: center;
+}
+
+.row > .date > :global(.nth) {
+  font-size: 10px;
+  transform: translateY(-2px);
+}
+
+.row > .payee {
+  grid-column-start: 3;
+}
+.row > .mode {
+  grid-column-start: 5;
+  justify-content: center;
+}
+.row > .amount {
+  grid-column-start: 7;
+  justify-content: flex-end;
+}
+
+.row:not(.header) > .amount::before {
+  content: attr(data-currency-prefix);
+  padding-right: 5px;
+}
+
+.row > .remarks {
+  grid-column-start: 9;
+}
+
+.row > input.remarks {
+  border: none;
+  outline: none;
+  background-color: transparent;
+}
+
+.row > .more-actions {
+  grid-column-start: 10;
+  padding: 0;
+}
+
+.row:not(.header) > .more-actions {
+  justify-content: center;
+  transition: background-color 0.2s ease;
+  cursor: pointer;
+  position: relative;
+}
+
+.row:not(.header) > .more-actions:hover {
+  background: rgba(122, 186, 207, 0.05);
+}
+
+.row > .more-actions > svg {
+  transition: transform 0.2s ease;
+}
+
+.row > .more-actions.menu-active > svg {
+  transform: rotate(90deg);
+}
