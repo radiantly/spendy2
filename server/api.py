@@ -38,7 +38,7 @@ async def get_transactions(user: User) -> list[Transaction]:
         return [transaction for transaction in results]
 
 
-@api.post("/transaction/")
+@api.post("/transaction")
 async def update_transaction(updated_transaction: Transaction):
     with Session(engine) as session:
         stmt = select(Transaction).where(Transaction.id == updated_transaction.id)

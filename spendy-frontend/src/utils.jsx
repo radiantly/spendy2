@@ -36,6 +36,28 @@ export const decryptText = (privateKey, text) => {
   return decrypted;
 };
 
+export const encryptText = (publicKey, text) => {
+  const encoded = forge.util.encodeUtf8(text);
+  const encrypted = publicKey.encrypt(encoded, "RSA-OAEP", {
+    md: forge.md.sha256.create(),
+  });
+  return forge.util.encode64(encrypted);
+};
+
+export function debounce(func, wait) {
+  let timeout;
+
+  return function executedFunction(...args) {
+    const later = () => {
+      clearTimeout(timeout);
+      func(...args);
+    };
+
+    clearTimeout(timeout);
+    timeout = setTimeout(later, wait);
+  };
+}
+
 export const postJSON = (url, body) =>
   fetch(url, {
     method: "POST",

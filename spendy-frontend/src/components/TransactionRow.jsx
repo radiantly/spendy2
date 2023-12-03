@@ -9,11 +9,13 @@ import {
   blurred,
   menuActive,
 } from "../css/TransactionRow.module.css";
+import { useCallback } from "react";
 import { getCurrencyPrefix } from "../currency";
 import { toNiceDateString } from "../utils";
 import Menu from "./Menu";
 import { AnimatePresence } from "framer-motion";
 import { FaEllipsisH } from "react-icons/fa";
+import { postJSON, encryptText, fromPem, debounce } from "../utils";
 const TransactionRow = ({
   transaction,
   index,
@@ -21,6 +23,42 @@ const TransactionRow = ({
   activeMenuIdx,
   setActiveMenuIdx,
 }) => {
+  const savemodifiedRemarks = useCallback(
+    debounce((e) => {
+      const userString = localStorage.getItem("user");
+      let user;
+      try {
+        user = JSON.parse(userString);
+        if (!user?.username) throw false;
+      } catch {
+        console.log("Failed to get user from localstorage");
+      }
+      const keypair = fromPem(user.keypair);
+      const newTransaction = { ...transaction };
+      delete newTransaction.id;
+      delete newTransaction.date;
+      newTransaction.remarks = e.target.value;
+      const encrypted = encryptText(
+        keypair.publicKey,
+        JSON.stringify(newTransaction)
+      );
+      postJSON("/api/transaction", {
+        id: transaction.id,
+        owner: user.username,
+        date: transaction.date,
+        encrypted,
+      });
+    }, 333),
+    []
+  );
+
+  const modifyRemarks = (e) => {
+    updateTransactions((t) => {
+      t[index].remarks = e.target.value;
+    });
+    savemodifiedRemarks(e);
+  };
+
   return (
     <div className={[row, transaction.hidden ? blurred : ""].join(" ")}>
       <div className={date} title={transaction.date.toLocaleString()}>
@@ -37,11 +75,7 @@ const TransactionRow = ({
       <input
         className={remarks}
         value={transaction.remarks}
-        onInput={(e) =>
-          updateTransactions((t) => {
-            t[index].remarks = e.target.value;
-          })
-        }
+        onInput={modifyRemarks}
       />
       <div
         className={[
