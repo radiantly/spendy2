@@ -1,25 +1,22 @@
-import {
-  dash,
-  statbox,
-  symbol,
-  amount,
-  number,
-  spentin,
-  timeframe,
-} from "../css/Dash.module.css";
+import { container, amount, timeframe } from "../css/Dash.module.css";
+import AnimatedNumber from "./AnimatedNumber";
 
-const Dash = ({ totalSpending }) => {
-  const spend = totalSpending.toLocaleString("en", { useGrouping: true });
+const Dash = ({ totalSpending, searchInput }) => {
   return (
-    <div className={dash}>
-      <div className={statbox}>
-        <div className={amount}>
-          <span className={symbol}>₹</span>
-          <span className={number}>{spend}</span>
-        </div>
-        <div className={timeframe}>
-          <span className={spentin}>&nbsp;spent in </span>November 2023
-        </div>
+    <div className={container}>
+      <AnimatedNumber
+        className={amount}
+        number={totalSpending}
+        transform={(num) =>
+          "Rs " +
+          num.toLocaleString("en", {
+            useGrouping: true,
+            maximumFractionDigits: 0,
+          })
+        }
+      />
+      <div className={timeframe}>
+        spent last month {searchInput ? `on ${searchInput}` : null}
       </div>
     </div>
   );

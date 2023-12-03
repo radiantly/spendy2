@@ -19,9 +19,14 @@ import { FaSearch } from "react-icons/fa";
 import Search from "./Search";
 import { Fragment, useState } from "react";
 import TransactionRow from "./TransactionRow";
-const TransactionGrid = ({ transactions, updateTransactions }) => {
-  const [searchInput, setSearchInput] = useState("");
-  const [filterList, setFilterList] = useState([]);
+const TransactionGrid = ({
+  transactions,
+  updateTransactions,
+  filterList,
+  setFilterList,
+  searchInput,
+  setSearchInput,
+}) => {
   const [activeMenuIdx, setActiveMenuIdx] = useState(null);
   return (
     <div
