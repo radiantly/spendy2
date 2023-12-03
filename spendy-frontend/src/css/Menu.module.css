@@ -22,6 +22,10 @@
   align-items: center;
 }
 
+.row > * {
+  pointer-events: none;
+}
+
 .row:hover {
   background: rgba(122, 186, 207, 0.05);
 }

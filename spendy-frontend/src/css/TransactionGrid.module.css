@@ -60,6 +60,10 @@
   text-overflow: ellipsis;
 }
 
+.row.blurred > *:not(.more-actions) {
+  filter: blur(4px);
+}
+
 .date {
   grid-column-start: 1;
   justify-content: center;

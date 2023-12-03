@@ -1,10 +1,20 @@
 import { container, amount, timeframe } from "../css/NewDash.module.css";
+import AnimatedNumber from "./AnimatedNumber";
 
 const NewDash = ({ totalSpending }) => {
-  const spend = totalSpending.toLocaleString("en", { useGrouping: true });
   return (
     <div className={container}>
-      <div className={amount}>Rs {totalSpending}</div>
+      <AnimatedNumber
+        className={amount}
+        number={totalSpending}
+        transform={(num) =>
+          "Rs " +
+          num.toLocaleString("en", {
+            useGrouping: true,
+            maximumFractionDigits: 0,
+          })
+        }
+      />
       <div className={timeframe}>spent last month</div>
     </div>
   );

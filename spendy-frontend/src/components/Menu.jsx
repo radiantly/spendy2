@@ -1,9 +1,9 @@
 import { useEffect, useRef } from "react";
 import { menu, row } from "../css/Menu.module.css";
-import { FaPencilAlt, FaEyeSlash, FaTrash } from "react-icons/fa";
+import { FaPencilAlt, FaEyeSlash, FaTrash, FaEye } from "react-icons/fa";
 
 import { motion } from "framer-motion";
-const Menu = ({ triggerHide }) => {
+const Menu = ({ triggerHide, hidden }) => {
   const menuElem = useRef(null);
   useEffect(() => {
     const handler = (event) => {
@@ -20,15 +20,24 @@ const Menu = ({ triggerHide }) => {
       exit={{ opacity: 0, y: 15 }}
       className={menu}
     >
-      <div className={row}>
+      <div className={row} data-action="edit">
         <FaPencilAlt />
         Edit
       </div>
-      <div className={row}>
-        <FaEyeSlash />
-        Hide
+      <div className={row} data-action="toggleVisibility">
+        {hidden ? (
+          <>
+            <FaEye />
+            Show
+          </>
+        ) : (
+          <>
+            <FaEyeSlash />
+            Hide
+          </>
+        )}
       </div>
-      <div className={row}>
+      <div className={row} data-action="delete">
         <FaTrash />
         Delete
       </div>

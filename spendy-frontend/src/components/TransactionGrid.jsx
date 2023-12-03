@@ -13,13 +13,14 @@ import {
   searchBar,
   searchActive,
   menuActive,
+  blurred,
 } from "../css/TransactionGrid.module.css";
 import { getCurrencyPrefix } from "../currency";
 import { toNiceDateString } from "../utils";
 import { FaSearch } from "react-icons/fa";
 import { FaEllipsisH } from "react-icons/fa";
 import Search from "./Search";
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import Menu from "./Menu";
 import { AnimatePresence } from "framer-motion";
 const TransactionGrid = ({ transactions, updateTransactions }) => {
@@ -51,7 +52,10 @@ const TransactionGrid = ({ transactions, updateTransactions }) => {
       </div>
 
       {filterList.map((i) => (
-        <div className={row} key={transactions[i].id}>
+        <div
+          className={[row, transactions[i].hidden ? blurred : ""].join(" ")}
+          key={transactions[i].id}
+        >
           <div className={date} title={transactions[i].date.toLocaleString()}>
             {toNiceDateString(transactions[i].date)}
           </div>
@@ -77,12 +81,25 @@ const TransactionGrid = ({ transactions, updateTransactions }) => {
               moreActions,
               activeMenuIdx === i ? menuActive : "",
             ].join(" ")}
-            onClick={() => setActiveMenuIdx(activeMenuIdx === i ? null : i)}
+            onClick={(event) => {
+              if (!event.target.dataset.action)
+                return setActiveMenuIdx(activeMenuIdx === i ? null : i);
+              if (event.target.dataset.action === "toggleVisibility")
+                return updateTransactions((t) => {
+                  t[i].hidden = !t[i].hidden;
+                });
+            }}
           >
             <FaEllipsisH />
             <AnimatePresence>
               {activeMenuIdx === i ? (
-                <Menu triggerHide={() => setActiveMenuIdx(null)} />
+                <Menu
+                  triggerHide={() => {
+                    console.log("triggered");
+                    setActiveMenuIdx(null);
+                  }}
+                  hidden={transactions[i].hidden}
+                />
               ) : null}
             </AnimatePresence>
           </div>
@@ -90,7 +107,7 @@ const TransactionGrid = ({ transactions, updateTransactions }) => {
       ))}
 
       {[...Array(4).keys()].map((i) => (
-        <>
+        <Fragment key={i}>
           <div
             className={headerDivider}
             style={{
@@ -98,11 +115,10 @@ const TransactionGrid = ({ transactions, updateTransactions }) => {
             }}
           ></div>
           <div
-            key={i}
             className={contentDivider}
             style={{ gridColumnStart: (i + 1) * 2 }}
           ></div>
-        </>
+        </Fragment>
       ))}
     </div>
   );

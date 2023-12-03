@@ -17,7 +17,11 @@ function TransactionsPage() {
   console.log("Loader data:", transactions);
 
   const totalSpending = transactions.reduce(
-    (acc, transaction) => acc + toINR(transaction.currency, transaction.amount),
+    (acc, transaction) =>
+      acc +
+      (transaction.hidden
+        ? 0
+        : toINR(transaction.currency, transaction.amount)),
     0
   );
 

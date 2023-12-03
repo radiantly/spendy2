@@ -39,6 +39,7 @@ const router = createBrowserRouter([
           id,
           date: new Date(date),
           remarks: "",
+          hidden: false,
           ...JSON.parse(decryptText(keypair.privateKey, encrypted)),
         })
       );
