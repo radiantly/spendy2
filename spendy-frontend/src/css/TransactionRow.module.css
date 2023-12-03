@@ -4,10 +4,8 @@
 
 .row > * {
   /* Font details for <input /> */
-  font-family: "Open Sans", sans-serif;
-  color: #7abacf;
-  font-size: 14px;
-  font-weight: 600;
+  color: var(--regular-color);
+  font: var(--regular-font);
 
   display: flex;
   align-items: center;
@@ -15,13 +13,13 @@
 
   white-space: nowrap;
   text-overflow: ellipsis;
+  transition: all 0.2s ease;
 }
 
 .row.header > div {
   background: rgba(255, 255, 255, 0.5);
   text-transform: uppercase;
   grid-row-start: 1;
-  transition: opacity 0.2s ease;
 }
 
 :global(.search-active) > .header > div {
@@ -85,7 +83,6 @@
 
 .row:not(.header) > .more-actions {
   justify-content: center;
-  transition: background-color 0.2s ease;
   cursor: pointer;
   position: relative;
 }

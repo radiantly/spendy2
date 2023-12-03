@@ -1,13 +1,15 @@
 .tgrid {
   --outer-radius: 15px;
-  border-radius: var(--outer-radius);
-  background: rgba(255, 255, 255, 0.5);
+  --regular-color: #7abacf;
+  --regular-font: 600 14px "Open Sans";
 
+  border-radius: var(--outer-radius);
+  color: var(--regular-color);
+  font: var(--regular-font);
+
+  background: rgba(255, 255, 255, 0.5);
   display: grid;
   grid-template-columns: 1fr 2px 2fr 2px 1fr 2px 1fr 2px 2fr 40px;
-  color: #7abacf;
-  font-size: 14px;
-  font-weight: 600;
 }
 
 .tgrid > .search-bar {
@@ -50,10 +52,8 @@
 
 .search-bar > input {
   /* Font details for <input /> */
-  font-family: "Open Sans", sans-serif;
-  color: #7abacf;
-  font-size: 14px;
-  font-weight: 600;
+  color: var(--regular-color);
+  font: var(--regular-font);
 
   outline: none;
   border: none;
