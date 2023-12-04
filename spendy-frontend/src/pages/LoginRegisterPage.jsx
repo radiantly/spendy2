@@ -7,8 +7,8 @@ import {
   alternateAction,
   info,
 } from "../css/LoginRegisterPage.module.css";
-import { useEffect, useRef, useState } from "react";
-import { generateKeyPair, postJSON, toPem } from "../utils.jsx";
+import { useEffect, useState } from "react";
+import { Keypair, postJSON } from "../utils.jsx";
 function LoginRegisterPage() {
   const isRegister = useMatch("/register");
   const navigate = useNavigate();
@@ -29,14 +29,13 @@ function LoginRegisterPage() {
       };
 
   const [feedback, setFeedback] = useState(null);
-  const feedbackRef = useRef(null);
   useEffect(() => setFeedback(loc?.state?.feedback), [loc]);
 
-  const register = async ({ publicKey }) => {
+  const register = async (keypair) => {
     setFeedback("Creating account..");
     const response = await postJSON("/api/user", {
       username,
-      public_key: publicKey,
+      public_key: keypair.publicKey,
     });
 
     console.log(response);
@@ -54,6 +53,7 @@ function LoginRegisterPage() {
   };
   const login = async (keypair) => {
     setFeedback("Logging in..");
+    console.log("st", keypair.toJSON());
     localStorage.setItem("user", JSON.stringify({ username, keypair }));
     return navigate("/");
   };
@@ -61,18 +61,13 @@ function LoginRegisterPage() {
   const handleSubmit = (e) => {
     e.preventDefault();
 
-    // manually set feedback because generating a keypair using node forge
-    // freezes the main thread
-    feedbackRef.current.classList.remove("hidden");
-    feedbackRef.current.innerText =
-      "Generating keypair - this may take a few seconds.";
+    setFeedback("Generating keypair - this may take a few seconds.");
 
-    setTimeout(() => {
-      const keypair = toPem(generateKeyPair(password));
-      console.debug("generated keypair", keypair);
-
+    setTimeout(async () => {
+      const keypair = await Keypair.generate(password);
+      console.log("generating with", password);
       isRegister ? register(keypair) : login(keypair);
-    }, 0);
+    }, 222);
   };
 
   return (
@@ -100,10 +95,7 @@ function LoginRegisterPage() {
           value={password}
           onInput={(e) => setPassword(e.target.value)}
         />
-        <div
-          className={[info, feedback ? "" : "hidden"].join(" ")}
-          ref={feedbackRef}
-        >
+        <div className={[info, feedback ? "" : "hidden"].join(" ")}>
           {feedback}
         </div>
         <div className={submitRow}>

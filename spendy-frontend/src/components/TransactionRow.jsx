@@ -11,11 +11,11 @@ import {
 } from "../css/TransactionRow.module.css";
 import { useCallback } from "react";
 import { getCurrencyPrefix } from "../currency";
-import { toNiceDateString } from "../utils";
+import { Keypair, postJSON, toNiceDateString } from "../utils";
 import Menu from "./Menu";
 import { AnimatePresence } from "framer-motion";
 import { FaEllipsisH } from "react-icons/fa";
-import { postJSON, encryptText, fromPem, debounce } from "../utils";
+import { debounce } from "../utils";
 const TransactionRow = ({
   transaction,
   index,
@@ -24,7 +24,7 @@ const TransactionRow = ({
   setActiveMenuIdx,
 }) => {
   const savemodifiedRemarks = useCallback(
-    debounce((e) => {
+    debounce(async (e) => {
       const userString = localStorage.getItem("user");
       let user;
       try {
@@ -33,15 +33,12 @@ const TransactionRow = ({
       } catch {
         console.log("Failed to get user from localstorage");
       }
-      const keypair = fromPem(user.keypair);
+      const keypair = await Keypair.fromJSON(user.keypair);
       const newTransaction = { ...transaction };
       delete newTransaction.id;
       delete newTransaction.date;
       newTransaction.remarks = e.target.value;
-      const encrypted = encryptText(
-        keypair.publicKey,
-        JSON.stringify(newTransaction)
-      );
+      const encrypted = await keypair.encrypt(JSON.stringify(newTransaction));
       postJSON("/api/transaction", {
         id: transaction.id,
         owner: user.username,

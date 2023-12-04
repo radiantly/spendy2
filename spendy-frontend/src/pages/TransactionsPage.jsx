@@ -7,6 +7,7 @@ import Dash from "../components/Dash";
 import { useImmer } from "use-immer";
 import TransactionGrid from "../components/TransactionGrid";
 import { toINR } from "../currency";
+import LastEmail from "../components/LastEmail";
 
 function TransactionsPage() {
   const loadedTransactions = useLoaderData();
@@ -42,6 +43,7 @@ function TransactionsPage() {
             setSearchInput,
           }}
         />
+        <LastEmail />
       </div>
     </div>
   );

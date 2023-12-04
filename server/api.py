@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException
 from sqlmodel import Session, select
 
 from .database import Transaction, User, engine
+from .last_email import last_email
 
 api = FastAPI()
 
@@ -60,3 +61,11 @@ async def update_transaction(updated_transaction: Transaction):
         session.refresh(transaction)
 
         return transaction
+
+
+@api.post("/lastemail")
+async def get_last_email(user: User):
+    if user.username not in last_email:
+        raise HTTPException(status_code=404, detail="User does not exist")
+
+    return {"encrypted": last_email[user.username]}

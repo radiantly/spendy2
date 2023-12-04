@@ -6,7 +6,7 @@ import {
 import TransactionsPage from "./pages/TransactionsPage";
 import "./App.css";
 import LoginRegisterPage from "./pages/LoginRegisterPage";
-import { decryptText, fromPem, postJSON } from "./utils.jsx";
+import { Keypair, postJSON } from "./utils.jsx";
 
 const router = createBrowserRouter([
   {
@@ -22,9 +22,11 @@ const router = createBrowserRouter([
         throw redirect("/login");
       }
 
+      const keypair = await Keypair.fromJSON(user.keypair);
+
       const response = await postJSON("/api/transactions", {
         username: user.username,
-        public_key: user.keypair.publicKey,
+        public_key: keypair.publicKey,
       });
 
       if (response.status != 200) {
@@ -32,23 +34,24 @@ const router = createBrowserRouter([
         throw redirect("/login");
       }
 
-      const keypair = fromPem(user.keypair);
-      const encryptedTransactions = await response.json();
-      const transactions = encryptedTransactions.map(
-        ({ id, date, encrypted }) => ({
-          id,
-          date: new Date(date),
-          remarks: "",
-          hidden: false,
-          ...JSON.parse(decryptText(keypair.privateKey, encrypted)),
+      const transactions = await response.json();
+
+      return await Promise.all(
+        transactions.map(async ({ id, date, encrypted }) => {
+          const transaction = {
+            id,
+            date: new Date(date),
+            remarks: "",
+            hidden: false,
+            ...JSON.parse(await keypair.decrypt(encrypted)),
+          };
+
+          if (!transaction.remarks && transaction.labels)
+            transaction.remarks = transaction.labels.join(" ");
+
+          return transaction;
         })
       );
-      for (const transaction of transactions) {
-        if (transaction.remarks == "" && transaction.labels) {
-          transaction.remarks = transaction.labels.join(" ");
-        }
-      }
-      return transactions;
     },
     element: <TransactionsPage />,
   },
