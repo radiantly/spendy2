@@ -14,6 +14,7 @@
   white-space: nowrap;
   text-overflow: ellipsis;
   transition: all 0.2s ease;
+  position: relative;
 }
 
 .row.header > div {
@@ -85,7 +86,6 @@
 .row:not(.header) > .more-actions {
   justify-content: center;
   cursor: pointer;
-  position: relative;
 }
 
 .row:not(.header) > .more-actions:hover {
@@ -98,4 +98,17 @@
 
 .row > .more-actions.menu-active > svg {
   transform: rotate(90deg);
+}
+
+.row .sortIcon {
+  position: absolute;
+  right: 0;
+  width: 20px;
+
+  display: flex;
+  justify-content: center;
+}
+
+.row .sortIcon.hidden {
+  display: none;
 }

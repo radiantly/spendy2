@@ -19,6 +19,7 @@ import { FaSearch } from "react-icons/fa";
 import Search from "./Search";
 import { Fragment, useState } from "react";
 import TransactionRow from "./TransactionRow";
+import GridHeader from "./GridHeader";
 
 const sorts = {
   dateAsc: (a, b) => a.date - b.date,
@@ -42,14 +43,7 @@ const TransactionGrid = ({
   setSearchInput,
 }) => {
   const [activeMenuId, setActiveMenuId] = useState(null);
-  const [sortOrder, setSortOrder] = useState("dateAsc");
-
-  const changeSort = (col) => {
-    if (!sortOrder?.startsWith(col)) return setSortOrder(`${col}Asc`);
-    if (sortOrder === `${col}Asc`) return setSortOrder(`${col}Desc`);
-    return setSortOrder(null);
-  };
-
+  const [sortOrder, setSortOrder] = useState("dateDesc");
   const viewList = filterList.map((id) => transactions[id]);
   if (sortOrder) viewList.sort(sorts[sortOrder]);
 
@@ -69,21 +63,41 @@ const TransactionGrid = ({
       </label>
 
       <div className={[header, row].join(" ")}>
-        <div className={date} onClick={() => changeSort("date")}>
+        <GridHeader
+          className={date}
+          sortKey="date"
+          {...{ sortOrder, setSortOrder }}
+        >
           date
-        </div>
-        <div className={payee} onClick={() => changeSort("party")}>
+        </GridHeader>
+        <GridHeader
+          className={payee}
+          sortKey="party"
+          {...{ sortOrder, setSortOrder }}
+        >
           payee
-        </div>
-        <div className={mode} onClick={() => changeSort("type")}>
+        </GridHeader>
+        <GridHeader
+          className={mode}
+          sortKey="type"
+          {...{ sortOrder, setSortOrder }}
+        >
           mode
-        </div>
-        <div className={amount} onClick={() => changeSort("amount")}>
+        </GridHeader>
+        <GridHeader
+          className={amount}
+          sortKey="amount"
+          {...{ sortOrder, setSortOrder }}
+        >
           amount
-        </div>
-        <div className={remarks} onClick={() => changeSort("remarks")}>
+        </GridHeader>
+        <GridHeader
+          className={remarks}
+          sortKey="remarks"
+          {...{ sortOrder, setSortOrder }}
+        >
           remarks
-        </div>
+        </GridHeader>
         <div className={moreActions}></div>
       </div>
 
