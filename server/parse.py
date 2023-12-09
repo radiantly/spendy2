@@ -8,7 +8,6 @@ from sqlmodel import Session, select
 from .config import MAX_RETRIES, OPENAI_API_KEY
 from .database import Transaction, User, engine
 from .encryption import encrypt_message
-from .last_email import last_email
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
@@ -135,7 +134,7 @@ async def process_mail(mail: dict):
             print(f"User {target_username} not found.")
             return
 
-        last_email[target_username] = encrypt_message(user_public_key, json.dumps(mail))
+        # last_email[target_username] = encrypt_message(user_public_key, json.dumps(mail))
 
         details = extract_transaction(mail["body"])
         if "transaction" in details and details["transaction"]:

@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Optional
 
-from sqlmodel import Field, SQLModel, create_engine
+from sqlmodel import Field, Session, SQLModel, create_engine, select
 
 
 class User(SQLModel, table=True):
@@ -19,3 +19,9 @@ class Transaction(SQLModel, table=True):
 engine = create_engine("sqlite:///database.db")
 
 SQLModel.metadata.create_all(engine)
+
+
+def get_existing_user(user: User):
+    with Session(engine) as session:
+        user_stmt = select(User).where(User.username == user.username)
+        return session.exec(user_stmt).first()

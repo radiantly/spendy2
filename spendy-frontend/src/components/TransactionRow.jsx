@@ -9,13 +9,14 @@ import {
   blurred,
   menuActive,
 } from "../css/TransactionRow.module.css";
-import { useCallback } from "react";
+import { useCallback, useContext, useEffect } from "react";
 import { getCurrencyPrefix } from "../currency";
-import { Keypair, postJSON, toNiceDateString } from "../utils";
+import { Keypair, toNiceDateString } from "../utils";
 import Menu from "./Menu";
 import { AnimatePresence } from "framer-motion";
 import { FaEllipsisH } from "react-icons/fa";
 import { debounce } from "../utils";
+import { UserContext } from "../contexts/UserContext";
 const TransactionRow = ({
   transaction,
   index,
@@ -23,38 +24,32 @@ const TransactionRow = ({
   activeMenuIdx,
   setActiveMenuIdx,
 }) => {
-  const savemodifiedRemarks = useCallback(
-    debounce(async (e) => {
-      const userString = localStorage.getItem("user");
-      let user;
-      try {
-        user = JSON.parse(userString);
-        if (!user?.username) throw false;
-      } catch {
-        console.log("Failed to get user from localstorage");
-      }
-      const keypair = await Keypair.fromJSON(user.keypair);
-      const newTransaction = { ...transaction };
+  const [user] = useContext(UserContext);
+  const saveModifications = useCallback(
+    debounce(async (trans) => {
+      const newTransaction = { ...trans };
+
+      // these properties are not encrypted
       delete newTransaction.id;
       delete newTransaction.date;
-      newTransaction.remarks = e.target.value;
-      const encrypted = await keypair.encrypt(JSON.stringify(newTransaction));
-      postJSON("/api/transaction", {
-        id: transaction.id,
+      delete newTransaction.owner;
+
+      const encrypted = await user.keypair.encrypt(
+        JSON.stringify(newTransaction)
+      );
+      console.log("Saving", newTransaction);
+      user.session.post("/api/transaction", {
+        id: trans.id,
         owner: user.username,
-        date: transaction.date,
+        date: trans.date,
         encrypted,
       });
     }, 333),
     []
   );
-
-  const modifyRemarks = (e) => {
-    updateTransactions((t) => {
-      t[index].remarks = e.target.value;
-    });
-    savemodifiedRemarks(e);
-  };
+  useEffect(() => {
+    saveModifications(transaction);
+  }, [transaction]);
 
   return (
     <div className={[row, transaction.hidden ? blurred : ""].join(" ")}>
@@ -72,7 +67,11 @@ const TransactionRow = ({
       <input
         className={remarks}
         value={transaction.remarks}
-        onInput={modifyRemarks}
+        onInput={(e) =>
+          updateTransactions((t) => {
+            t[index].remarks = e.target.value;
+          })
+        }
       />
       <div
         className={[

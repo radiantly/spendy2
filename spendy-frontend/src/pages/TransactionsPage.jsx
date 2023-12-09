@@ -1,21 +1,48 @@
-import { useEffect, useState } from "react";
+import { useContext, useEffect, useState } from "react";
 
 import { bgContainer, container } from "../css/TransactionsPage.module.css";
-import { useLoaderData } from "react-router-dom";
 import Navbar from "../components/Navbar";
 import Dash from "../components/Dash";
 import { useImmer } from "use-immer";
 import TransactionGrid from "../components/TransactionGrid";
 import { toINR } from "../currency";
-import LastEmail from "../components/LastEmail";
+import { UserContext } from "../contexts/UserContext";
+import { Navigate } from "react-router-dom";
 
 function TransactionsPage() {
-  const loadedTransactions = useLoaderData();
+  const [user] = useContext(UserContext);
+
   const [transactions, updateTransactions] = useImmer([]);
   const [filterList, setFilterList] = useState([]);
   const [searchInput, setSearchInput] = useState("");
 
-  useEffect(() => updateTransactions(loadedTransactions), [loadedTransactions]);
+  useEffect(() => {
+    (async () => {
+      const response = await user.session.post("/api/transactions");
+
+      if (response.status !== 200) return console.log("fail", response);
+      const transactionJson = await response.json();
+
+      updateTransactions(
+        await Promise.all(
+          transactionJson.map(async ({ id, date, encrypted }) => {
+            const transaction = {
+              id,
+              date: new Date(date),
+              remarks: "",
+              hidden: false,
+              ...JSON.parse(await user.keypair.decrypt(encrypted)),
+            };
+
+            if (!transaction.remarks && transaction.labels)
+              transaction.remarks = transaction.labels.join(" ");
+
+            return transaction;
+          })
+        )
+      );
+    })();
+  }, []);
 
   console.log("Loader data:", transactions);
 
@@ -43,7 +70,6 @@ function TransactionsPage() {
             setSearchInput,
           }}
         />
-        <LastEmail />
       </div>
     </div>
   );

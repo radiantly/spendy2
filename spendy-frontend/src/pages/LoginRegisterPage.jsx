@@ -7,12 +7,14 @@ import {
   alternateAction,
   info,
 } from "../css/LoginRegisterPage.module.css";
-import { useEffect, useState } from "react";
-import { Keypair, postJSON } from "../utils.jsx";
+import { useContext, useEffect, useState } from "react";
+import { Keypair, Session, User } from "../utils.jsx";
+import { UserContext } from "../contexts/UserContext.js";
 function LoginRegisterPage() {
   const isRegister = useMatch("/register");
   const navigate = useNavigate();
   const loc = useLocation();
+  const [, setUser] = useContext(UserContext);
 
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -31,30 +33,56 @@ function LoginRegisterPage() {
   const [feedback, setFeedback] = useState(null);
   useEffect(() => setFeedback(loc?.state?.feedback), [loc]);
 
+  const setFeedbackFromResponse = async (response) => {
+    try {
+      const { detail } = await response.json();
+      return setFeedback(detail);
+    } catch {
+      return setFeedback("Could not login. Server Error.");
+    }
+  };
+
   const register = async (keypair) => {
     setFeedback("Creating account..");
-    const response = await postJSON("/api/user", {
+    const payload = {
       username,
       public_key: keypair.publicKey,
+    };
+    const response = await fetch("/api/user", {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
     });
 
     console.log(response);
 
-    if (response.status == 200)
-      return navigate("/login", {
-        state: {
-          feedback: "Your account has been created, you can login now.",
-        },
-      });
+    if (response.status !== 200) return setFeedbackFromResponse(response);
 
-    setFeedback(
-      `Failed to create account. The username ${username} may already be in use.`
-    );
+    return navigate("/login", {
+      state: {
+        feedback: "Your account has been created, click login below.",
+      },
+    });
   };
   const login = async (keypair) => {
-    setFeedback("Logging in..");
-    console.log("st", keypair.toJSON());
-    localStorage.setItem("user", JSON.stringify({ username, keypair }));
+    var formdata = new FormData();
+    formdata.append("username", username);
+    formdata.append("password", keypair.publicKey);
+
+    const response = await fetch("/api/token", {
+      method: "POST",
+      body: formdata,
+    });
+    if (response.status !== 200) return setFeedbackFromResponse(response);
+
+    const { access_token } = await response.json();
+    const session = new Session(access_token);
+    const user = new User(username, keypair, session);
+
+    setUser(user);
     return navigate("/");
   };
 

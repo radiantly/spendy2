@@ -244,15 +244,60 @@ export function debounce(func, wait) {
   };
 }
 
-export const postJSON = (url, body) =>
-  fetch(url, {
-    method: "POST",
-    headers: {
-      Accept: "application/json",
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body),
-  });
+export class Session {
+  #token;
+  constructor(token) {
+    this.#token = token;
+  }
+
+  post(url, body) {
+    return fetch(url, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${this.#token}`,
+      },
+      body: JSON.stringify(body),
+    });
+  }
+
+  toJSON() {
+    return { token: this.#token };
+  }
+
+  static fromJSON({ token }) {
+    return new Session(token);
+  }
+}
+
+export class User {
+  constructor(username, keypair, session) {
+    this.username = username;
+    this.keypair = keypair;
+    this.session = session;
+  }
+
+  toJSON() {
+    return {
+      username: this.username,
+      keypair: this.keypair,
+      session: this.session,
+    };
+  }
+
+  static async fromJSONString(text) {
+    if (!text) return null;
+    try {
+      const obj = JSON.parse(text);
+      const keypair = await Keypair.fromJSON(obj.keypair);
+      const session = Session.fromJSON(obj.session);
+      return new User(obj.username, keypair, session);
+    } catch {
+      return null;
+    }
+  }
+}
 
 const nth = (num) => ["th", "st", "nd", "rd"][num % 10 <= 3 ? num % 10 : 0];
 
