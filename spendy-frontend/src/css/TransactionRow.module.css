@@ -20,6 +20,7 @@
   background: rgba(255, 255, 255, 0.5);
   text-transform: uppercase;
   grid-row-start: 1;
+  user-select: none;
 }
 
 :global(.search-active) > .header > div {

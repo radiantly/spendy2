@@ -47,12 +47,12 @@ function TransactionsPage() {
 
   console.log("Loader data:", transactions);
 
-  const totalSpending = Object.values(transactions).reduce(
-    (acc, transaction) =>
+  const totalSpending = filterList.reduce(
+    (acc, id) =>
       acc +
-      (transaction.hidden
+      (transactions[id].hidden
         ? 0
-        : toINR(transaction.currency, transaction.amount)),
+        : toINR(transactions[id].currency, transactions[id].amount)),
     0
   );
 
