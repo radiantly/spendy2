@@ -1,3 +1,4 @@
+import asyncio
 import json
 import re
 from datetime import datetime
@@ -8,6 +9,7 @@ from sqlmodel import Session, select
 from .config import MAX_RETRIES, OPENAI_API_KEY
 from .database import Transaction, User, engine
 from .encryption import encrypt_message
+from .websocket_manager import websocket_manager
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
@@ -126,20 +128,20 @@ async def process_mail(mail: dict):
     target_username = mail["to"][0].split("@")[0].lower()
 
     with Session(engine) as session:
-        statement = select(User.public_key).where(User.username == target_username)
+        statement = select(User).where(User.username == target_username)
         results = session.exec(statement)
-        user_public_key = results.first()
+        user = results.first()
 
-        if not user_public_key:
+        if not user:
             print(f"User {target_username} not found.")
             return
 
-        # last_email[target_username] = encrypt_message(user_public_key, json.dumps(mail))
+        encrypted_mail = encrypt_message(user.public_key, json.dumps(mail))
 
         details = extract_transaction(mail["body"])
         if "transaction" in details and details["transaction"]:
             encrypted_transaction = encrypt_message(
-                user_public_key, json.dumps(details)
+                user.public_key, json.dumps(details)
             )
             print("Encrypted transaction", encrypted_transaction)
             transaction = Transaction(
@@ -149,6 +151,11 @@ async def process_mail(mail: dict):
             )
             session.add(transaction)
             session.commit()
+            session.refresh(transaction)
+
+            asyncio.create_task(
+                websocket_manager.send_broadcast(target_username, transaction.json())
+            )
 
 
 # Example

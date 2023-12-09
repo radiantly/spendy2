@@ -11,7 +11,7 @@ const Search = ({
 
   const fuse = useMemo(
     () =>
-      new Fuse(transactions, {
+      new Fuse(Array.from(Object.values(transactions)), {
         keys: ["party", "remarks"],
       }),
     [transactions]
@@ -21,8 +21,8 @@ const Search = ({
     () =>
       setFilterList(
         searchInput
-          ? fuse.search(searchInput).map((result) => result.refIndex)
-          : [...Array(transactions.length).keys()]
+          ? fuse.search(searchInput).map(({ item }) => item.id)
+          : Array.from(Object.keys(transactions))
       ),
     [searchInput, transactions]
   );

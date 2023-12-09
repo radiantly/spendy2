@@ -1,4 +1,5 @@
 import forge from "node-forge";
+import { useEffect } from "react";
 
 // from https://developer.mozilla.org/en-US/docs/Glossary/Base64
 function base64ToBytes(base64) {
@@ -262,6 +263,18 @@ export class Session {
     });
   }
 
+  useWebSocket(path, onMessage) {
+    useEffect(() => {
+      const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+      const url = new URL(path, `${protocol}//${location.host}/`);
+      const ws = new WebSocket(url);
+      ws.addEventListener("message", onMessage);
+      ws.addEventListener("open", () => ws.send(this.#token));
+
+      return () => ws.close();
+    }, []);
+  }
+
   toJSON() {
     return { token: this.#token };
   }
@@ -318,4 +331,21 @@ export const toNiceDateString = (then) => {
       <span className="nth">{nth(date)}</span>&nbsp;{month}, {year}
     </>
   );
+};
+
+export const parseAPITransaction = async (apiTransaction, keypair) => {
+  const { id, date, encrypted } = apiTransaction;
+
+  const transaction = {
+    id,
+    date: new Date(date),
+    remarks: "",
+    hidden: false,
+    ...JSON.parse(await keypair.decrypt(encrypted)),
+  };
+
+  if (!transaction.remarks && transaction.labels)
+    transaction.remarks = transaction.labels.join(" ");
+
+  return transaction;
 };

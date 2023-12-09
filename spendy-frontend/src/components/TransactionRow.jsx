@@ -17,14 +17,16 @@ import { AnimatePresence } from "framer-motion";
 import { FaEllipsisH } from "react-icons/fa";
 import { debounce } from "../utils";
 import { UserContext } from "../contexts/UserContext";
+import { useImmer } from "use-immer";
 const TransactionRow = ({
-  transaction,
-  index,
+  transactions,
+  id,
+  activeMenuId,
+  setActiveMenuId,
   updateTransactions,
-  activeMenuIdx,
-  setActiveMenuIdx,
 }) => {
   const [user] = useContext(UserContext);
+  const [transaction, updateTransaction] = useImmer({ ...transactions[id] });
   const saveModifications = useCallback(
     debounce(async (trans) => {
       const newTransaction = { ...trans };
@@ -48,7 +50,18 @@ const TransactionRow = ({
     []
   );
   useEffect(() => {
+    // Ignore if nothing has changed
+    if (
+      +transactions[id].date === +transaction.date &&
+      transactions[id].hidden === transaction.hidden &&
+      transactions[id].remarks === transaction.remarks
+    )
+      return;
+
     saveModifications(transaction);
+    updateTransactions((trans) => {
+      trans[id] = { ...transaction };
+    });
   }, [transaction]);
 
   return (
@@ -68,32 +81,31 @@ const TransactionRow = ({
         className={remarks}
         value={transaction.remarks}
         onInput={(e) =>
-          updateTransactions((t) => {
-            t[index].remarks = e.target.value;
+          updateTransaction((t) => {
+            t.remarks = e.target.value;
           })
         }
       />
       <div
-        className={[
-          moreActions,
-          activeMenuIdx === index ? menuActive : "",
-        ].join(" ")}
+        className={[moreActions, activeMenuId === id ? menuActive : ""].join(
+          " "
+        )}
         onClick={(event) => {
           if (!event.target.dataset.action)
-            return setActiveMenuIdx(activeMenuIdx === index ? null : index);
+            return setActiveMenuId(activeMenuId === id ? null : id);
           if (event.target.dataset.action === "toggleVisibility")
-            return updateTransactions((t) => {
-              t[index].hidden = !t[index].hidden;
+            return updateTransaction((t) => {
+              t.hidden = !t.hidden;
             });
         }}
       >
         <FaEllipsisH />
         <AnimatePresence>
-          {activeMenuIdx === index ? (
+          {activeMenuId === id ? (
             <Menu
               triggerHide={() => {
                 console.log("triggered");
-                setActiveMenuIdx(null);
+                setActiveMenuId(null);
               }}
               hidden={transaction.hidden}
             />

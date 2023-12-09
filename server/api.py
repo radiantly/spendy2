@@ -1,10 +1,19 @@
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import (
+    Depends,
+    FastAPI,
+    HTTPException,
+    WebSocket,
+    WebSocketDisconnect,
+    WebSocketException,
+    status,
+)
 from sqlmodel import Session, select
 
 from .database import Transaction, User, engine, get_existing_user
 from .oauth2 import Token, get_current_user, login_user
+from .websocket_manager import websocket_manager
 
 api = FastAPI()
 
@@ -39,6 +48,27 @@ async def create_user(user: User):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="SQL Error"
         )
+
+
+@api.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    authenticated_user = None
+    try:
+        jwt_token = await websocket.receive_text()
+        authenticated_user = await get_current_user(jwt_token)
+        websocket_manager.add(authenticated_user.username, websocket)
+
+        # Keep connection open
+        await websocket.receive_text()
+
+    # raised when token cannot be authenticated
+    except HTTPException:
+        raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION)
+
+    except WebSocketDisconnect:
+        if authenticated_user:
+            websocket_manager.remove(authenticated_user.username, websocket)
 
 
 # Protected routes

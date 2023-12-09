@@ -27,7 +27,7 @@ const TransactionGrid = ({
   searchInput,
   setSearchInput,
 }) => {
-  const [activeMenuIdx, setActiveMenuIdx] = useState(null);
+  const [activeMenuId, setActiveMenuId] = useState(null);
   return (
     <div
       className={[tgrid, searchInput ? "search-active" : ""].join(" ")}
@@ -52,11 +52,16 @@ const TransactionGrid = ({
         <div className={moreActions}></div>
       </div>
 
-      {filterList.map((index) => (
+      {filterList.map((id) => (
         <TransactionRow
-          key={transactions[index].id}
-          transaction={transactions[index]}
-          {...{ index, activeMenuIdx, setActiveMenuIdx, updateTransactions }}
+          key={id}
+          {...{
+            transactions,
+            id,
+            activeMenuId,
+            setActiveMenuId,
+            updateTransactions,
+          }}
         />
       ))}
 

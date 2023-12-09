@@ -7,12 +7,12 @@ import { useImmer } from "use-immer";
 import TransactionGrid from "../components/TransactionGrid";
 import { toINR } from "../currency";
 import { UserContext } from "../contexts/UserContext";
-import { Navigate } from "react-router-dom";
+import { parseAPITransaction } from "../utils";
 
 function TransactionsPage() {
   const [user] = useContext(UserContext);
 
-  const [transactions, updateTransactions] = useImmer([]);
+  const [transactions, updateTransactions] = useImmer({});
   const [filterList, setFilterList] = useState([]);
   const [searchInput, setSearchInput] = useState("");
 
@@ -21,37 +21,38 @@ function TransactionsPage() {
       const response = await user.session.post("/api/transactions");
 
       if (response.status !== 200) return console.log("fail", response);
-      const transactionJson = await response.json();
+      const apiTransactions = await response.json();
 
-      updateTransactions(
-        await Promise.all(
-          transactionJson.map(async ({ id, date, encrypted }) => {
-            const transaction = {
-              id,
-              date: new Date(date),
-              remarks: "",
-              hidden: false,
-              ...JSON.parse(await user.keypair.decrypt(encrypted)),
-            };
-
-            if (!transaction.remarks && transaction.labels)
-              transaction.remarks = transaction.labels.join(" ");
-
-            return transaction;
-          })
-        )
+      const parsedTransactions = await Promise.all(
+        apiTransactions.map((t) => parseAPITransaction(t, user.keypair))
       );
+
+      updateTransactions((trans) => {
+        for (const transaction of parsedTransactions)
+          trans[transaction.id] = transaction;
+      });
     })();
   }, []);
 
+  user.session.useWebSocket("/api/ws", async ({ data }) => {
+    console.log(data);
+    const transaction = await parseAPITransaction(
+      JSON.parse(data),
+      user.keypair
+    );
+    updateTransactions((trans) => {
+      trans[transaction.id] = transaction;
+    });
+  });
+
   console.log("Loader data:", transactions);
 
-  const totalSpending = filterList.reduce(
-    (acc, index) =>
+  const totalSpending = Object.values(transactions).reduce(
+    (acc, transaction) =>
       acc +
-      (transactions[index].hidden
+      (transaction.hidden
         ? 0
-        : toINR(transactions[index].currency, transactions[index].amount)),
+        : toINR(transaction.currency, transaction.amount)),
     0
   );
 
