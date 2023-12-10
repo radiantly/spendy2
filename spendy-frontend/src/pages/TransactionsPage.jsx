@@ -51,7 +51,7 @@ function TransactionsPage() {
       return;
     }
 
-    const transaction = await parseAPITransaction(user.keypair);
+    const transaction = await parseAPITransaction(obj, user.keypair);
     updateTransactions((trans) => {
       trans[transaction.id] = transaction;
     });

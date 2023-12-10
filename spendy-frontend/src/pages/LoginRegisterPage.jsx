@@ -93,7 +93,10 @@ function LoginRegisterPage() {
 
     setTimeout(async () => {
       const keypair = await Keypair.generate(password);
-      console.log("generating with", password);
+      console.log(
+        "generating keypair with password of length",
+        password.length
+      );
       isRegister ? register(keypair) : login(keypair);
     }, 222);
   };

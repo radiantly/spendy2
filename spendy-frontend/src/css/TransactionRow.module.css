@@ -54,6 +54,7 @@
 
 .row > .payee {
   grid-column-start: 3;
+  overflow: hidden;
 }
 .row > .mode {
   grid-column-start: 5;
