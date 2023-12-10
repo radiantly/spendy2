@@ -221,13 +221,8 @@ export class Keypair {
     const prng = forge.random.createInstance();
     prng.seedFileSync = () => seed;
 
-    return new Promise((resolve, reject) =>
-      forge.pki.rsa.generateKeyPair(
-        { bits: 2048, prng, workers: -1 },
-        (err, keypair) =>
-          keypair ? resolve(Keypair.fromForgeKeypair(keypair)) : reject(err)
-      )
-    );
+    const keypair = forge.pki.rsa.generateKeyPair({ bits: 2048, prng });
+    return Keypair.fromForgeKeypair(keypair);
   }
 }
 

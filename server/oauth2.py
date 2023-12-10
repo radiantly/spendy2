@@ -38,7 +38,14 @@ async def login_user(form_data: Annotated[OAuth2PasswordRequestForm, Depends()])
     with Session(engine) as session:
         user_stmt = select(User).where(User.username == user.username)
         retrieved_user = session.exec(user_stmt).first()
-        user.validate
+
+        if not retrieved_user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User does not exist.",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
         if user != retrieved_user:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
