@@ -1,4 +1,5 @@
 import asyncio
+from bs4 import BeautifulSoup
 from email.parser import BytesParser
 from email.policy import default
 
@@ -19,22 +20,31 @@ def parse_mail(envelope):
 
     # Extract subject
     mail["subject"] = msg["Subject"]
-    # print("Subject:", mail["subject"])
 
     # Extract and print plaintext content
     if msg.is_multipart():
         for part in msg.walk():
             # Each part is either a text or an attachment or other type
-            if part.get_content_type() == "text/plain":
+            content_type = part.get_content_type()
+            if content_type == "text/plain":
                 mail["body"] = part.get_payload(decode=True).decode(
                     "utf-8", errors="ignore"
                 )
+            elif content_type == "text/html" and "body" not in mail:
+                html_content = part.get_payload(decode=True).decode(
+                    "utf-8", errors="ignore"
+                )
+                soup = BeautifulSoup(html_content, "html.parser")
+                mail["body"] = soup.get_text()
     else:
         # For non-multipart emails, just print the payload
-        mail["body"] = msg.get_payload(decode=True).decode("utf-8", errors="ignore")
-
-    # if "body" in mail:
-    #     print(f"Plain text body:", mail["body"])
+        content_type = msg.get_content_type()
+        if content_type == "text/plain":
+            mail["body"] = msg.get_payload(decode=True).decode("utf-8", errors="ignore")
+        elif content_type == "text/html":
+            html_content = msg.get_payload(decode=True).decode("utf-8", errors="ignore")
+            soup = BeautifulSoup(html_content, "html.parser")
+            mail["body"] = soup.get_text()
 
     return mail
 
