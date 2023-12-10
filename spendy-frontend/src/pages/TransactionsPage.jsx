@@ -8,6 +8,7 @@ import TransactionGrid from "../components/TransactionGrid";
 import { toINR } from "../currency";
 import { UserContext } from "../contexts/UserContext";
 import { parseAPITransaction } from "../utils";
+import NoMailHere from "../components/NoMailHere";
 
 function TransactionsPage() {
   const [user] = useContext(UserContext);
@@ -15,6 +16,7 @@ function TransactionsPage() {
   const [transactions, updateTransactions] = useImmer({});
   const [filterList, setFilterList] = useState([]);
   const [searchInput, setSearchInput] = useState("");
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     (async () => {
@@ -31,6 +33,7 @@ function TransactionsPage() {
         for (const transaction of parsedTransactions)
           trans[transaction.id] = transaction;
       });
+      setLoading(false);
     })();
   }, []);
 
@@ -61,6 +64,7 @@ function TransactionsPage() {
       <div className={container}>
         {/* <Navbar /> */}
         <Dash {...{ totalSpending, searchInput }} />
+        {loading || Object.keys(transactions).length ? null : <NoMailHere />}
         <TransactionGrid
           {...{
             transactions,

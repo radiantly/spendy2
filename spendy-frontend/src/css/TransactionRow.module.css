@@ -100,7 +100,7 @@
   transform: rotate(90deg);
 }
 
-.row .sortIcon {
+.row.header .sortIcon {
   position: absolute;
   right: 0;
   width: 20px;
@@ -109,6 +109,6 @@
   justify-content: center;
 }
 
-.row .sortIcon.hidden {
+.row.header .sortIcon.hidden {
   display: none;
 }
