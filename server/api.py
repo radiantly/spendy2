@@ -107,3 +107,24 @@ async def update_transaction(
         session.refresh(transaction)
 
         return transaction
+
+
+@api.delete("/transaction/{transaction_id}")
+async def update_transaction(
+    current_user: Annotated[User, Depends(get_current_user)],
+    transaction_id: int,
+):
+    with Session(engine) as session:
+        stmt = select(Transaction).where(
+            Transaction.id == transaction_id
+            and Transaction.owner == current_user.username
+        )
+        transaction = session.exec(stmt).first()
+
+        if not transaction:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Transaction not found"
+            )
+
+        session.delete(transaction)
+        session.commit()

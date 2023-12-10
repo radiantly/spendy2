@@ -1,13 +1,14 @@
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
 import { menu, row } from "../css/Menu.module.css";
 import { FaPencilAlt, FaEyeSlash, FaTrash, FaEye } from "react-icons/fa";
 
 import { motion } from "framer-motion";
 const Menu = ({ triggerHide, hidden }) => {
-  const menuElem = useRef(null);
   useEffect(() => {
     const handler = (event) => {
-      if (!event.composedPath().includes(menuElem.current)) triggerHide();
+      for (const element of event.composedPath())
+        if (element?.dataset?.moreActionsBtn) return;
+      triggerHide();
     };
     document.addEventListener("pointerdown", handler);
     return () => document.removeEventListener("pointerdown", handler);

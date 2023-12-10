@@ -1,4 +1,4 @@
-import { useContext, useEffect, useState } from "react";
+import { useContext, useEffect, useState, useMemo } from "react";
 
 import { bgContainer, container } from "../css/TransactionsPage.module.css";
 import Navbar from "../components/Navbar";
@@ -10,11 +10,11 @@ import { UserContext } from "../contexts/UserContext";
 import { parseAPITransaction } from "../utils";
 import NoMailHere from "../components/NoMailHere";
 import { useNavigate } from "react-router-dom";
+import Fuse from "fuse.js";
 
 function TransactionsPage() {
   const [user] = useContext(UserContext);
   const [transactions, updateTransactions] = useImmer({});
-  const [filterList, setFilterList] = useState([]);
   const [searchInput, setSearchInput] = useState("");
   const [loading, setLoading] = useState(true);
   const [ephemeralMails, setEphemeralMails] = useState([]);
@@ -46,6 +46,14 @@ function TransactionsPage() {
     })();
   }, []);
 
+  const fuse = useMemo(
+    () =>
+      new Fuse(Array.from(Object.values(transactions)), {
+        keys: ["party", "remarks"],
+      }),
+    [transactions]
+  );
+
   user.session.useWebSocket("/api/ws", async ({ data }) => {
     console.log(data);
     const obj = JSON.parse(data);
@@ -67,6 +75,14 @@ function TransactionsPage() {
 
   console.log("Loader data:", transactions);
 
+  const filterList = useMemo(
+    () =>
+      searchInput
+        ? fuse.search(searchInput).map(({ item }) => item.id)
+        : Array.from(Object.keys(transactions)),
+    [transactions, searchInput]
+  );
+
   const totalSpending = filterList.reduce(
     (acc, id) =>
       acc +
@@ -87,7 +103,6 @@ function TransactionsPage() {
             transactions,
             updateTransactions,
             filterList,
-            setFilterList,
             searchInput,
             setSearchInput,
             ephemeralMails,

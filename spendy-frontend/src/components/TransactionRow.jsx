@@ -91,13 +91,21 @@ const TransactionRow = ({
           " "
         )}
         onClick={(event) => {
-          if (!event.target.dataset.action)
-            return setActiveMenuId(activeMenuId === id ? null : id);
-          if (event.target.dataset.action === "toggleVisibility")
-            return updateTransaction((t) => {
-              t.hidden = !t.hidden;
-            });
+          switch (event.target.dataset.action) {
+            case "toggleVisibility":
+              return updateTransaction((t) => {
+                t.hidden = !t.hidden;
+              });
+            case "delete":
+              user.session.delete(`/api/transaction/${id}`);
+              return updateTransactions((t) => {
+                delete t[id];
+              });
+            default:
+              setActiveMenuId(activeMenuId === id ? null : id);
+          }
         }}
+        data-more-actions-btn="true"
       >
         <FaEllipsisH />
         <AnimatePresence>

@@ -242,19 +242,28 @@ export function debounce(func, wait) {
 
 export class Session {
   #token;
+  #headers;
   constructor(token) {
     this.#token = token;
+    this.#headers = {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${this.#token}`,
+    };
   }
 
   post(url, body) {
     return fetch(url, {
       method: "POST",
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${this.#token}`,
-      },
+      headers: this.#headers,
       body: JSON.stringify(body),
+    });
+  }
+
+  delete(url) {
+    return fetch(url, {
+      method: "DELETE",
+      headers: this.#headers,
     });
   }
 

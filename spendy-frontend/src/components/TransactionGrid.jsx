@@ -39,7 +39,6 @@ const TransactionGrid = ({
   transactions,
   updateTransactions,
   filterList,
-  setFilterList,
   searchInput,
   setSearchInput,
   ephemeralMails,
@@ -61,12 +60,7 @@ const TransactionGrid = ({
     >
       <label className={searchBar}>
         <FaSearch />
-        <Search
-          searchInput={searchInput}
-          setSearchInput={setSearchInput}
-          transactions={transactions}
-          setFilterList={setFilterList}
-        />
+        <Search searchInput={searchInput} setSearchInput={setSearchInput} />
       </label>
 
       <div className={[header, row].join(" ")}>

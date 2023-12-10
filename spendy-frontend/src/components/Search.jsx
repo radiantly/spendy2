@@ -1,31 +1,7 @@
-import { useEffect, useMemo, useRef } from "react";
-import Fuse from "fuse.js";
+import { useEffect, useRef } from "react";
 
-const Search = ({
-  searchInput,
-  setSearchInput,
-  transactions,
-  setFilterList,
-}) => {
+const Search = ({ searchInput, setSearchInput }) => {
   const searchElem = useRef(null);
-
-  const fuse = useMemo(
-    () =>
-      new Fuse(Array.from(Object.values(transactions)), {
-        keys: ["party", "remarks"],
-      }),
-    [transactions]
-  );
-
-  useEffect(
-    () =>
-      setFilterList(
-        searchInput
-          ? fuse.search(searchInput).map(({ item }) => item.id)
-          : Array.from(Object.keys(transactions))
-      ),
-    [searchInput, transactions]
-  );
 
   useEffect(() => {
     const handler = (event) => {
