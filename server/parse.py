@@ -15,7 +15,10 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 
 
 def sanitize_email_text(email_text: str):
-    return re.sub(r"[\n\r\t ]+", " ", email_text).strip()
+    links_removed = re.sub(r"https?://[^ ]+", " ", email_text)
+    spaces_cleaned = re.sub(r"[\n\r\t ]+", " ", links_removed)
+    trimmed = spaces_cleaned.strip()
+    return trimmed
 
 
 def build_prompt(email_body: str):
@@ -137,7 +140,7 @@ async def process_mail(mail: dict):
             return
 
         details = extract_transaction(mail["body"])
-        if "transaction" in details and details["transaction"]:
+        if details and "transaction" in details and details["transaction"]:
             encrypted_transaction = encrypt_message(
                 user.public_key, json.dumps(details)
             )

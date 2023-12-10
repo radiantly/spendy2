@@ -1,7 +1,8 @@
 import asyncio
-from bs4 import BeautifulSoup
 from email.parser import BytesParser
 from email.policy import default
+
+from bs4 import BeautifulSoup
 
 from .parse import process_mail
 
@@ -54,13 +55,6 @@ class EmailHandler:
         print("Mail received!\n")
 
         if mail := parse_mail(envelope):
-            task = asyncio.create_task(process_mail(mail))
-            task.add_done_callback(self.task_callback)
+            asyncio.create_task(process_mail(mail))
 
         return "250 Message accepted for delivery"
-
-    def task_callback(self, task):
-        try:
-            task.result()  # This will re-raise any exception from process_mail
-        except Exception as e:
-            print(f"An error occurred in process_mail: {e}")

@@ -28,7 +28,8 @@ const Search = ({
   );
 
   useEffect(() => {
-    const handler = () => {
+    const handler = (event) => {
+      if (event.ctrlKey) return;
       if (document.activeElement === document.body) searchElem.current.focus();
     };
     document.body.addEventListener("keydown", handler);

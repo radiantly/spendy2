@@ -11,7 +11,7 @@ async def main():
     controller = Controller(EmailHandler(), hostname="", port=25)
     controller.start()
 
-    config = uvicorn.Config(app, log_level="info", reload=True)
+    config = uvicorn.Config(app, log_level="info")
     server = uvicorn.Server(config)
     await server.serve()
 
