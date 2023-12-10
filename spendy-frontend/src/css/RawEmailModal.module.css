@@ -1,0 +1,54 @@
+.overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100vh;
+  background-color: rgba(0, 0, 0, 0.2);
+
+  display: flex;
+  justify-content: center;
+  align-items: center;
+
+  z-index: 42;
+  line-height: 1.5;
+}
+
+.overlay > div {
+  width: calc(min(95vw, 1200px) - 90px);
+  background-color: rgba(255, 255, 255, 0.9);
+  height: 75vh;
+}
+
+.top-row {
+  display: flex;
+  justify-content: space-between;
+  font-weight: 600;
+}
+
+.top-row summary {
+  cursor: pointer;
+  border-bottom: 2px dotted;
+  display: inline;
+}
+
+.top-row .more-info {
+  padding-top: 5px;
+}
+
+.top-row > svg {
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.subject {
+  font-size: 32px;
+  font-weight: 400;
+}
+
+.overlay pre {
+  word-wrap: anywhere;
+  white-space: pre-wrap;
+  min-height: 0;
+  overflow: auto;
+}

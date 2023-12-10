@@ -20,6 +20,7 @@ import Search from "./Search";
 import { Fragment, useState } from "react";
 import TransactionRow from "./TransactionRow";
 import GridHeader from "./GridHeader";
+import EphemeralMails from "./EphemeralMails";
 
 const sorts = {
   dateAsc: (a, b) => a.date - b.date,
@@ -41,6 +42,8 @@ const TransactionGrid = ({
   setFilterList,
   searchInput,
   setSearchInput,
+  ephemeralMails,
+  setEphemeralMails,
 }) => {
   const [activeMenuId, setActiveMenuId] = useState(null);
   const [sortOrder, setSortOrder] = useState("dateDesc");
@@ -50,7 +53,11 @@ const TransactionGrid = ({
   return (
     <div
       className={[tgrid, searchInput ? "search-active" : ""].join(" ")}
-      style={{ gridTemplateRows: `repeat(${filterList.length + 1}, 40px)` }}
+      style={{
+        gridTemplateRows: `repeat(${
+          1 + ephemeralMails.length + filterList.length
+        }, 40px)`,
+      }}
     >
       <label className={searchBar}>
         <FaSearch />
@@ -100,6 +107,8 @@ const TransactionGrid = ({
         </GridHeader>
         <div className={moreActions}></div>
       </div>
+
+      <EphemeralMails {...{ ephemeralMails, setEphemeralMails }} />
 
       {viewList.map(({ id }) => (
         <TransactionRow

@@ -136,8 +136,6 @@ async def process_mail(mail: dict):
             print(f"User {target_username} not found.")
             return
 
-        encrypted_mail = encrypt_message(user.public_key, json.dumps(mail))
-
         details = extract_transaction(mail["body"])
         if "transaction" in details and details["transaction"]:
             encrypted_transaction = encrypt_message(
@@ -155,6 +153,11 @@ async def process_mail(mail: dict):
 
             asyncio.create_task(
                 websocket_manager.send_broadcast(target_username, transaction.json())
+            )
+        else:
+            payload = {"raw": encrypt_message(user.public_key, json.dumps(mail))}
+            asyncio.create_task(
+                websocket_manager.send_broadcast(target_username, json.dumps(payload))
             )
 
 

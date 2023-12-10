@@ -29,4 +29,4 @@ def encrypt_message(public_key: str, message: str) -> str:
     )
 
     # Return the encrypted message and the encrypted AES key
-    return base64.b64encode(encrypted_aes_key + iv + encrypted_message)
+    return base64.b64encode(encrypted_aes_key + iv + encrypted_message).decode()

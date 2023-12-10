@@ -17,6 +17,7 @@ function TransactionsPage() {
   const [filterList, setFilterList] = useState([]);
   const [searchInput, setSearchInput] = useState("");
   const [loading, setLoading] = useState(true);
+  const [ephemeralMails, setEphemeralMails] = useState([]);
 
   useEffect(() => {
     (async () => {
@@ -39,10 +40,18 @@ function TransactionsPage() {
 
   user.session.useWebSocket("/api/ws", async ({ data }) => {
     console.log(data);
-    const transaction = await parseAPITransaction(
-      JSON.parse(data),
-      user.keypair
-    );
+    const obj = JSON.parse(data);
+
+    // non transactional mail
+    if (obj.raw) {
+      setEphemeralMails([
+        JSON.parse(await user.keypair.decrypt(obj.raw)),
+        ...ephemeralMails,
+      ]);
+      return;
+    }
+
+    const transaction = await parseAPITransaction(user.keypair);
     updateTransactions((trans) => {
       trans[transaction.id] = transaction;
     });
@@ -73,6 +82,8 @@ function TransactionsPage() {
             setFilterList,
             searchInput,
             setSearchInput,
+            ephemeralMails,
+            setEphemeralMails,
           }}
         />
       </div>

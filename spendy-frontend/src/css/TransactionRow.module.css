@@ -15,6 +15,7 @@
   text-overflow: ellipsis;
   transition: all 0.2s ease;
   position: relative;
+  min-width: 0;
 }
 
 .row.header > div {
@@ -70,6 +71,7 @@
 
 .row > .remarks {
   grid-column-start: 9;
+  overflow: hidden;
 }
 
 .row > input.remarks {
@@ -111,4 +113,8 @@
 
 .row.header .sortIcon.hidden {
   display: none;
+}
+
+.row.ephemeral > .remarks {
+  cursor: pointer;
 }
