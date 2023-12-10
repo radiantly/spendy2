@@ -9,19 +9,27 @@ import { toINR } from "../currency";
 import { UserContext } from "../contexts/UserContext";
 import { parseAPITransaction } from "../utils";
 import NoMailHere from "../components/NoMailHere";
+import { useNavigate } from "react-router-dom";
 
 function TransactionsPage() {
   const [user] = useContext(UserContext);
-
   const [transactions, updateTransactions] = useImmer({});
   const [filterList, setFilterList] = useState([]);
   const [searchInput, setSearchInput] = useState("");
   const [loading, setLoading] = useState(true);
   const [ephemeralMails, setEphemeralMails] = useState([]);
+  const navigate = useNavigate();
 
   useEffect(() => {
     (async () => {
       const response = await user.session.post("/api/transactions");
+
+      if (response.status === 401)
+        return navigate("/login", {
+          state: {
+            feedback: "You are signed out, please login.",
+          },
+        });
 
       if (response.status !== 200) return console.log("fail", response);
       const apiTransactions = await response.json();
