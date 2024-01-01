@@ -83,14 +83,19 @@ function TransactionsPage() {
     [transactions, searchInput]
   );
 
-  const totalSpending = filterList.reduce(
-    (acc, id) =>
-      acc +
-      (transactions[id].hidden
-        ? 0
-        : toINR(transactions[id].currency, transactions[id].amount)),
-    0
-  );
+  const now = new Date();
+  const totalSpending = filterList
+    .filter(
+      (id) =>
+        !transactions[id].hidden &&
+        transactions[id].date.getMonth() == now.getMonth() &&
+        transactions[id].date.getFullYear() == now.getFullYear()
+    )
+    .reduce(
+      (acc, id) =>
+        acc + toINR(transactions[id].currency, transactions[id].amount),
+      0
+    );
 
   return (
     <div className={bgContainer}>
