@@ -318,13 +318,21 @@ export class User {
 
 const nth = (num) => ["th", "st", "nd", "rd"][num % 10 <= 3 ? num % 10 : 0];
 
-const DAY = 24 * 60 * 60 * 1000;
+// Return the number of days passed since the unix epoch
+// Note: This implementation is a gross approximation
+const getTotalDays = (date) =>
+  date.getDate() - 1 + date.getMonth() * 31 + date.getFullYear() * 372;
 
 export const toNiceDateString = (then) => {
-  const now = Date.now();
+  const now = new Date();
 
-  if (now - then < DAY) return "Today";
-  if (now - then < DAY * 2) return "Yesterday";
+  const timeStr = then.toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+
+  if (getTotalDays(now) === getTotalDays(then)) return timeStr;
+  if (getTotalDays(now) === getTotalDays(then) + 1) return "Yesterday";
 
   const date = then.getDate();
   const month = then.toLocaleString("default", { month: "short" });

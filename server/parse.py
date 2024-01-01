@@ -147,7 +147,7 @@ async def process_mail(mail: dict):
             print("Encrypted transaction", encrypted_transaction)
             transaction = Transaction(
                 owner=target_username,
-                date=datetime.now(),
+                date=datetime.now().astimezone(),
                 encrypted=encrypted_transaction,
             )
             session.add(transaction)

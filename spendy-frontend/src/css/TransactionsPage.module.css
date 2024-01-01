@@ -11,6 +11,6 @@
   width: min(95vw, 1200px);
   display: flex;
   flex-direction: column;
-  padding-top: 120px;
+  padding-top: 10vmin;
   gap: 30px;
 }

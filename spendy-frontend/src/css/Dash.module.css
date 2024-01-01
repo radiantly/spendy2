@@ -19,3 +19,14 @@
   font-weight: 600;
   padding-left: 6px;
 }
+
+@media screen and (max-width: 600px) {
+  .container {
+    text-align: center;
+    gap: 5px;
+  }
+  .amount {
+    font-size: 40px;
+    font-weight: 400;
+  }
+}
