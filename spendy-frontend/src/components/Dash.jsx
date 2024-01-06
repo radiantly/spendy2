@@ -16,7 +16,7 @@ const Dash = ({ totalSpending, searchInput }) => {
         }
       />
       <div className={timeframe}>
-        spent last month {searchInput ? `on ${searchInput}` : null}
+        spent this month {searchInput ? `on ${searchInput}` : null}
       </div>
     </div>
   );

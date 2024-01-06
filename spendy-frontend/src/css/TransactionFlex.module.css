@@ -1,0 +1,46 @@
+.wrap {
+  display: none;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.date-header {
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  padding-left: 20px;
+}
+
+.tile {
+  display: flex;
+  padding: 10px 20px;
+
+  border-radius: 15px;
+  background: rgba(255, 255, 255, 0.75);
+
+  color: #9fcedc;
+}
+
+.infoCol {
+  display: flex;
+  flex-direction: column;
+  flex-grow: 1;
+  font-size: 13px;
+  gap: 2px;
+}
+
+.party {
+  font-weight: 700;
+}
+.priceCol {
+  justify-content: center;
+  font-weight: 600;
+  font-size: 14px;
+  align-self: center;
+}
+
+@media screen and (max-width: 600px) {
+  .wrap {
+    display: flex;
+  }
+}

@@ -11,6 +11,7 @@ import { parseAPITransaction } from "../utils";
 import NoMailHere from "../components/NoMailHere";
 import { useNavigate } from "react-router-dom";
 import Fuse from "fuse.js";
+import TransactionFlex from "../components/TransactionFlex";
 
 function TransactionsPage() {
   const [user] = useContext(UserContext);
@@ -114,6 +115,7 @@ function TransactionsPage() {
             setEphemeralMails,
           }}
         />
+        <TransactionFlex {...{ transactions }} />
       </div>
     </div>
   );

@@ -1,7 +1,7 @@
 .tgrid {
   --outer-radius: 15px;
   --regular-color: #7abacf;
-  --regular-font: 600 14px "Open Sans";
+  --regular-font: normal 600 14px "Open Sans";
 
   border-radius: var(--outer-radius);
   color: var(--regular-color);
@@ -59,4 +59,10 @@
   border: none;
   flex-grow: 1;
   background: transparent;
+}
+
+@media screen and (max-width: 600px) {
+  .tgrid {
+    display: none;
+  }
 }

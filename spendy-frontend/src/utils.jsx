@@ -336,13 +336,14 @@ export const toNiceDateString = (then) => {
 
   const date = then.getDate();
   const month = then.toLocaleString("default", { month: "short" });
-  const year = then.getFullYear() % 100;
-  return (
-    <>
-      {date}
-      <span className="nth">{nth(date)}</span>&nbsp;{month}, {year}
-    </>
-  );
+  const year = then.getFullYear();
+
+  const day = then.toLocaleString("en", { weekday: "short" });
+
+  if (now.getFullYear() === then.getFullYear())
+    return `${day}, ${date}${nth(date)} ${month}`;
+
+  return `${date}${nth(date)} ${month}, ${year}`;
 };
 
 export const parseAPITransaction = async (apiTransaction, keypair) => {
@@ -360,4 +361,19 @@ export const parseAPITransaction = async (apiTransaction, keypair) => {
     transaction.remarks = transaction.labels.join(" ");
 
   return transaction;
+};
+
+export const toDateHash = (date) => {
+  const dt = date.getDate().toString().padStart(2, "0");
+  const month = date.getMonth().toString().padStart(2, "0");
+  const year = date.getFullYear();
+  return `${year}${month}${dt}`;
+};
+
+export const fromDateHash = (dateHash) => {
+  return new Date(
+    dateHash.substring(0, 4),
+    dateHash.substring(4, 6),
+    dateHash.substring(6, 8)
+  );
 };
