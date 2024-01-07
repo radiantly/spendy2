@@ -15,7 +15,7 @@
   display: flex;
   padding: 10px 20px;
 
-  border-radius: 15px;
+  border-radius: var(--main-border-radius);
   background: rgba(255, 255, 255, 0.75);
 
   color: #9fcedc;

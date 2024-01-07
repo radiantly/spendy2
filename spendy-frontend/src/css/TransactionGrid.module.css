@@ -1,9 +1,8 @@
 .tgrid {
-  --outer-radius: 15px;
   --regular-color: #7abacf;
   --regular-font: normal 600 14px "Open Sans";
 
-  border-radius: var(--outer-radius);
+  border-radius: var(--main-border-radius);
   color: var(--regular-color);
   font: var(--regular-font);
 

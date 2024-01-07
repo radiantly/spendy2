@@ -1,4 +1,6 @@
 .bg-container {
+  --main-border-radius: 15px;
+
   flex-grow: 1;
   align-self: stretch;
   background: linear-gradient(180deg, #fff -1.42%, rgba(255, 255, 255, 0) 100%),
@@ -17,6 +19,8 @@
 
 @media screen and (max-width: 600px) {
   .bg-container {
+    --main-border-radius: 10px;
+
     background: none;
   }
   .bg-container::before {

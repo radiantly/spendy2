@@ -31,11 +31,11 @@
 }
 
 .row.header > .date {
-  border-top-left-radius: var(--outer-radius);
+  border-top-left-radius: var(--main-border-radius);
 }
 
 .row.header > .more-actions {
-  border-top-right-radius: var(--outer-radius);
+  border-top-right-radius: var(--main-border-radius);
 }
 
 .row.blurred > *:not(.more-actions) {
