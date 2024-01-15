@@ -21,19 +21,7 @@ import { Fragment, useState } from "react";
 import TransactionRow from "./TransactionRow";
 import GridHeader from "./GridHeader";
 import EphemeralMails from "./EphemeralMails";
-
-const sorts = {
-  dateAsc: (a, b) => a.date - b.date,
-  dateDesc: (a, b) => b.date - a.date,
-  partyAsc: (a, b) => a.party.localeCompare(b.party),
-  partyDesc: (a, b) => b.party.localeCompare(a.party),
-  typeAsc: (a, b) => a.type.localeCompare(b.type),
-  typeDesc: (a, b) => b.type.localeCompare(a.type),
-  amountAsc: (a, b) => a.amount - b.amount,
-  amountDesc: (a, b) => b.amount - a.amount,
-  remarksAsc: (a, b) => a.remarks.localeCompare(b.remarks),
-  remarksDesc: (a, b) => b.remarks.localeCompare(a.remarks),
-};
+import { tsorts } from "../utils";
 
 const TransactionGrid = ({
   transactions,
@@ -47,7 +35,7 @@ const TransactionGrid = ({
   const [activeMenuId, setActiveMenuId] = useState(null);
   const [sortOrder, setSortOrder] = useState("dateDesc");
   const viewList = filterList.map((id) => transactions[id]);
-  if (sortOrder) viewList.sort(sorts[sortOrder]);
+  if (sortOrder) viewList.sort(tsorts[sortOrder]);
 
   return (
     <div

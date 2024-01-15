@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 
-const Search = ({ searchInput, setSearchInput }) => {
+const Search = ({ searchInput, setSearchInput, ...props }) => {
   const searchElem = useRef(null);
 
   useEffect(() => {
@@ -14,6 +14,7 @@ const Search = ({ searchInput, setSearchInput }) => {
 
   return (
     <input
+      {...{ ...props }}
       ref={searchElem}
       value={searchInput}
       onInput={(e) => setSearchInput(e.target.value)}

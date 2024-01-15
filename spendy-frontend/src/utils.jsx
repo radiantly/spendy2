@@ -323,7 +323,7 @@ const nth = (num) => ["th", "st", "nd", "rd"][num % 10 <= 3 ? num % 10 : 0];
 const getTotalDays = (date) =>
   date.getDate() - 1 + date.getMonth() * 31 + date.getFullYear() * 372;
 
-export const toNiceDateString = (then) => {
+export const toNiceDateString = (then, showTime = true) => {
   const now = new Date();
 
   const timeStr = then.toLocaleTimeString([], {
@@ -331,7 +331,8 @@ export const toNiceDateString = (then) => {
     minute: "2-digit",
   });
 
-  if (getTotalDays(now) === getTotalDays(then)) return timeStr;
+  if (getTotalDays(now) === getTotalDays(then))
+    return showTime ? timeStr : "Today";
   if (getTotalDays(now) === getTotalDays(then) + 1) return "Yesterday";
 
   const date = then.getDate();
@@ -351,7 +352,7 @@ export const parseAPITransaction = async (apiTransaction, keypair) => {
 
   const transaction = {
     id,
-    date: new Date(date),
+    date: new Date(`${date}Z`), // The date string from the server is in UTC
     remarks: "",
     hidden: false,
     ...JSON.parse(await keypair.decrypt(encrypted)),
@@ -376,4 +377,18 @@ export const fromDateHash = (dateHash) => {
     dateHash.substring(4, 6),
     dateHash.substring(6, 8)
   );
+};
+
+// Transaction sort comparators
+export const tsorts = {
+  dateAsc: (a, b) => a.date - b.date,
+  dateDesc: (a, b) => b.date - a.date,
+  partyAsc: (a, b) => a.party.localeCompare(b.party),
+  partyDesc: (a, b) => b.party.localeCompare(a.party),
+  typeAsc: (a, b) => a.type.localeCompare(b.type),
+  typeDesc: (a, b) => b.type.localeCompare(a.type),
+  amountAsc: (a, b) => a.amount - b.amount,
+  amountDesc: (a, b) => b.amount - a.amount,
+  remarksAsc: (a, b) => a.remarks.localeCompare(b.remarks),
+  remarksDesc: (a, b) => b.remarks.localeCompare(a.remarks),
 };

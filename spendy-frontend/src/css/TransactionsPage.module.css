@@ -39,4 +39,7 @@
       linear-gradient(106deg, #77a1d3 0.59%, #79cbca 50.3%, #e684ae 100%);
     z-index: -1;
   }
+  .container {
+    gap: 20px;
+  }
 }

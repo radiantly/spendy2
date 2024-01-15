@@ -2,23 +2,61 @@
   display: none;
   flex-direction: column;
   gap: 10px;
+
+  --font-thicc: normal 700 13px "Open Sans", sans-serif;
+}
+
+.mobile-search {
+  display: flex;
+  border-radius: var(--main-border-radius);
+  background: rgba(255, 255, 255, 0.75);
+  color: #9fcedc;
+  margin-bottom: 10px;
+}
+
+.mobile-search input {
+  font: var(--font-thicc);
+  color: #9fcedc;
+  background: transparent;
+  border: none;
+  flex-grow: 1;
+  outline: none;
+  height: 40px;
+  padding: 0 20px;
+  border-radius: var(--main-border-radius);
+}
+
+.mobile-search input::placeholder {
+  color: #9fcedc;
+  opacity: 0.5;
+}
+
+.mobile-search input:hover,
+.mobile-search input:focus {
+  background: rgba(255, 255, 255, 0.5);
+}
+
+.trans-group {
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--main-border-radius);
+  background: rgba(255, 255, 255, 0.75);
+  color: #9fcedc;
 }
 
 .date-header {
-  color: #fff;
-  font-size: 13px;
-  font-weight: 600;
+  font: var(--font-thicc);
   padding-left: 20px;
+  height: 40px;
+  background: rgba(255, 255, 255, 0.5);
+  border-radius: var(--main-border-radius) var(--main-border-radius) 0 0;
+  display: flex;
+  align-items: center;
 }
 
 .tile {
   display: flex;
   padding: 10px 20px;
-
-  border-radius: var(--main-border-radius);
-  background: rgba(255, 255, 255, 0.75);
-
-  color: #9fcedc;
 }
 
 .infoCol {
@@ -29,8 +67,14 @@
   gap: 2px;
 }
 
+.infoCol .what-time {
+  display: inline-flex;
+  min-width: 8ch;
+  opacity: 0.75;
+}
+
 .party {
-  font-weight: 700;
+  font: var(--font-thicc);
 }
 .priceCol {
   justify-content: center;

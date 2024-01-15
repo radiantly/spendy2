@@ -115,7 +115,9 @@ function TransactionsPage() {
             setEphemeralMails,
           }}
         />
-        <TransactionFlex {...{ transactions }} />
+        <TransactionFlex
+          {...{ transactions, filterList, searchInput, setSearchInput }}
+        />
       </div>
     </div>
   );
