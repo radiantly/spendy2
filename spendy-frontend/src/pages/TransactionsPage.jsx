@@ -1,4 +1,4 @@
-import { useContext, useEffect, useState, useMemo } from "react";
+import { useContext, useEffect, useState, useMemo, useRef } from "react";
 
 import { bgContainer, container } from "../css/TransactionsPage.module.css";
 import Navbar from "../components/Navbar";
@@ -19,7 +19,9 @@ function TransactionsPage() {
   const [loading, setLoading] = useState(true);
   const [ephemeralMails, setEphemeralMails] = useState([]);
   const [viewport, setViewport] = useState(null);
+  const [filterList, setFilterList] = useState(null);
   const navigate = useNavigate();
+  const searchElemRef = useRef(null);
 
   useEffect(() => {
     (async () => {
@@ -66,41 +68,35 @@ function TransactionsPage() {
     });
   });
 
-  console.log("Loader data:", transactions);
-
-  const filterList = useMemo(() => {
-    if (!searchInput) return Array.from(Object.keys(transactions));
-
-    const matches = [];
-    try {
-      const re = new RegExp(searchInput, "im");
-
-      for (const [id, transaction] of Object.entries(transactions))
-        if (
-          re.test(transaction.party) ||
-          re.test(transaction.remarks) ||
-          re.test(transaction.type) ||
-          re.test(transaction.amount) ||
-          re.test(transaction.currency)
-        )
-          matches.push(id);
-    } catch {
-      for (const [id, transaction] of Object.entries(transactions))
-        if (
-          transaction.party.includes(searchInput) ||
-          transaction.remarks.includes(searchInput) ||
-          transaction.type.includes(searchInput) ||
-          transaction.amount.toString().includes(searchInput) ||
-          transaction.currency.includes(searchInput)
-        )
-          matches.push(id);
-    }
-    return matches;
-  }, [transactions, searchInput]);
+  /// Search
+  let worker = useMemo(() => {
+    return new Worker(new URL("../worker.js", import.meta.url), {
+      type: "module",
+    });
+  }, []);
+  useEffect(() => {
+    const handler = (e) => {
+      // TODO: Use debounce instead of setTimeout
+      // TODO: Also debounce sending the search input to the worker
+      setTimeout(() => {
+        if (e.data.searchInput === searchElemRef.current?.value)
+          setFilterList(e.data.filterList);
+      }, 66);
+    };
+    worker.addEventListener("message", handler);
+    return () => worker.removeEventListener("message", handler);
+  }, [worker]);
+  useEffect(() => {
+    worker.postMessage({ transactions });
+  }, [worker, transactions]);
+  useEffect(() => {
+    if (searchInput) worker.postMessage({ searchInput });
+    else setFilterList(null);
+  }, [worker, searchInput]);
 
   const totalSpending = useMemo(() => {
     const now = new Date();
-    return filterList
+    return (filterList || Object.keys(transactions))
       .filter(
         (id) =>
           !transactions[id].hidden &&
@@ -139,6 +135,7 @@ function TransactionsPage() {
               updateTransactions,
               filterList,
               searchInput,
+              searchElemRef,
               setSearchInput,
               ephemeralMails,
               setEphemeralMails,
@@ -147,7 +144,13 @@ function TransactionsPage() {
         )}
         {viewport === "mobile" && (
           <TransactionFlex
-            {...{ transactions, filterList, searchInput, setSearchInput }}
+            {...{
+              transactions,
+              filterList,
+              searchInput,
+              searchElemRef,
+              setSearchInput,
+            }}
           />
         )}
       </div>

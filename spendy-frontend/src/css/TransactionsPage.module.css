@@ -3,10 +3,25 @@
 
   flex-grow: 1;
   align-self: stretch;
-  background: linear-gradient(180deg, #fff -1.42%, rgba(255, 255, 255, 0) 100%),
-    linear-gradient(106deg, #77a1d3 0.59%, #79cbca 50.3%, #e684ae 100%);
   display: flex;
   justify-content: center;
+}
+
+.bg-container::before {
+  content: "";
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  pointer-events: none;
+  background: linear-gradient(
+      180deg,
+      #fff -1.42%,
+      rgba(255, 255, 255, 0.3) 100%
+    ),
+    linear-gradient(106deg, #77a1d3 0.59%, #79cbca 50.3%, #e684ae 100%);
+  z-index: -1;
 }
 
 .container {
@@ -20,24 +35,6 @@
 @media screen and (max-width: 600px) {
   .bg-container {
     --main-border-radius: 10px;
-
-    background: none;
-  }
-  .bg-container::before {
-    content: "";
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100vw;
-    height: 100vh;
-    pointer-events: none;
-    background: linear-gradient(
-        180deg,
-        #fff -1.42%,
-        rgba(255, 255, 255, 0.3) 100%
-      ),
-      linear-gradient(106deg, #77a1d3 0.59%, #79cbca 50.3%, #e684ae 100%);
-    z-index: -1;
   }
   .container {
     gap: 20px;

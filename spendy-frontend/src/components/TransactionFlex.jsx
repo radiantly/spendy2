@@ -18,11 +18,16 @@ const TransactionFlex = ({
   transactions,
   filterList,
   searchInput,
+  searchElemRef,
   setSearchInput,
 }) => {
   const viewList = useMemo(
-    () => filterList.map((id) => transactions[id]).sort(tsorts.dateDesc),
-    [filterList]
+    () =>
+      (filterList
+        ? filterList.map((id) => transactions[id])
+        : Object.values(transactions)
+      ).sort(tsorts.dateDesc),
+    [filterList, transactions]
   );
 
   const groupedTransactions = useMemo(() => {
@@ -39,7 +44,10 @@ const TransactionFlex = ({
   return (
     <div className={wrap}>
       <div className={mobileSearch}>
-        <Search placeholder="Search..." {...{ searchInput, setSearchInput }} />
+        <Search
+          placeholder="Search..."
+          {...{ searchInput, setSearchInput, searchElemRef }}
+        />
       </div>
       {groupedTransactions.map(([dateH, trans]) => (
         <div className={transGroup} key={dateH}>

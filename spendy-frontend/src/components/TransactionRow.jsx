@@ -9,9 +9,9 @@ import {
   blurred,
   menuActive,
 } from "../css/TransactionRow.module.css";
-import { useCallback, useContext, useEffect } from "react";
+import { useCallback, useContext, useEffect, useMemo } from "react";
 import { getCurrencyPrefix } from "../currency";
-import { Keypair, toNiceDateString } from "../utils";
+import { toNiceDateString } from "../utils";
 import Menu from "./Menu";
 import { AnimatePresence } from "framer-motion";
 import { FaEllipsisH } from "react-icons/fa";
@@ -64,10 +64,20 @@ const TransactionRow = ({
     });
   }, [transaction]);
 
+  const dateLocaleString = useMemo(
+    () => transaction.date.toLocaleString(),
+    [transaction.date]
+  );
+
+  const dateNiceString = useMemo(
+    () => toNiceDateString(transaction.date),
+    [transaction.date]
+  );
+
   return (
     <div className={[row, transaction.hidden ? blurred : ""].join(" ")}>
-      <div className={date} title={transaction.date.toLocaleString()}>
-        {toNiceDateString(transaction.date)}
+      <div className={date} title={dateLocaleString}>
+        {dateNiceString}
       </div>
       <div className={payee}>{transaction.party}</div>
       <div className={mode}>{transaction.type}</div>

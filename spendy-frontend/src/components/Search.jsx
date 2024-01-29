@@ -1,12 +1,11 @@
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
 
-const Search = ({ searchInput, setSearchInput, ...props }) => {
-  const searchElem = useRef(null);
-
+const Search = ({ searchInput, setSearchInput, searchElemRef, ...props }) => {
   useEffect(() => {
     const handler = (event) => {
       if (event.ctrlKey) return;
-      if (document.activeElement === document.body) searchElem.current.focus();
+      if (document.activeElement === document.body)
+        searchElemRef.current.focus();
     };
     document.body.addEventListener("keydown", handler);
     return () => document.body.removeEventListener("keydown", handler);
@@ -15,7 +14,7 @@ const Search = ({ searchInput, setSearchInput, ...props }) => {
   return (
     <input
       {...{ ...props }}
-      ref={searchElem}
+      ref={searchElemRef}
       value={searchInput}
       onInput={(e) => setSearchInput(e.target.value)}
     />

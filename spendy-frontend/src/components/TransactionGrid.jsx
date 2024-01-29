@@ -28,13 +28,16 @@ const TransactionGrid = ({
   updateTransactions,
   filterList,
   searchInput,
+  searchElemRef,
   setSearchInput,
   ephemeralMails,
   setEphemeralMails,
 }) => {
   const [activeMenuId, setActiveMenuId] = useState(null);
   const [sortOrder, setSortOrder] = useState("dateDesc");
-  const viewList = filterList.map((id) => transactions[id]);
+  const viewList = filterList
+    ? filterList.map((id) => transactions[id])
+    : Object.values(transactions);
   if (sortOrder) viewList.sort(tsorts[sortOrder]);
 
   return (
@@ -42,13 +45,13 @@ const TransactionGrid = ({
       className={[tgrid, searchInput ? "search-active" : ""].join(" ")}
       style={{
         gridTemplateRows: `repeat(${
-          1 + ephemeralMails.length + filterList.length
+          1 + ephemeralMails.length + viewList.length
         }, 40px)`,
       }}
     >
       <label className={searchBar}>
         <FaSearch />
-        <Search searchInput={searchInput} setSearchInput={setSearchInput} />
+        <Search {...{ searchInput, setSearchInput, searchElemRef }} />
       </label>
 
       <div className={[header, row].join(" ")}>
