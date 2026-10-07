@@ -25,7 +25,7 @@ function App() {
           type="button"
           className="counter"
           onClick={() => {
-            fetch("/api/")
+            fetch("/api")
               .then((res) => res.json() as Promise<{ name: string }>)
               .then((data) => setName(data.name));
           }}
