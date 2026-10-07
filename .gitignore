@@ -26,3 +26,6 @@ dist-ssr
 # CF Worker
 .wrangler
 .dev.vars*
+
+# Configuration
+.env

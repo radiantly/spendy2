@@ -6,4 +6,7 @@
   "assets": {
     "not_found_handling": "single-page-application",
   },
+  "secrets": {
+    "required": ["OPAQUE_SERVER_SETUP"],
+  },
 }
