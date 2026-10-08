@@ -3,77 +3,88 @@ import * as opaque from "@serenity-kit/opaque";
 
 class RegistrationRecordStore {
   private readonly sql;
-  private registrationRecord?: string;
   constructor(sql: SqlStorage) {
     this.sql = sql;
   }
 
-  set(registrationRecord: string) {
-    if (this.registrationRecord === undefined) {
-      const { record } = this.sql
-        .exec<{ record: string }>(
-          `
-          CREATE TABLE IF NOT EXISTS registration_record (
-            id      INTEGER NOT NULL PRIMARY KEY CHECK (id = 0),
-            record  TEXT NOT NULL
-          );
-
-          INSERT INTO registration_record (id, record) VALUES (0, ?)
-          ON CONFLICT (id) DO UPDATE
-            SET id = id
-          RETURNING record`,
-          registrationRecord,
+  get tableExists() {
+    return (
+      this.sql
+        .exec(
+          "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'registration_record';",
         )
-        .one();
+        .toArray().length > 0
+    );
+  }
 
-      this.registrationRecord = record;
-    }
+  set(registrationRecord: string) {
+    const { record } = this.sql
+      .exec<{ record: string }>(
+        `
+        CREATE TABLE IF NOT EXISTS registration_record (
+          id      INTEGER NOT NULL PRIMARY KEY CHECK (id = 0),
+          record  TEXT NOT NULL
+        );
 
-    return this.registrationRecord === registrationRecord;
+        INSERT INTO registration_record (id, record) VALUES (0, ?)
+        ON CONFLICT (id) DO UPDATE
+          SET id = id
+        RETURNING record`,
+        registrationRecord,
+      )
+      .one();
+
+    return record === registrationRecord;
   }
 
   get() {
-    if (this.registrationRecord === undefined) {
-      const tableExists =
-        this.sql
-          .exec(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'registration_record';",
-          )
-          .toArray().length > 0;
+    if (!this.tableExists) return;
 
-      if (tableExists) {
-        const { record } = this.sql
-          .exec<{ record: string }>("SELECT record FROM registration_record")
-          .one();
+    const { record } = this.sql
+      .exec<{ record: string }>("SELECT record FROM registration_record")
+      .one();
 
-        this.registrationRecord = record;
-      }
-    }
-
-    return this.registrationRecord;
+    return record;
   }
 }
 
 class SessionStore {
   private readonly sql;
   private readonly maxSessionCount;
-  private activeSessionsCache: string[] = [];
   constructor(sql: SqlStorage, maxSessionCount: number) {
     this.sql = sql;
     this.maxSessionCount = maxSessionCount;
+  }
 
-    // initialize the session table
-    this.sql.exec(`
-      CREATE TABLE IF NOT EXISTS sessions (
-        id              TEXT NOT NULL PRIMARY KEY,
-        created_at      INTEGER NOT NULL
-      );`);
+  get tableExists() {
+    return (
+      this.sql
+        .exec(
+          "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sessions';",
+        )
+        .toArray().length > 0
+    );
+  }
+
+  has(sessionId: string) {
+    if (!this.tableExists) return false;
+
+    return (
+      this.sql.exec("SELECT 1 FROM sessions WHERE id = ?", sessionId).toArray()
+        .length > 0
+    );
   }
 
   create() {
     const sessionId = crypto.randomUUID();
     this.sql.exec(
-      `INSERT INTO sessions (id, created_at) VALUES (?, ?);`,
+      `
+      CREATE TABLE IF NOT EXISTS sessions (
+        id              TEXT NOT NULL PRIMARY KEY,
+        created_at      INTEGER NOT NULL
+      );
+      
+      INSERT INTO sessions (id, created_at) VALUES (?, ?);`,
       sessionId,
       Date.now(),
     );
@@ -86,8 +97,14 @@ class SessionStore {
       );`,
       this.maxSessionCount,
     );
-    this.activeSessionsCache.push(sessionId);
     return sessionId;
+  }
+
+  delete(sessionId: string) {
+    if (!this.tableExists) return false;
+
+    let cursor = this.sql.exec(`DELETE FROM sessions WHERE id = ?;`, sessionId);
+    return cursor.rowsWritten > 0;
   }
 }
 
@@ -193,7 +210,7 @@ export class UserStore extends DurableObject<Env> {
     await opaque.ready;
 
     if (this.loginState === undefined)
-      return { success: false, code: "TIMED_OUT" };
+      return { success: false, code: "INVALID_LOGIN_OR_TIMED_OUT" };
 
     const serverLoginState = this.loginState;
     this.loginState = undefined;
@@ -210,6 +227,12 @@ export class UserStore extends DurableObject<Env> {
     const sessionId = this.sessions.create();
     return { success: true, sessionId };
   }
+
+  async logout(sessionId: string): Promise<LogoutResponse> {
+    if (!this.sessions.delete(sessionId))
+      return { success: false, code: "UNAUTHORIZED" };
+    return { success: true };
+  }
 }
 
 export type RegisterNewUserResponse =
@@ -222,4 +245,8 @@ export type StartLoginResponse =
 
 export type FinishLoginResponse =
   | { success: true; sessionId: string }
-  | { success: false; code: "TIMED_OUT" | "INVALID_LOGIN" };
+  | { success: false; code: "INVALID_LOGIN_OR_TIMED_OUT" | "INVALID_LOGIN" };
+
+export type LogoutResponse =
+  | { success: true }
+  | { success: false; code: "UNAUTHORIZED" };

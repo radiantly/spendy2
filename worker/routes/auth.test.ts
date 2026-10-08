@@ -379,7 +379,9 @@ describe("POST /api/auth/login", () => {
         finishLoginRequest,
       });
       expect(response.status).toBe(401);
-      expect(await response.json()).toEqual({ error: "TIMED_OUT" });
+      expect(await response.json()).toEqual({
+        error: "INVALID_LOGIN_OR_TIMED_OUT",
+      });
     });
 
     it("rejects a finish for an unknown user", async () => {
@@ -433,5 +435,106 @@ describe("POST /api/auth/login", () => {
       expect(stored).not.toContain(sessionIds[0]);
       expect(stored).toEqual(expect.arrayContaining(sessionIds.slice(1)));
     });
+  });
+});
+
+function postLogout(authorization?: string) {
+  return exports.default.fetch("http://localhost/api/auth/logout", {
+    method: "POST",
+    headers: authorization === undefined ? {} : { Authorization: authorization },
+  });
+}
+
+/** Runs a full login and returns the token. */
+async function loginToken(username: string) {
+  const response = await login(username);
+  expect(response.status).toBe(200);
+  const { token } = await response.json<{ token: string }>();
+  return token;
+}
+
+describe("POST /api/auth/logout", () => {
+  it("logs out the current session", async () => {
+    await registerUser("alice");
+    const token = await loginToken("alice");
+
+    const response = await postLogout(`Bearer ${token}`);
+    expect(response.status).toBe(204);
+    expect(await getSessionIds("alice")).toEqual([]);
+
+    const again = await postLogout(`Bearer ${token}`);
+    expect(again.status).toBe(401);
+    expect(await again.json()).toEqual({ error: "UNAUTHORIZED" });
+  });
+
+  it("only removes the current session", async () => {
+    await registerUser("alice");
+    const first = await loginToken("alice");
+    const second = await loginToken("alice");
+
+    expect((await postLogout(`Bearer ${first}`)).status).toBe(204);
+    expect(await getSessionIds("alice")).toEqual([
+      decodeToken(second).sessionId,
+    ]);
+    expect((await postLogout(`Bearer ${second}`)).status).toBe(204);
+  });
+
+  it("allows logging in again after logging out", async () => {
+    await registerUser("alice");
+    const token = await loginToken("alice");
+    await postLogout(`Bearer ${token}`);
+
+    const newToken = await loginToken("alice");
+    expect(newToken).not.toBe(token);
+    expect((await postLogout(`Bearer ${newToken}`)).status).toBe(204);
+  });
+
+  it("rejects a request without an Authorization header", async () => {
+    const response = await postLogout();
+    expect(response.status).toBe(401);
+    expect(response.headers.get("WWW-Authenticate")).toMatch(/^Bearer/);
+    expect(await response.json()).toEqual({ error: "UNAUTHORIZED" });
+  });
+
+  it.each([
+    ["a non-Bearer scheme", `Basic ${btoa("alice:password")}`],
+    ["an empty bearer token", "Bearer "],
+    ["a bearer token with invalid characters", "Bearer not a token"],
+  ])("rejects %s", async (_name, authorization) => {
+    const response = await postLogout(authorization);
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "INVALID_REQUEST" });
+  });
+
+  it.each([
+    ["not base64", "a"],
+    ["without a separator", btoa("alice")],
+    ["with an uppercase username", btoa(`Alice:${crypto.randomUUID()}`)],
+    ["with a short username", btoa(`ab:${crypto.randomUUID()}`)],
+    ["with a session id that is not a uuid", btoa("alice:not-a-uuid")],
+  ])("rejects a token %s", async (_name, token) => {
+    const response = await postLogout(`Bearer ${token}`);
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({ error: "UNAUTHORIZED" });
+  });
+
+  it("rejects an unknown session of a registered user", async () => {
+    await registerUser("alice");
+    await loginToken("alice");
+
+    const token = btoa(`alice:${crypto.randomUUID()}`);
+    const response = await postLogout(`Bearer ${token}`);
+    expect(response.status).toBe(401);
+    expect(await getSessionIds("alice")).toHaveLength(1);
+  });
+
+  it("rejects a session of another user", async () => {
+    await registerUser("alice");
+    await registerUser("bob");
+    const { sessionId } = decodeToken(await loginToken("alice"));
+
+    const response = await postLogout(`Bearer ${btoa(`bob:${sessionId}`)}`);
+    expect(response.status).toBe(401);
+    expect(await getSessionIds("alice")).toEqual([sessionId]);
   });
 });

@@ -164,4 +164,48 @@ describe("UserStore", () => {
       expect(hasUserTables(state)).toBe(false);
     });
   });
+
+  describe("logout", () => {
+    it("does not write storage when an unknown user logs out", async () => {
+      const stub = env.USER.getByName("nobody");
+
+      await runInDurableObject(stub, async (instance, state) => {
+        expect(await instance.logout(crypto.randomUUID())).toEqual({
+          success: false,
+          code: "UNAUTHORIZED",
+        });
+        expect(hasUserTables(state)).toBe(false);
+      });
+    });
+
+    it("does not accept a session evicted by the session limit", async () => {
+      const stub = env.USER.getByName("alice");
+
+      await runInDurableObject(stub, async (instance) => {
+        const sessionIds: string[] = [];
+        for (let i = 0; i <= env.MAX_SESSIONS_PER_USER; i++)
+          sessionIds.push(instance["sessions"].create());
+
+        expect(await instance.logout(sessionIds[0])).toEqual({
+          success: false,
+          code: "UNAUTHORIZED",
+        });
+        expect(await instance.logout(sessionIds.at(-1)!)).toEqual({
+          success: true,
+        });
+      });
+    });
+
+    it("accepts sessions created by an earlier instance", async () => {
+      const stub = env.USER.getByName("alice");
+
+      await runInDurableObject(stub, async (instance) => {
+        const sessionId = instance["sessions"].create();
+        // simulates a fresh instance after the durable object was evicted
+        instance["_sessions"] = undefined;
+
+        expect(await instance.logout(sessionId)).toEqual({ success: true });
+      });
+    });
+  });
 });

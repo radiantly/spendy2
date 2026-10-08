@@ -1,7 +1,8 @@
 import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
-import { usernameSchema } from "../schemas.ts";
+import { tokenSchema, usernameSchema } from "../schemas.ts";
+import { requireAuth } from "../middleware/auth.ts";
 
 const auth = new Hono<{ Bindings: Env }>();
 
@@ -38,7 +39,20 @@ auth.post("/login", zValidator("json", LoginBody), async (c) => {
   const result = await userStore.finishLogin(body.finishLoginRequest);
   if (!result.success) return c.json({ error: result.code }, 401);
 
-  return c.json({ token: btoa(`${body.username}:${result.sessionId}`) });
+  return c.json({
+    token: tokenSchema.encode({
+      username: body.username,
+      sessionId: result.sessionId,
+    }),
+  });
+});
+
+auth.post("/logout", requireAuth, async (c) => {
+  const userStore = c.env.USER.getByName(c.var.username);
+  const result = await userStore.logout(c.var.sessionId);
+  if (!result.success) return c.json({ error: result.code }, 401);
+
+  return c.body(null, 204);
 });
 
 export default auth;
