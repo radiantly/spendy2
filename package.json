@@ -12,6 +12,7 @@
     "create-dev-env": "node scripts/create-dev-env"
   },
   "dependencies": {
+    "@hono/zod-validator": "^0.9.1",
     "@serenity-kit/opaque": "file:../opaque/build/ristretto",
     "hono": "^4.13.13",
     "react": "^19.2.8",

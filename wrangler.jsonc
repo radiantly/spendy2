@@ -6,6 +6,12 @@
   "assets": {
     "not_found_handling": "single-page-application",
   },
+  "durable_objects": {
+    "bindings": [{ "name": "USER", "class_name": "UserStore" }],
+  },
+  "exports": {
+    "UserStore": { "type": "durable-object", "storage": "sqlite" },
+  },
   "secrets": {
     "required": ["OPAQUE_SERVER_SETUP"],
   },
