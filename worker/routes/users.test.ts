@@ -114,9 +114,20 @@ describe("POST /api/users", () => {
 
       const response = await postUsers({
         username: "alice",
-        registrationRecord,
+        registrationRecord: await createRegistrationRecord("alice"),
       });
       expect(response.status).toBe(409);
+    });
+
+    it("accepts the same registration record twice", async () => {
+      const registrationRecord = await createRegistrationRecord("alice");
+      await postUsers({ username: "alice", registrationRecord });
+
+      const response = await postUsers({
+        username: "alice",
+        registrationRecord,
+      });
+      expect(response.status).toBe(201);
     });
   });
 });
