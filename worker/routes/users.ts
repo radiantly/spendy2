@@ -3,7 +3,6 @@ import { zValidator } from "@hono/zod-validator";
 import * as opaque from "@serenity-kit/opaque";
 import { z } from "zod";
 import { usernameSchema } from "../schemas.ts";
-import { UserStoreError } from "../durable-objects/UserStore.ts";
 
 const users = new Hono<{ Bindings: Env }>();
 
@@ -48,18 +47,12 @@ users.post("/", zValidator("json", UserRegistrationBody), async (c) => {
   const { username, registrationRecord } = body;
 
   const userStore = c.env.USER.getByName(username);
-  try {
-    await userStore.registerNewUser(registrationRecord);
-  } catch (error) {
-    if (
-      error instanceof UserStoreError &&
-      error.message === "USER_ALREADY_EXISTS"
-    )
-      return c.json({ error: error.message }, 409);
-
-    console.error("Unknown server error during user creation", error);
-    return c.json({ error: "Unknown server error" }, 500);
-  }
+  const result = await userStore.registerNewUser(registrationRecord);
+  if (!result.success)
+    return c.json(
+      { error: result.code },
+      result.code === "USER_ALREADY_EXISTS" ? 409 : 500,
+    );
 
   return c.json({ success: `User ${username} was successfully created` }, 201);
 });

@@ -1,5 +1,4 @@
 import { DurableObject } from "cloudflare:workers";
-
 export class UserStore extends DurableObject {
   sql: SqlStorage;
   private initialized = false;
@@ -35,7 +34,9 @@ export class UserStore extends DurableObject {
     if (lastLogin.length === 0) await this.deinit();
   }
 
-  async registerNewUser(registrationRecord: string) {
+  async registerNewUser(
+    registrationRecord: string,
+  ): Promise<RegisterNewUserResponse> {
     if (!this.initialized) this.init();
 
     const cursor = this.sql.exec(
@@ -47,18 +48,14 @@ export class UserStore extends DurableObject {
     );
 
     if (cursor.rowsWritten === 0)
-      throw new UserStoreError("USER_ALREADY_EXISTS");
+      return { success: false, code: "USER_ALREADY_EXISTS" };
 
     // delete user in 24 hours if they do not login
     await this.ctx.storage.setAlarm(Date.now() + 1000 * 60 * 60 * 24);
+    return { success: true };
   }
 }
 
-export type UserStoreErrorCode = "USER_ALREADY_EXISTS";
-
-export class UserStoreError extends Error {
-  declare message: UserStoreErrorCode;
-  constructor(message: UserStoreErrorCode) {
-    super(message);
-  }
-}
+export type RegisterNewUserResponse =
+  | { success: true }
+  | { success: false; code: "USER_ALREADY_EXISTS" };
