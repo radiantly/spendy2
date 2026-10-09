@@ -5,12 +5,15 @@ import {
   runInDurableObject,
 } from "cloudflare:test";
 import * as opaque from "@serenity-kit/opaque";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 const CLEANUP_DELAY_MS = env.USER_CLEANUP_DELAY_SECONDS * 1000;
 
 beforeAll(() => opaque.ready);
-afterEach(() => reset());
+afterEach(async () => {
+  vi.restoreAllMocks();
+  await reset();
+});
 
 function startLoginRequest() {
   return opaque.client.startLogin({ password: "password" }).startLoginRequest;
@@ -162,6 +165,32 @@ describe("UserStore", () => {
         instance.startLoginRatelimited(startLoginRequest()),
       ).rejects.toThrow("UserStore must be addressed by name");
       expect(hasUserTables(state)).toBe(false);
+    });
+  });
+
+  describe("database", () => {
+    it("does not write storage when an unknown user uploads or downloads", async () => {
+      const stub = env.USER.getByName("nobody");
+      const fetchSpy = vi.spyOn(globalThis, "fetch");
+
+      await runInDurableObject(stub, async (instance, state) => {
+        const unauthorized = { success: false, code: "UNAUTHORIZED" };
+        expect(
+          await instance.uploadDatabase(
+            crypto.randomUUID(),
+            { "if-none-match": "*" },
+            new ArrayBuffer(8),
+            "0".repeat(64),
+          ),
+        ).toEqual(unauthorized);
+        expect(await instance.downloadDatabase(crypto.randomUUID())).toEqual(
+          unauthorized,
+        );
+
+        expect(hasUserTables(state)).toBe(false);
+        expect([...state.storage.kv.list()]).toEqual([]);
+      });
+      expect(fetchSpy).not.toHaveBeenCalled();
     });
   });
 

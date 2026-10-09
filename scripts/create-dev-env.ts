@@ -3,7 +3,7 @@ import { cancel, intro, outro, password, text, group } from "@clack/prompts";
 import fs from "fs";
 import path from "path";
 
-function required(value) {
+function required(value?: string) {
   if (!value) return "Required";
 }
 
@@ -24,7 +24,7 @@ const dotenv = await group(
         message: "S3 endpoint?",
         placeholder: "https://s3.us-west-004.backblazeb2.com",
         validate: (value) => {
-          if (!URL.canParse(value)) return "Must be a URL";
+          if (!value || !URL.canParse(value)) return "Must be a URL";
         },
       }),
     S3_REGION: () =>

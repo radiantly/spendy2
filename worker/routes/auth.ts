@@ -1,8 +1,8 @@
 import { Hono } from "hono";
-import { zValidator } from "@hono/zod-validator";
+import { sValidator } from "@hono/standard-validator";
 import { z } from "zod";
 import { tokenSchema, usernameSchema } from "../schemas.ts";
-import { requireAuth } from "../middleware/auth.ts";
+import { requireAuth } from "../middleware/requireAuth.ts";
 
 const auth = new Hono<{ Bindings: Env }>();
 
@@ -18,7 +18,7 @@ const LoginFinishBody = z.strictObject({
 
 const LoginBody = z.union([LoginStartBody, LoginFinishBody]);
 
-auth.post("/login", zValidator("json", LoginBody), async (c) => {
+auth.post("/login", sValidator("json", LoginBody), async (c) => {
   const body = c.req.valid("json");
   const userStore = c.env.USER.getByName(body.username);
 

@@ -10,10 +10,10 @@
     "test": "vitest",
     "preview": "vite preview",
     "cf-typegen": "wrangler types",
-    "create-dev-env": "node scripts/create-dev-env"
+    "create-dev-env": "node scripts/create-dev-env.ts"
   },
   "dependencies": {
-    "@hono/zod-validator": "^0.9.1",
+    "@hono/standard-validator": "^0.4.0",
     "@serenity-kit/opaque": "file:../opaque/build/ristretto",
     "aws4fetch": "^1.0.20",
     "hono": "^4.13.13",

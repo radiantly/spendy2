@@ -1,5 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import * as opaque from "@serenity-kit/opaque";
+import { S3, S3Error } from "../s3.ts";
+import type { DatabasePutPrecondition } from "../schemas.ts";
 
 class RegistrationRecordStore {
   private readonly sql;
@@ -118,9 +120,25 @@ export class UserStore extends DurableObject<Env> {
   private loginOnlyAfter = 0;
   private loginAttempts = 0;
 
+  // for database uploads/downloads
+  private readonly s3: S3;
+  private databaseLock: Promise<unknown> = Promise.resolve();
+
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.sql = ctx.storage.sql;
+    this.s3 = new S3(env);
+  }
+
+  /**
+   * Runs fn after every previously started fn has settled. The durable object
+   * accepts other requests while awaiting object storage, so check-then-write
+   * sequences on the database must hold this lock.
+   */
+  private withDatabaseLock<T>(fn: () => Promise<T>): Promise<T> {
+    const result = this.databaseLock.then(fn);
+    this.databaseLock = result.catch(() => {});
+    return result;
   }
 
   private get registrationRecord() {
@@ -233,7 +251,81 @@ export class UserStore extends DurableObject<Env> {
       return { success: false, code: "UNAUTHORIZED" };
     return { success: true };
   }
+
+  private get databaseBlobName() {
+    return this.username + ".db.gz.enc";
+  }
+
+  async uploadDatabase(
+    sessionId: string,
+    precondition: DatabasePutPrecondition,
+    body: ArrayBuffer,
+    sha256: string,
+  ): Promise<UploadDatabaseResponse> {
+    if (!this.sessions.has(sessionId))
+      return { success: false, code: "UNAUTHORIZED" };
+
+    return this.withDatabaseLock(async () => {
+      const current = this.ctx.storage.kv.get<string>(DATABASE_SHA256_KEY);
+      const precondition_satisfied =
+        "if-none-match" in precondition
+          ? current === undefined
+          : current === precondition["if-match"];
+      if (!precondition_satisfied)
+        return { success: false, code: "PRECONDITION_FAILED" };
+
+      try {
+        await this.s3.put(this.databaseBlobName, body, sha256);
+      } catch (error) {
+        if (error instanceof S3Error)
+          return { success: false, code: "STORAGE_ERROR" };
+        throw error;
+      }
+
+      this.ctx.storage.kv.put(DATABASE_SHA256_KEY, sha256);
+      return { success: true, sha256 };
+    });
+  }
+
+  async downloadDatabase(sessionId: string): Promise<DownloadDatabaseResponse> {
+    if (!this.sessions.has(sessionId))
+      return { success: false, code: "UNAUTHORIZED" };
+
+    // the lock is only held until the response headers arrive, the body is
+    // streamed afterwards
+    return this.withDatabaseLock(async () => {
+      let blob;
+      try {
+        blob = await this.s3.get(this.databaseBlobName);
+      } catch (error) {
+        if (error instanceof S3Error)
+          return { success: false, code: "STORAGE_ERROR" };
+        throw error;
+      }
+
+      if (blob === undefined) {
+        this.ctx.storage.kv.delete(DATABASE_SHA256_KEY);
+        return { success: false, code: "NOT_FOUND" };
+      }
+      this.ctx.storage.kv.put(DATABASE_SHA256_KEY, blob.sha256);
+
+      return { success: true, body: blob.body, sha256: blob.sha256 };
+    });
+  }
 }
+
+const DATABASE_SHA256_KEY = "databaseSha256";
+
+export type UploadDatabaseResponse =
+  | { success: true; sha256: string }
+  | {
+      success: false;
+      code: "UNAUTHORIZED" | "PRECONDITION_FAILED" | "STORAGE_ERROR";
+    };
+
+export type DownloadDatabaseResponse =
+  | { success: true; body: ReadableStream<Uint8Array>; sha256: string }
+  | { success: false; code: "UNAUTHORIZED" | "NOT_FOUND" | "STORAGE_ERROR" };
 
 export type RegisterNewUserResponse =
   | { success: true }

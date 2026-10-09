@@ -1,10 +1,13 @@
 import { Hono } from "hono";
-import { zValidator } from "@hono/zod-validator";
+import { sValidator } from "@hono/standard-validator";
 import * as opaque from "@serenity-kit/opaque";
 import { z } from "zod";
-import { usernameSchema } from "../schemas.ts";
+import { usernameSchema } from "../../schemas.ts";
+import database from "./database.ts";
+import type { ContentfulStatusCode } from "hono/utils/http-status";
 
 const users = new Hono<{ Bindings: Env }>();
+users.route("/me/database", database);
 
 const UserRegistrationStartBody = z.strictObject({
   username: usernameSchema,
@@ -21,7 +24,7 @@ const UserRegistrationBody = z.union([
   UserRegistrationFinishBody,
 ]);
 
-users.post("/", zValidator("json", UserRegistrationBody), async (c) => {
+users.post("/", sValidator("json", UserRegistrationBody), async (c) => {
   const body = c.req.valid("json");
 
   // registration start
@@ -40,7 +43,7 @@ users.post("/", zValidator("json", UserRegistrationBody), async (c) => {
       );
       return c.json({ registrationResponse });
     } catch {
-      return c.json({ error: "Invalid registration request" }, 400);
+      return c.json({ error: "INVALID_REGISTRATION_REQUEST" }, 400);
     }
   }
 
@@ -48,11 +51,12 @@ users.post("/", zValidator("json", UserRegistrationBody), async (c) => {
 
   const userStore = c.env.USER.getByName(username);
   const result = await userStore.registerNewUser(registrationRecord);
-  if (!result.success)
-    return c.json(
-      { error: result.code },
-      result.code === "USER_ALREADY_EXISTS" ? 409 : 500,
-    );
+  if (!result.success) {
+    const STATUS: Record<typeof result.code, ContentfulStatusCode> = {
+      USER_ALREADY_EXISTS: 409,
+    };
+    return c.json({ error: result.code }, STATUS[result.code]);
+  }
 
   return c.json({ success: `User ${username} was successfully created` }, 201);
 });

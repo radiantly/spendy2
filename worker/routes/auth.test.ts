@@ -10,8 +10,15 @@ import {
   it,
   vi,
 } from "vitest";
+import {
+  PASSWORD,
+  login,
+  loginToken,
+  post,
+  registerUser,
+  startLogin,
+} from "../test/helpers.ts";
 
-const PASSWORD = "correct horse battery staple";
 const UUID_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
@@ -44,62 +51,8 @@ function maxDelayMs(attempts: number) {
   return Math.min(2 ** attempts, env.LOGIN_BACKOFF_MAX_SECONDS) * 1000;
 }
 
-function post(path: string, body: unknown) {
-  return exports.default.fetch(`http://localhost/api${path}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-}
-
-async function registerUser(username: string, password = PASSWORD) {
-  const { clientRegistrationState, registrationRequest } =
-    opaque.client.startRegistration({ password });
-  const startResponse = await post("/users", { username, registrationRequest });
-  const { registrationResponse } = await startResponse.json<{
-    registrationResponse: string;
-  }>();
-  const { registrationRecord } = opaque.client.finishRegistration({
-    clientRegistrationState,
-    registrationResponse,
-    password,
-  });
-  const finishResponse = await post("/users", {
-    username,
-    registrationRecord,
-  });
-  expect(finishResponse.status).toBe(201);
-}
-
-async function startLogin(username: string, password = PASSWORD) {
-  const { clientLoginState, startLoginRequest } = opaque.client.startLogin({
-    password,
-  });
-  const response = await post("/auth/login", { username, startLoginRequest });
-  return { response, clientLoginState };
-}
-
 async function startLoginStatus(username: string) {
   return (await startLogin(username)).response.status;
-}
-
-/** Runs a full login and returns the finish response. */
-async function login(username: string, password = PASSWORD) {
-  const { response, clientLoginState } = await startLogin(username, password);
-  expect(response.status).toBe(200);
-  const { loginResponse } = await response.json<{ loginResponse: string }>();
-
-  const result = opaque.client.finishLogin({
-    clientLoginState,
-    loginResponse,
-    password,
-  });
-  expect(result).toBeDefined();
-
-  return post("/auth/login", {
-    username,
-    finishLoginRequest: result!.finishLoginRequest,
-  });
 }
 
 /** Creates a well-formed finishLoginRequest that belongs to a different login. */
@@ -443,14 +396,6 @@ function postLogout(authorization?: string) {
     method: "POST",
     headers: authorization === undefined ? {} : { Authorization: authorization },
   });
-}
-
-/** Runs a full login and returns the token. */
-async function loginToken(username: string) {
-  const response = await login(username);
-  expect(response.status).toBe(200);
-  const { token } = await response.json<{ token: string }>();
-  return token;
 }
 
 describe("POST /api/auth/logout", () => {

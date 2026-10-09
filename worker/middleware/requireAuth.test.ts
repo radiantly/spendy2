@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { describe, expectTypeOf, it } from "vitest";
-import { requireAuth } from "./auth.ts";
+import { requireAuth } from "./requireAuth.ts";
 
 // these only check types, tsc fails if they are wrong
 describe("requireAuth", () => {
