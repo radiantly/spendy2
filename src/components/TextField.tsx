@@ -45,11 +45,13 @@ function TextField({
           <div className="absolute inset-y-0 right-0 flex items-center pr-2">{trailing}</div>
         )}
       </div>
-      {message && (
-        <div id={messageId} className={`text-sm ${error ? "text-danger" : "text-ink-muted"}`}>
-          {message}
-        </div>
-      )}
+      {/* Always rendered so an error appearing on a hint-less field doesn't shift the layout. */}
+      <div
+        id={messageId}
+        className={`min-h-[1lh] text-sm ${error ? "text-danger" : "text-ink-muted"}`}
+      >
+        {message}
+      </div>
     </div>
   );
 }

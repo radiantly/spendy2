@@ -6,5 +6,5 @@
     "moduleResolution": "bundler",
     "types": ["./worker-configuration.d.ts", "vite/client", "@cloudflare/vitest-plugin/types"]
   },
-  "include": ["worker"]
+  "include": ["worker", "src/api/**/*.test.ts"]
 }

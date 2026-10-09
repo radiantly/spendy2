@@ -1,8 +1,19 @@
 import { exports } from "cloudflare:workers";
 import * as opaque from "@serenity-kit/opaque";
-import { expect } from "vitest";
+import { expect, vi } from "vitest";
 
 export const PASSWORD = "correct horse battery staple";
+
+/**
+ * Routes the global `fetch` to the worker, so frontend API clients (which
+ * call relative URLs like `/api/users`) can be tested against the real
+ * server. Undo with `vi.unstubAllGlobals()`.
+ */
+export function forwardFetchToWorker() {
+  vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) =>
+    exports.default.fetch(new URL(String(input), "http://localhost"), init),
+  );
+}
 
 export function post(path: string, body: unknown) {
   return exports.default.fetch(`http://localhost/api${path}`, {

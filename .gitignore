@@ -29,3 +29,6 @@ dist-ssr
 
 # Configuration
 .env
+
+# Vitest browser mode failure screenshots
+.vitest

@@ -15,7 +15,9 @@ function Logo({ onLime = false }: LogoProps) {
       >
         <FiTrendingUp className="size-5" strokeWidth={2.5} aria-hidden />
       </span>
-      <span className="font-display text-2xl font-bold tracking-tight">spendy2</span>
+      <span className="font-display text-2xl font-bold tracking-tight">
+        spendy<span className="font-[Gloria_Hallelujah]">2</span>
+      </span>
     </span>
   );
 }
