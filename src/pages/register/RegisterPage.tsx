@@ -7,11 +7,7 @@ import TextField from "../../components/TextField.tsx";
 import PasswordStrengthMeter from "../../components/PasswordStrengthMeter.tsx";
 import { registerUser } from "../../api/users.ts";
 import { usePasswordStrength } from "../../hooks/usePasswordStrength.ts";
-import {
-  validateRegisterForm,
-  type RegisterForm,
-  type RegisterFormErrors,
-} from "./validate.ts";
+import { validateRegisterForm, type RegisterForm, type RegisterFormErrors } from "./validate.ts";
 
 // Shared id so repeated failed submits replace the toast instead of stacking.
 const REGISTER_ERROR_TOAST = "register-error";
@@ -94,8 +90,8 @@ function RegisterPage() {
             >
               OPAQUE
             </a>{" "}
-            authentication so your password isn't sent to the server. All user
-            data is encrypted before being uploaded.
+            authentication so your password isn't sent to the server. All user data is encrypted
+            before being uploaded.
           </p>
         </section>
 
@@ -105,9 +101,7 @@ function RegisterPage() {
           </div>
 
           <header className="flex flex-col gap-2">
-            <h2 className="font-display text-3xl font-bold tracking-tight">
-              Create your account
-            </h2>
+            <h2 className="font-display text-3xl font-bold tracking-tight">Create your account</h2>
             <p className="text-ink-muted">
               Already have one?{" "}
               <Link
@@ -119,11 +113,7 @@ function RegisterPage() {
             </p>
           </header>
 
-          <form
-            onSubmit={handleSubmit}
-            noValidate
-            className="flex flex-col gap-5"
-          >
+          <form onSubmit={handleSubmit} noValidate className="flex flex-col gap-5">
             <TextField
               label="Username"
               name="username"
@@ -144,10 +134,7 @@ function RegisterPage() {
               value={form.password}
               onChange={(e) => updateField("password", e.target.value)}
               hint={
-                <PasswordStrengthMeter
-                  result={strength}
-                  invalid={errors.password !== undefined}
-                />
+                <PasswordStrengthMeter result={strength} invalid={errors.password !== undefined} />
               }
               invalid={errors.password !== undefined}
               disabled={isPending}

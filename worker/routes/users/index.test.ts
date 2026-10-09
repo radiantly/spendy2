@@ -17,8 +17,9 @@ function postUsers(body: unknown) {
 }
 
 async function startRegistration(username: string) {
-  const { clientRegistrationState, registrationRequest } =
-    opaque.client.startRegistration({ password: PASSWORD });
+  const { clientRegistrationState, registrationRequest } = opaque.client.startRegistration({
+    password: PASSWORD,
+  });
 
   const response = await postUsers({ username, registrationRequest });
   expect(response.status).toBe(200);
@@ -30,8 +31,7 @@ async function startRegistration(username: string) {
 }
 
 async function createRegistrationRecord(username: string) {
-  const { clientRegistrationState, registrationResponse } =
-    await startRegistration(username);
+  const { clientRegistrationState, registrationResponse } = await startRegistration(username);
 
   const { registrationRecord } = opaque.client.finishRegistration({
     clientRegistrationState,

@@ -12,9 +12,7 @@ class RegistrationRecordStore {
   get tableExists() {
     return (
       this.sql
-        .exec(
-          "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'registration_record';",
-        )
+        .exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'registration_record';")
         .toArray().length > 0
     );
   }
@@ -61,9 +59,7 @@ class SessionStore {
   get tableExists() {
     return (
       this.sql
-        .exec(
-          "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sessions';",
-        )
+        .exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sessions';")
         .toArray().length > 0
     );
   }
@@ -71,10 +67,7 @@ class SessionStore {
   has(sessionId: string) {
     if (!this.tableExists) return false;
 
-    return (
-      this.sql.exec("SELECT 1 FROM sessions WHERE id = ?", sessionId).toArray()
-        .length > 0
-    );
+    return this.sql.exec("SELECT 1 FROM sessions WHERE id = ?", sessionId).toArray().length > 0;
   }
 
   create() {
@@ -149,17 +142,13 @@ export class UserStore extends DurableObject<Env> {
 
   private get sessions() {
     if (this._sessions === undefined)
-      this._sessions = new SessionStore(
-        this.sql,
-        this.env.MAX_SESSIONS_PER_USER,
-      );
+      this._sessions = new SessionStore(this.sql, this.env.MAX_SESSIONS_PER_USER);
     return this._sessions;
   }
 
   private get username() {
     const name = this.ctx.id.name;
-    if (name === undefined)
-      throw new Error("UserStore must be addressed by name");
+    if (name === undefined) throw new Error("UserStore must be addressed by name");
     return name;
   }
 
@@ -167,16 +156,12 @@ export class UserStore extends DurableObject<Env> {
     // TODO: delete registration record
   }
 
-  async registerNewUser(
-    registrationRecord: string,
-  ): Promise<RegisterNewUserResponse> {
+  async registerNewUser(registrationRecord: string): Promise<RegisterNewUserResponse> {
     if (!this.registrationRecord.set(registrationRecord))
       return { success: false, code: "USER_ALREADY_EXISTS" };
 
     // delete user if they do not login
-    await this.ctx.storage.setAlarm(
-      Date.now() + this.env.USER_CLEANUP_DELAY_SECONDS * 1000,
-    );
+    await this.ctx.storage.setAlarm(Date.now() + this.env.USER_CLEANUP_DELAY_SECONDS * 1000);
     return { success: true };
   }
 
@@ -200,24 +185,17 @@ export class UserStore extends DurableObject<Env> {
     return result.loginResponse;
   }
 
-  async startLoginRatelimited(
-    startLoginRequest: string,
-  ): Promise<StartLoginResponse> {
+  async startLoginRatelimited(startLoginRequest: string): Promise<StartLoginResponse> {
     await opaque.ready;
 
     const now = Date.now();
-    if (now < this.loginOnlyAfter)
-      return { success: false, code: "RATE_LIMITED" };
+    if (now < this.loginOnlyAfter) return { success: false, code: "RATE_LIMITED" };
 
     const loginResponse = this.startLogin(startLoginRequest);
 
-    if (loginResponse === undefined)
-      return { success: false, code: "INVALID_REQUEST" };
+    if (loginResponse === undefined) return { success: false, code: "INVALID_REQUEST" };
 
-    const maxDelay = Math.min(
-      2 ** ++this.loginAttempts,
-      this.env.LOGIN_BACKOFF_MAX_SECONDS,
-    );
+    const maxDelay = Math.min(2 ** ++this.loginAttempts, this.env.LOGIN_BACKOFF_MAX_SECONDS);
     const delayMs = 1000 + Math.random() * (maxDelay - 1) * 1000;
     this.loginOnlyAfter = now + delayMs;
 
@@ -247,8 +225,7 @@ export class UserStore extends DurableObject<Env> {
   }
 
   async logout(sessionId: string): Promise<LogoutResponse> {
-    if (!this.sessions.delete(sessionId))
-      return { success: false, code: "UNAUTHORIZED" };
+    if (!this.sessions.delete(sessionId)) return { success: false, code: "UNAUTHORIZED" };
     return { success: true };
   }
 
@@ -262,8 +239,7 @@ export class UserStore extends DurableObject<Env> {
     body: ArrayBuffer,
     sha256: string,
   ): Promise<UploadDatabaseResponse> {
-    if (!this.sessions.has(sessionId))
-      return { success: false, code: "UNAUTHORIZED" };
+    if (!this.sessions.has(sessionId)) return { success: false, code: "UNAUTHORIZED" };
 
     return this.withDatabaseLock(async () => {
       const current = this.ctx.storage.kv.get<string>(DATABASE_SHA256_KEY);
@@ -271,14 +247,12 @@ export class UserStore extends DurableObject<Env> {
         "if-none-match" in precondition
           ? current === undefined
           : current === precondition["if-match"];
-      if (!precondition_satisfied)
-        return { success: false, code: "PRECONDITION_FAILED" };
+      if (!precondition_satisfied) return { success: false, code: "PRECONDITION_FAILED" };
 
       try {
         await this.s3.put(this.databaseBlobName, body, sha256);
       } catch (error) {
-        if (error instanceof S3Error)
-          return { success: false, code: "STORAGE_ERROR" };
+        if (error instanceof S3Error) return { success: false, code: "STORAGE_ERROR" };
         throw error;
       }
 
@@ -288,8 +262,7 @@ export class UserStore extends DurableObject<Env> {
   }
 
   async downloadDatabase(sessionId: string): Promise<DownloadDatabaseResponse> {
-    if (!this.sessions.has(sessionId))
-      return { success: false, code: "UNAUTHORIZED" };
+    if (!this.sessions.has(sessionId)) return { success: false, code: "UNAUTHORIZED" };
 
     // the lock is only held until the response headers arrive, the body is
     // streamed afterwards
@@ -298,8 +271,7 @@ export class UserStore extends DurableObject<Env> {
       try {
         blob = await this.s3.get(this.databaseBlobName);
       } catch (error) {
-        if (error instanceof S3Error)
-          return { success: false, code: "STORAGE_ERROR" };
+        if (error instanceof S3Error) return { success: false, code: "STORAGE_ERROR" };
         throw error;
       }
 
@@ -339,6 +311,4 @@ export type FinishLoginResponse =
   | { success: true; sessionId: string }
   | { success: false; code: "INVALID_LOGIN_OR_TIMED_OUT" | "INVALID_LOGIN" };
 
-export type LogoutResponse =
-  | { success: true }
-  | { success: false; code: "UNAUTHORIZED" };
+export type LogoutResponse = { success: true } | { success: false; code: "UNAUTHORIZED" };

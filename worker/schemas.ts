@@ -47,9 +47,7 @@ export const databasePutPreconditionSchema = z.union([
   }),
 ]);
 
-export type DatabasePutPrecondition = z.infer<
-  typeof databasePutPreconditionSchema
->;
+export type DatabasePutPrecondition = z.infer<typeof databasePutPreconditionSchema>;
 
 // Body format: SPENDY + version byte + ?
 // for v1: ? = wrapped key + iv + ciphertext
@@ -64,10 +62,8 @@ export const databaseBlobSchema = z
     error: "INVALID_VERSION_BYTE",
   });
 
-export const toSha256Schema = z
-  .instanceof(ArrayBuffer)
-  .transform(async (buffer) => {
-    const digest = await crypto.subtle.digest("SHA-256", buffer);
-    const hashArray = Array.from(new Uint8Array(digest));
-    return hashArray.map((byte) => byte.toString(16).padStart(2, "0")).join("");
-  });
+export const toSha256Schema = z.instanceof(ArrayBuffer).transform(async (buffer) => {
+  const digest = await crypto.subtle.digest("SHA-256", buffer);
+  const hashArray = Array.from(new Uint8Array(digest));
+  return hashArray.map((byte) => byte.toString(16).padStart(2, "0")).join("");
+});

@@ -1,9 +1,6 @@
 import type { ZxcvbnResult } from "@zxcvbn-ts/core";
 
-export type PasswordStrengthEstimator = (
-  password: string,
-  userInputs: string[],
-) => ZxcvbnResult;
+export type PasswordStrengthEstimator = (password: string, userInputs: string[]) => ZxcvbnResult;
 
 let estimatorPromise: Promise<PasswordStrengthEstimator> | null = null;
 

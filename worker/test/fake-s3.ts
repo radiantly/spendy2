@@ -26,12 +26,10 @@ export function installFakeS3() {
   const bucketUrl = `${env.S3_ENDPOINT}/${env.S3_BUCKET}/`;
 
   async function handle(request: Request): Promise<Response> {
-    if (!request.url.startsWith(bucketUrl))
-      throw new Error(`Unexpected fetch to ${request.url}`);
+    if (!request.url.startsWith(bucketUrl)) throw new Error(`Unexpected fetch to ${request.url}`);
     if (!request.headers.get("Authorization")?.startsWith("AWS4-HMAC-SHA256"))
       return new Response("Missing signature", { status: 403 });
-    if (failStatus !== undefined)
-      return new Response("Injected failure", { status: failStatus });
+    if (failStatus !== undefined) return new Response("Injected failure", { status: failStatus });
 
     const key = decodeURIComponent(request.url.slice(bucketUrl.length));
 
@@ -43,8 +41,7 @@ export function installFakeS3() {
 
       if (holdingPuts) {
         heldPutCount++;
-        while (holdingPuts)
-          await new Promise((resolve) => setTimeout(resolve, 5));
+        while (holdingPuts) await new Promise((resolve) => setTimeout(resolve, 5));
         heldPutCount--;
       }
 
@@ -57,8 +54,7 @@ export function installFakeS3() {
 
     if (request.method === "GET") {
       const object = objects.get(key);
-      if (object === undefined)
-        return new Response("NoSuchKey", { status: 404 });
+      if (object === undefined) return new Response("NoSuchKey", { status: 404 });
       return new Response(object.body, { headers: object.metadata });
     }
 

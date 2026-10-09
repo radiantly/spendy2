@@ -23,22 +23,18 @@ function postUsers(body: object) {
  *
  * Network failures throw.
  */
-export async function registerUser(
-  username: string,
-  password: string,
-): Promise<RegisterResult> {
+export async function registerUser(username: string, password: string): Promise<RegisterResult> {
   await opaque.ready;
 
-  const { clientRegistrationState, registrationRequest } =
-    opaque.client.startRegistration({ password });
+  const { clientRegistrationState, registrationRequest } = opaque.client.startRegistration({
+    password,
+  });
 
   const startRes = await postUsers({ username, registrationRequest });
   if (!startRes.ok) {
     return { success: false, code: "REGISTRATION_FAILED" };
   }
-  const { registrationResponse } = RegistrationStartResponse.parse(
-    await startRes.json(),
-  );
+  const { registrationResponse } = RegistrationStartResponse.parse(await startRes.json());
 
   const { registrationRecord } = opaque.client.finishRegistration({
     clientRegistrationState,

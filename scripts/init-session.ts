@@ -1,13 +1,5 @@
 import * as opaque from "@serenity-kit/opaque";
-import {
-  confirm,
-  group,
-  intro,
-  isCancel,
-  outro,
-  password,
-  text,
-} from "@clack/prompts";
+import { confirm, group, intro, isCancel, outro, password, text } from "@clack/prompts";
 import path from "path";
 import { unstable_readConfig } from "wrangler";
 import { usernameSchema } from "../worker/schemas.ts";
@@ -15,21 +7,14 @@ import { fail, onCancel, readEnv, required, url, writeEnv } from "./lib.ts";
 import { z } from "zod";
 
 const scriptsEnvPath = path.join(import.meta.dirname, ".env");
-const wranglerConfigPath = path.join(
-  import.meta.dirname,
-  "..",
-  "wrangler.jsonc",
-);
+const wranglerConfigPath = path.join(import.meta.dirname, "..", "wrangler.jsonc");
 
 /**
  * The URL of the deployed worker. Only a custom domain route maps to a URL,
  * other route patterns can contain wildcards and paths.
  */
 function deployedEndpoint() {
-  const { route } = unstable_readConfig(
-    { config: wranglerConfigPath },
-    { hideWarnings: true },
-  );
+  const { route } = unstable_readConfig({ config: wranglerConfigPath }, { hideWarnings: true });
   let result = z
     .strictObject({
       pattern: z.string(),
@@ -92,22 +77,21 @@ async function login(
     username,
     finishLoginRequest: result.finishLoginRequest,
   });
-  if (!finishResponse.ok)
-    fail(`Login failed: ${await describe(finishResponse)}`);
+  if (!finishResponse.ok) fail(`Login failed: ${await describe(finishResponse)}`);
   const { token } = (await finishResponse.json()) as { token: string };
 
   return { token, exportKey: result.exportKey };
 }
 
 async function register(endpoint: string, username: string, password: string) {
-  const { clientRegistrationState, registrationRequest } =
-    opaque.client.startRegistration({ password });
+  const { clientRegistrationState, registrationRequest } = opaque.client.startRegistration({
+    password,
+  });
   const startResponse = await post(endpoint, "/users", {
     username,
     registrationRequest,
   });
-  if (!startResponse.ok)
-    fail(`Registration failed: ${await describe(startResponse)}`);
+  if (!startResponse.ok) fail(`Registration failed: ${await describe(startResponse)}`);
   const { registrationResponse } = (await startResponse.json()) as {
     registrationResponse: string;
   };
@@ -121,18 +105,12 @@ async function register(endpoint: string, username: string, password: string) {
     username,
     registrationRecord,
   });
-  if (finishResponse.status === 409)
-    fail(`${username} already exists, the password is wrong`);
-  if (!finishResponse.ok)
-    fail(`Registration failed: ${await describe(finishResponse)}`);
+  if (finishResponse.status === 409) fail(`${username} already exists, the password is wrong`);
+  if (!finishResponse.ok) fail(`Registration failed: ${await describe(finishResponse)}`);
 }
 
 /** Returns undefined when the login failed and the user declined to register. */
-async function loginOrRegister(
-  endpoint: string,
-  username: string,
-  password: string,
-) {
+async function loginOrRegister(endpoint: string, username: string, password: string) {
   const session = await login(endpoint, username, password);
   if (session !== undefined) return session;
 
@@ -144,10 +122,7 @@ async function loginOrRegister(
   if (!shouldRegister) return;
 
   await register(endpoint, username, password);
-  return (
-    (await login(endpoint, username, password)) ??
-    fail("Login failed after registering")
-  );
+  return (await login(endpoint, username, password)) ?? fail("Login failed after registering");
 }
 
 intro(`Init session`);
@@ -176,11 +151,7 @@ const input = await group(
   { onCancel },
 );
 
-const session = await loginOrRegister(
-  input.endpoint,
-  input.username,
-  input.password,
-);
+const session = await loginOrRegister(input.endpoint, input.username, input.password);
 
 if (session === undefined) {
   writeEnv(scriptsEnvPath, { SPENDY2_ENDPOINT: input.endpoint });

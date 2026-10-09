@@ -28,10 +28,7 @@ function TextField({
 
   return (
     <div className="flex flex-col gap-2">
-      <label
-        htmlFor={id}
-        className="font-mono text-xs tracking-widest text-ink-muted uppercase"
-      >
+      <label htmlFor={id} className="font-mono text-xs tracking-widest text-ink-muted uppercase">
         {label}
       </label>
       <div className="relative">
@@ -45,16 +42,11 @@ function TextField({
           {...inputProps}
         />
         {trailing && (
-          <div className="absolute inset-y-0 right-0 flex items-center pr-2">
-            {trailing}
-          </div>
+          <div className="absolute inset-y-0 right-0 flex items-center pr-2">{trailing}</div>
         )}
       </div>
       {message && (
-        <div
-          id={messageId}
-          className={`text-sm ${error ? "text-danger" : "text-ink-muted"}`}
-        >
+        <div id={messageId} className={`text-sm ${error ? "text-danger" : "text-ink-muted"}`}>
           {message}
         </div>
       )}

@@ -19,10 +19,7 @@ const UserRegistrationFinishBody = z.strictObject({
   registrationRecord: z.string().max(4096),
 });
 
-const UserRegistrationBody = z.union([
-  UserRegistrationStartBody,
-  UserRegistrationFinishBody,
-]);
+const UserRegistrationBody = z.union([UserRegistrationStartBody, UserRegistrationFinishBody]);
 
 users.post("/", sValidator("json", UserRegistrationBody), async (c) => {
   const body = c.req.valid("json");
@@ -34,13 +31,11 @@ users.post("/", sValidator("json", UserRegistrationBody), async (c) => {
     await opaque.ready;
 
     try {
-      const { registrationResponse } = opaque.server.createRegistrationResponse(
-        {
-          serverSetup: c.env.OPAQUE_SERVER_SETUP,
-          userIdentifier: username,
-          registrationRequest,
-        },
-      );
+      const { registrationResponse } = opaque.server.createRegistrationResponse({
+        serverSetup: c.env.OPAQUE_SERVER_SETUP,
+        userIdentifier: username,
+        registrationRequest,
+      });
       return c.json({ registrationResponse });
     } catch {
       return c.json({ error: "INVALID_REGISTRATION_REQUEST" }, 400);

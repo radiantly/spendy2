@@ -3,34 +3,33 @@ import type { Score, ZxcvbnResult } from "@zxcvbn-ts/core";
 const SCORES: Score[] = [0, 1, 2, 3, 4];
 
 /** `summary` is shown in place of the label when zxcvbn has no advice. */
-const LEVELS: Record<Score, { label: string; summary: string; color: string }> =
-  {
-    0: {
-      label: "Very weak",
-      summary: "This password is very weak.",
-      color: "bg-strength-0",
-    },
-    1: {
-      label: "Weak",
-      summary: "This password is weak.",
-      color: "bg-strength-1",
-    },
-    2: {
-      label: "Fair",
-      summary: "This password is fair.",
-      color: "bg-strength-2",
-    },
-    3: {
-      label: "Good",
-      summary: "That's a decent password.",
-      color: "bg-strength-3",
-    },
-    4: {
-      label: "Strong",
-      summary: "That's a strong password!",
-      color: "bg-strength-4",
-    },
-  };
+const LEVELS: Record<Score, { label: string; summary: string; color: string }> = {
+  0: {
+    label: "Very weak",
+    summary: "This password is very weak.",
+    color: "bg-strength-0",
+  },
+  1: {
+    label: "Weak",
+    summary: "This password is weak.",
+    color: "bg-strength-1",
+  },
+  2: {
+    label: "Fair",
+    summary: "This password is fair.",
+    color: "bg-strength-2",
+  },
+  3: {
+    label: "Good",
+    summary: "That's a decent password.",
+    color: "bg-strength-3",
+  },
+  4: {
+    label: "Strong",
+    summary: "That's a strong password!",
+    color: "bg-strength-4",
+  },
+};
 
 type PasswordStrengthMeterProps = {
   /** null renders an empty meter (no password yet, or still loading). */
@@ -44,10 +43,7 @@ type PasswordStrengthMeterProps = {
  * layout doesn't shift while typing; long advice is truncated with the full
  * text available on hover.
  */
-function PasswordStrengthMeter({
-  result,
-  invalid = false,
-}: PasswordStrengthMeterProps) {
+function PasswordStrengthMeter({ result, invalid = false }: PasswordStrengthMeterProps) {
   const level = result ? LEVELS[result.score] : null;
   const filledBars = result ? result.score + 1 : 0;
   const advice = result?.feedback.warning ?? result?.feedback.suggestions[0];

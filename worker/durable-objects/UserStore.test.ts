@@ -1,9 +1,5 @@
 import { env } from "cloudflare:workers";
-import {
-  reset,
-  runDurableObjectAlarm,
-  runInDurableObject,
-} from "cloudflare:test";
+import { reset, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import * as opaque from "@serenity-kit/opaque";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
@@ -161,9 +157,9 @@ describe("UserStore", () => {
     const stub = env.USER.get(env.USER.newUniqueId());
 
     await runInDurableObject(stub, async (instance, state) => {
-      await expect(
-        instance.startLoginRatelimited(startLoginRequest()),
-      ).rejects.toThrow("UserStore must be addressed by name");
+      await expect(instance.startLoginRatelimited(startLoginRequest())).rejects.toThrow(
+        "UserStore must be addressed by name",
+      );
       expect(hasUserTables(state)).toBe(false);
     });
   });
@@ -183,9 +179,7 @@ describe("UserStore", () => {
             "0".repeat(64),
           ),
         ).toEqual(unauthorized);
-        expect(await instance.downloadDatabase(crypto.randomUUID())).toEqual(
-          unauthorized,
-        );
+        expect(await instance.downloadDatabase(crypto.randomUUID())).toEqual(unauthorized);
 
         expect(hasUserTables(state)).toBe(false);
         expect([...state.storage.kv.list()]).toEqual([]);

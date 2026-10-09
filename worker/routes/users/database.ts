@@ -22,18 +22,12 @@ database.put(
 
     const body = await c.req.arrayBuffer();
     const validationResult = databaseBlobSchema.safeDecode(body);
-    if (!validationResult.success)
-      return c.json({ error: validationResult.error }, 400);
+    if (!validationResult.success) return c.json({ error: validationResult.error }, 400);
 
     const sha256 = await toSha256Schema.decodeAsync(body);
 
     const userStore = c.env.USER.getByName(c.var.username);
-    const result = await userStore.uploadDatabase(
-      c.var.sessionId,
-      precondition,
-      body,
-      sha256,
-    );
+    const result = await userStore.uploadDatabase(c.var.sessionId, precondition, body, sha256);
     if (!result.success) {
       const STATUS: Record<typeof result.code, ContentfulStatusCode> = {
         UNAUTHORIZED: 401,

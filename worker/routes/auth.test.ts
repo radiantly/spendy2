@@ -1,26 +1,10 @@
 import { env, exports } from "cloudflare:workers";
 import { reset, runInDurableObject } from "cloudflare:test";
 import * as opaque from "@serenity-kit/opaque";
-import {
-  afterEach,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  vi,
-} from "vitest";
-import {
-  PASSWORD,
-  login,
-  loginToken,
-  post,
-  registerUser,
-  startLogin,
-} from "../test/helpers.ts";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { PASSWORD, login, loginToken, post, registerUser, startLogin } from "../test/helpers.ts";
 
-const UUID_REGEX =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 beforeAll(() => opaque.ready);
 beforeEach(() => {
@@ -73,23 +57,18 @@ function decodeToken(token: string) {
 }
 
 function getSessionIds(username: string) {
-  return runInDurableObject(
-    env.USER.getByName(username),
-    (_instance, state) => {
-      const tableExists =
-        state.storage.sql
-          .exec(
-            `SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sessions';`,
-          )
-          .toArray().length > 0;
-      if (!tableExists) return [];
+  return runInDurableObject(env.USER.getByName(username), (_instance, state) => {
+    const tableExists =
+      state.storage.sql
+        .exec(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sessions';`)
+        .toArray().length > 0;
+    if (!tableExists) return [];
 
-      return state.storage.sql
-        .exec<{ id: string }>(`SELECT id FROM sessions;`)
-        .toArray()
-        .map((row) => row.id);
-    },
-  );
+    return state.storage.sql
+      .exec<{ id: string }>(`SELECT id FROM sessions;`)
+      .toArray()
+      .map((row) => row.id);
+  });
 }
 
 describe("POST /api/auth/login", () => {
@@ -278,10 +257,7 @@ describe("POST /api/auth/login", () => {
 
     it("rejects a wrong password", async () => {
       await registerUser("alice");
-      const { response, clientLoginState } = await startLogin(
-        "alice",
-        "wrong password",
-      );
+      const { response, clientLoginState } = await startLogin("alice", "wrong password");
       const { loginResponse } = await response.json<{
         loginResponse: string;
       }>();
@@ -418,9 +394,7 @@ describe("POST /api/auth/logout", () => {
     const second = await loginToken("alice");
 
     expect((await postLogout(`Bearer ${first}`)).status).toBe(204);
-    expect(await getSessionIds("alice")).toEqual([
-      decodeToken(second).sessionId,
-    ]);
+    expect(await getSessionIds("alice")).toEqual([decodeToken(second).sessionId]);
     expect((await postLogout(`Bearer ${second}`)).status).toBe(204);
   });
 

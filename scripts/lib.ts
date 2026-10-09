@@ -25,10 +25,7 @@ export function url(value?: string) {
 /** A password prompt where empty input keeps the current value, if any. */
 export async function secret(message: string, current?: string) {
   const value = await password({
-    message:
-      current === undefined
-        ? message
-        : `${message} (leave empty to keep current)`,
+    message: current === undefined ? message : `${message} (leave empty to keep current)`,
     validate: current === undefined ? required : undefined,
   });
   return value === "" && current !== undefined ? current : value;

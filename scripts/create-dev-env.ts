@@ -46,8 +46,7 @@ const newWorkerEnv = await group(
         initialValue: workerEnv.S3_ACCESS_KEY_ID,
         validate: required,
       }),
-    S3_SECRET_ACCESS_KEY: () =>
-      secret("S3 secret access key?", workerEnv.S3_SECRET_ACCESS_KEY),
+    S3_SECRET_ACCESS_KEY: () => secret("S3 secret access key?", workerEnv.S3_SECRET_ACCESS_KEY),
   },
   { onCancel },
 );

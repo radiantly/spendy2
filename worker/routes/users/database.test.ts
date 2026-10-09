@@ -1,15 +1,7 @@
 import { env, exports } from "cloudflare:workers";
 import { reset } from "cloudflare:test";
 import * as opaque from "@serenity-kit/opaque";
-import {
-  afterEach,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  vi,
-} from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { toSha256Schema } from "../../schemas.ts";
 import { installFakeS3 } from "../../test/fake-s3.ts";
 import { loginToken, registerUser } from "../../test/helpers.ts";
@@ -28,11 +20,7 @@ afterEach(async () => {
 /** A blob in the SPENDY format with the given content after the header. */
 function databaseBlob(content: string, version = 1) {
   const encoder = new TextEncoder();
-  return new Uint8Array([
-    ...encoder.encode("SPENDY"),
-    version,
-    ...encoder.encode(content),
-  ]);
+  return new Uint8Array([...encoder.encode("SPENDY"), version, ...encoder.encode(content)]);
 }
 
 async function etagOf(bytes: Uint8Array) {
@@ -116,20 +104,11 @@ describe("PUT /api/users/me/database", () => {
     });
 
     it.each([
-      [
-        "both headers",
-        { "If-Match": `"${"0".repeat(64)}"`, "If-None-Match": "*" },
-      ],
+      ["both headers", { "If-Match": `"${"0".repeat(64)}"`, "If-None-Match": "*" }],
       ["a weak If-Match", { "If-Match": `W/"${"0".repeat(64)}"` }],
       ["an unquoted If-Match", { "If-Match": "0".repeat(64) }],
-      [
-        "an If-Match list",
-        { "If-Match": `"${"0".repeat(64)}", "${"1".repeat(64)}"` },
-      ],
-      [
-        "an If-None-Match other than *",
-        { "If-None-Match": `"${"0".repeat(64)}"` },
-      ],
+      ["an If-Match list", { "If-Match": `"${"0".repeat(64)}", "${"1".repeat(64)}"` }],
+      ["an If-None-Match other than *", { "If-None-Match": `"${"0".repeat(64)}"` }],
     ])("rejects %s", async (_name, headers) => {
       const token = await newUser();
 
@@ -161,9 +140,7 @@ describe("PUT /api/users/me/database", () => {
       });
 
       expect(response.status).toBe(412);
-      expect(s3.objects.get("alice.db.gz.enc")?.body).toEqual(
-        databaseBlob("v2"),
-      );
+      expect(s3.objects.get("alice.db.gz.enc")?.body).toEqual(databaseBlob("v2"));
     });
 
     it("rejects If-Match before the first upload", async () => {
@@ -254,9 +231,7 @@ describe("PUT /api/users/me/database", () => {
     expect((await first).status).toBe(204);
     expect((await second).status).toBe(412);
     expect(s3.putCount).toBe(2);
-    expect(s3.objects.get("alice.db.gz.enc")?.body).toEqual(
-      databaseBlob("first"),
-    );
+    expect(s3.objects.get("alice.db.gz.enc")?.body).toEqual(databaseBlob("first"));
   });
 });
 
@@ -284,9 +259,7 @@ describe("GET /api/users/me/database", () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get("ETag")).toBe(etag);
-    expect(response.headers.get("Content-Type")).toBe(
-      "application/octet-stream",
-    );
+    expect(response.headers.get("Content-Type")).toBe("application/octet-stream");
     expect(new Uint8Array(await response.arrayBuffer())).toEqual(body);
   });
 

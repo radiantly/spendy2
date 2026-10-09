@@ -13,8 +13,9 @@ export function post(path: string, body: unknown) {
 }
 
 export async function registerUser(username: string, password = PASSWORD) {
-  const { clientRegistrationState, registrationRequest } =
-    opaque.client.startRegistration({ password });
+  const { clientRegistrationState, registrationRequest } = opaque.client.startRegistration({
+    password,
+  });
   const startResponse = await post("/users", { username, registrationRequest });
   const { registrationResponse } = await startResponse.json<{
     registrationResponse: string;
@@ -57,7 +58,6 @@ export async function login(username: string, password = PASSWORD) {
     finishLoginRequest: result!.finishLoginRequest,
   });
 }
-
 
 /** Runs a full login and returns the token. */
 export async function loginToken(username: string) {

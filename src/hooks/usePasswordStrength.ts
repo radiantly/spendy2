@@ -11,13 +11,8 @@ import {
  *
  * @param userInputs values the password should not resemble (e.g. username)
  */
-export function usePasswordStrength(
-  password: string,
-  userInputs: string[],
-): ZxcvbnResult | null {
-  const [estimate, setEstimate] = useState<PasswordStrengthEstimator | null>(
-    null,
-  );
+export function usePasswordStrength(password: string, userInputs: string[]): ZxcvbnResult | null {
+  const [estimate, setEstimate] = useState<PasswordStrengthEstimator | null>(null);
 
   useEffect(() => {
     let cancelled = false;

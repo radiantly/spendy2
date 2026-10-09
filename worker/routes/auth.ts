@@ -24,14 +24,9 @@ auth.post("/login", sValidator("json", LoginBody), async (c) => {
 
   // login start
   if ("startLoginRequest" in body) {
-    const result = await userStore.startLoginRatelimited(
-      body.startLoginRequest,
-    );
+    const result = await userStore.startLoginRatelimited(body.startLoginRequest);
     if (!result.success)
-      return c.json(
-        { error: result.code },
-        result.code === "RATE_LIMITED" ? 429 : 400,
-      );
+      return c.json({ error: result.code }, result.code === "RATE_LIMITED" ? 429 : 400);
 
     return c.json({ loginResponse: result.loginResponse });
   }
