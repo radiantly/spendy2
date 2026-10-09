@@ -16,7 +16,7 @@ function SubmitButton({ form, pending, pendingLabel, children }: SubmitButtonPro
       type="submit"
       form={form}
       disabled={pending}
-      className="inline-flex items-center justify-center gap-2 rounded-full bg-lime px-6 py-3.5 font-semibold text-ink-on-lime transition outline-none hover:brightness-95 focus-visible:ring-3 focus-visible:ring-focus focus-visible:ring-offset-3 focus-visible:ring-offset-surface disabled:cursor-not-allowed disabled:opacity-70"
+      className="inline-flex items-center justify-center gap-2 rounded-full bg-lime px-6 py-3.5 font-semibold text-ink-on-lime transition outline-none focus-visible:ring-3 focus-visible:ring-focus focus-visible:ring-offset-3 focus-visible:ring-offset-surface enabled:hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-60"
     >
       {pending ? (
         <>

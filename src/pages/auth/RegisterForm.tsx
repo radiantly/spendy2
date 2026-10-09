@@ -113,6 +113,7 @@ function RegisterForm({ id, pending, startTransition }: FormProps) {
           <PasswordVisibilityToggle
             visible={showPassword}
             onToggle={() => setShowPassword((v) => !v)}
+            disabled={pending}
           />
         }
       />

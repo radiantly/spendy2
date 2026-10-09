@@ -28,7 +28,7 @@ function TextField({
 
   return (
     <div className="flex flex-col gap-2">
-      <label htmlFor={id} className="font-mono text-xs tracking-widest text-ink-muted uppercase">
+      <label htmlFor={id} className="font-mono text-xs tracking-widest text-ink uppercase">
         {label}
       </label>
       <div className="relative">
@@ -36,7 +36,7 @@ function TextField({
           id={id}
           aria-invalid={invalid || undefined}
           aria-describedby={message ? messageId : undefined}
-          className={`w-full rounded-xl border bg-field px-4 py-3 text-base text-ink transition-[border-color] placeholder:text-ink-muted/70 focus-visible:outline-3 focus-visible:outline-offset-3 focus-visible:outline-focus disabled:opacity-60 ${
+          className={`w-full rounded-xl border bg-field px-4 py-3 text-base text-ink transition-[border-color,opacity] placeholder:text-ink-muted/70 focus-visible:outline-3 focus-visible:outline-offset-3 focus-visible:outline-focus disabled:cursor-not-allowed disabled:opacity-60 ${
             invalid ? "border-danger" : "border-line"
           } ${trailing ? "pr-12" : ""}`}
           {...inputProps}

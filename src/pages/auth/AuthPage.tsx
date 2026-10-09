@@ -79,7 +79,7 @@ function AuthPage({ mode }: { mode: AuthMode }) {
               href="https://opaque-auth.com/"
               target="_blank"
               rel="noreferrer"
-              className="font-semibold underline underline-offset-4 outline-none hover:decoration-2 focus-visible:ring-2 focus-visible:ring-ink-on-lime"
+              className="font-semibold underline underline-offset-4 outline-none hover:decoration-2 focus-visible:ring-3 focus-visible:ring-ink-on-lime"
             >
               OPAQUE
             </a>{" "}
@@ -106,7 +106,7 @@ function AuthPage({ mode }: { mode: AuthMode }) {
                 onClick={(event) => {
                   if (isPending) event.preventDefault();
                 }}
-                className="font-medium text-ink underline underline-offset-4 outline-none hover:decoration-2 focus-visible:ring-2 focus-visible:ring-focus aria-disabled:cursor-not-allowed aria-disabled:opacity-60 aria-disabled:hover:decoration-1"
+                className="font-medium text-ink underline underline-offset-4 outline-none hover:decoration-2 focus-visible:ring-3 focus-visible:ring-focus aria-disabled:cursor-not-allowed aria-disabled:opacity-60 aria-disabled:hover:decoration-1"
               >
                 {copy.link}
               </Link>

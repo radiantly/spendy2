@@ -201,6 +201,12 @@ describe("login", () => {
     await expect.element(submitButton(screen)).toHaveTextContent("Logging in…");
     await expect.element(submitButton(screen)).toBeDisabled();
     await expect.element(field(screen, "Username")).toBeDisabled();
+    await expect
+      .element(visible(screen.getByRole("button", { name: "Show password" })))
+      .toBeDisabled();
+    await expect
+      .element(screen.getByRole("checkbox", { name: "Keep me logged in on this device" }))
+      .toBeDisabled();
     pending.resolve({ success: false, code: "INVALID_LOGIN" });
   });
 
