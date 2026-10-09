@@ -1,67 +1,57 @@
 import * as opaque from "@serenity-kit/opaque";
-import { cancel, intro, outro, password, text, group } from "@clack/prompts";
-import fs from "fs";
+import { intro, outro, text, group } from "@clack/prompts";
 import path from "path";
+import { onCancel, readEnv, required, secret, url, writeEnv } from "./lib.ts";
 
-function required(value?: string) {
-  if (!value) return "Required";
-}
+const workerEnvPath = path.join(import.meta.dirname, "..", ".env");
 
 intro(`Create dev .env`);
 
 await opaque.ready;
 
-const dotenv = await group(
+const workerEnv = readEnv(workerEnvPath);
+
+const newWorkerEnv = await group(
   {
     OPAQUE_SERVER_SETUP: () =>
       text({
         message: "Opaque server sercret?",
         placeholder: "generate new",
+        initialValue: workerEnv.OPAQUE_SERVER_SETUP,
         defaultValue: opaque.server.createSetup(),
       }),
     S3_ENDPOINT: () =>
       text({
         message: "S3 endpoint?",
         placeholder: "https://s3.us-west-004.backblazeb2.com",
-        validate: (value) => {
-          if (!value || !URL.canParse(value)) return "Must be a URL";
-        },
+        initialValue: workerEnv.S3_ENDPOINT,
+        validate: url,
       }),
     S3_REGION: () =>
       text({
         message: "S3 region?",
         placeholder: "us-west-004",
+        initialValue: workerEnv.S3_REGION,
         validate: required,
       }),
     S3_BUCKET: () =>
       text({
         message: "S3 bucket?",
+        initialValue: workerEnv.S3_BUCKET,
         validate: required,
       }),
     S3_ACCESS_KEY_ID: () =>
       text({
         message: "S3 access key id?",
+        initialValue: workerEnv.S3_ACCESS_KEY_ID,
         validate: required,
       }),
     S3_SECRET_ACCESS_KEY: () =>
-      password({
-        message: "S3 secret access key?",
-        validate: required,
-      }),
+      secret("S3 secret access key?", workerEnv.S3_SECRET_ACCESS_KEY),
   },
-  {
-    onCancel: () => {
-      cancel("Aborted");
-      process.exit(0);
-    },
-  },
+  { onCancel },
 );
 
-const dotenv_content = Object.entries(dotenv)
-  .map(([key, value]) => `${key}=${value}`)
-  .join("\n");
-
-const dotenv_path = path.join(import.meta.dirname, "..", ".env");
-fs.writeFileSync(dotenv_path, dotenv_content);
+writeEnv(workerEnvPath, newWorkerEnv);
 
 outro(`You're all set!`);
