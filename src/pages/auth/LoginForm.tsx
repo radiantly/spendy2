@@ -88,7 +88,7 @@ function LoginForm({ id, pending, startTransition }: FormProps) {
         spellCheck={false}
         value={form.username}
         onChange={(e) => updateField("username", e.target.value)}
-        hint="3–32 lowercase letters or numbers"
+        hint="3–32 lowercase letters or numbers."
         error={errors.username}
         disabled={pending}
       />
@@ -99,7 +99,7 @@ function LoginForm({ id, pending, startTransition }: FormProps) {
         autoComplete="current-password"
         value={form.password}
         onChange={(e) => updateField("password", e.target.value)}
-        hint="Enter your strong password"
+        hint="Enter your password."
         error={errors.password}
         disabled={pending}
         trailing={

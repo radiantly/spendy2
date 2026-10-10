@@ -35,6 +35,7 @@ export default defineConfig({
       {
         // Same as vite.config.ts, minus the Cloudflare plugin.
         plugins: [react(), tailwindcss(), babel({ presets: [reactCompilerPreset()] })],
+        worker: { format: "es" },
         test: {
           name: "browser",
           include: ["src/**/*.test.{ts,tsx}"],

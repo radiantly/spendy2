@@ -50,15 +50,16 @@ export const databasePutPreconditionSchema = z.union([
 export type DatabasePutPrecondition = z.infer<typeof databasePutPreconditionSchema>;
 
 // Body format: SPENDY + version byte + ?
-// for v1: ? = wrapped key + iv + ciphertext
-const MAGIC = new TextEncoder().encode("SPENDY");
+// The rest is only read by clients; for v1 see src/db/blob.ts.
+export const DATABASE_BLOB_MAGIC = new TextEncoder().encode("SPENDY");
+export const DATABASE_BLOB_VERSION = 0x01;
 export const databaseBlobSchema = z
   .instanceof(ArrayBuffer)
   .transform((buffer) => new Uint8Array(buffer))
-  .refine((bytes) => MAGIC.every((byte, i) => byte === bytes[i]), {
+  .refine((bytes) => DATABASE_BLOB_MAGIC.every((byte, i) => byte === bytes[i]), {
     error: "MISSING_SPENDY_MAGIC",
   })
-  .refine((bytes) => bytes[6] === 0x01, {
+  .refine((bytes) => bytes[DATABASE_BLOB_MAGIC.length] === DATABASE_BLOB_VERSION, {
     error: "INVALID_VERSION_BYTE",
   });
 

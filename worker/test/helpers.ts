@@ -7,13 +7,21 @@ export const PASSWORD = "correct horse battery staple";
 /**
  * Routes the global `fetch` to the worker, so frontend API clients (which
  * call relative URLs like `/api/users`) can be tested against the real
- * server. Undo with `vi.unstubAllGlobals()`.
+ * server. Requests to other origins go to the previous `fetch`: the worker
+ * and its durable objects share this global, so their own requests (e.g. to
+ * the fake S3) must not be looped back. Undo with `vi.unstubAllGlobals()`.
  */
 export function forwardFetchToWorker() {
-  vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) =>
-    exports.default.fetch(new URL(String(input), "http://localhost"), init),
-  );
+  const previousFetch = globalThis.fetch;
+  vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(input instanceof Request ? input.url : input, WORKER_ORIGIN);
+    if (url.origin !== WORKER_ORIGIN) return previousFetch(input, init);
+    return exports.default.fetch(input instanceof Request ? new Request(input, init) : url, init);
+  });
 }
+
+/** What relative URLs resolve against, as on the page the app is served from. */
+const WORKER_ORIGIN = "http://localhost";
 
 export function post(path: string, body: unknown) {
   return exports.default.fetch(`http://localhost/api${path}`, {
