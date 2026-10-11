@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { connect, expose, RemoteError, transfer, type WorkerScope } from "./rpc.ts";
+import { ClosedError, connect, expose, RemoteError, transfer, type WorkerScope } from "./rpc.ts";
 
 /**
  * The two ends of a MessageChannel stand in for the worker and its scope, so
@@ -121,7 +121,7 @@ describe("rpc", () => {
 
     close();
 
-    await expect(call).rejects.toThrow("The connection is closed");
+    await expect(call).rejects.toThrow(ClosedError);
   });
 
   it("rejects calls made after it was closed", async () => {
@@ -129,7 +129,7 @@ describe("rpc", () => {
 
     close();
 
-    await expect(remote.echo(1)).rejects.toThrow("The connection is closed");
+    await expect(remote.echo(1)).rejects.toThrow(ClosedError);
   });
 
   it("rejects an argument that can't be sent", async () => {

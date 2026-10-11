@@ -77,7 +77,7 @@ export class Database {
     return result;
   }
 
-  /** Stops the worker. Calls still running, and later ones, reject. */
+  /** Stops the worker. Calls still running, and later ones, reject with a ClosedError. */
   close() {
     this.#connection.close();
     this.#worker.terminate();

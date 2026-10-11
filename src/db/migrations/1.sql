@@ -25,7 +25,7 @@ CREATE TABLE transactions (
   -- if the counterparty is an existing account
   transfer_account  TEXT REFERENCES accounts(name) ON UPDATE CASCADE ON DELETE SET NULL,
 
-  -- amount is actual amount multiplied by 1000 and rounded
+  -- amount is actual amount multiplied by 10000 and rounded
   amount            INTEGER NOT NULL,
   currency          TEXT NOT NULL,
   converted_amount  INTEGER,

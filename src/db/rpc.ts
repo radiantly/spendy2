@@ -16,7 +16,7 @@ export type Remote<T extends Api> = {
 
 export type Connection<T extends Api> = {
   remote: Remote<T>;
-  /** Rejects calls still waiting for a reply, and every later call. */
+  /** Rejects calls still waiting for a reply, and every later call, with a ClosedError. */
   close(): void;
 };
 
@@ -42,6 +42,17 @@ export class RemoteError extends Error {
     super(message);
     this.name = name;
     this.code = code;
+  }
+}
+
+/**
+ * A call rejected because this side closed the connection. Not a failure of
+ * the call itself: whoever closed it no longer wants the answer.
+ */
+export class ClosedError extends Error {
+  constructor() {
+    super("The connection is closed");
+    this.name = "ClosedError";
   }
 }
 
@@ -93,14 +104,14 @@ export function connect<T extends Api>(worker: Worker): Connection<T> {
     { resolve: (v: unknown) => void; reject: (e: unknown) => void }
   >();
   /** Set once no reply can arrive any more; later calls reject with it. */
-  let closedWith: RemoteError | undefined;
+  let closedWith: Error | undefined;
 
-  function rejectPending(error: RemoteError) {
+  function rejectPending(error: Error) {
     for (const call of pending.values()) call.reject(error);
     pending.clear();
   }
 
-  function closeWith(error: RemoteError) {
+  function closeWith(error: Error) {
     closedWith ??= error;
     rejectPending(error);
   }
@@ -153,8 +164,7 @@ export function connect<T extends Api>(worker: Worker): Connection<T> {
 
   return {
     remote,
-    close: () =>
-      closeWith(new RemoteError({ name: "ClosedError", message: "The connection is closed" })),
+    close: () => closeWith(new ClosedError()),
   };
 }
 

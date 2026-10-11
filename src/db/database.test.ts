@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DatabaseOpenError, openDatabase } from "./database.ts";
+import { ClosedError } from "./rpc.ts";
 import { encryptDatabase } from "./blob.ts";
 import { downloadDatabase, uploadDatabase } from "../api/database.ts";
 import { deriveKek } from "../lib/kek.ts";
@@ -134,7 +135,7 @@ describe("Database.save", () => {
 
     db.close();
 
-    await expect(save).rejects.toThrow("closed");
+    await expect(save).rejects.toThrow(ClosedError);
   });
 
   it("rejects calls made after it is closed", async () => {
@@ -142,7 +143,7 @@ describe("Database.save", () => {
 
     db.close();
 
-    await expect(db.query("SELECT 1")).rejects.toThrow("closed");
+    await expect(db.query("SELECT 1")).rejects.toThrow(ClosedError);
   });
 
   it("uploads with the session token", async () => {
