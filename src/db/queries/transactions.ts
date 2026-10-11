@@ -29,11 +29,11 @@ export const LIST_TRANSACTIONS = `
   ORDER BY naive_date DESC, seq DESC
 `;
 
-/** One row of `LIST_TRANSACTIONS`. Bind `[id]`. */
-export const GET_TRANSACTION = `
+/** Rows of `LIST_TRANSACTIONS`, by id. Bind `[JSON.stringify(ids)]`. */
+export const GET_TRANSACTIONS = `
   SELECT id, naive_date, account_name, counterparty, category, amount, currency, remarks
   FROM transactions
-  WHERE id = ?
+  WHERE id IN (SELECT value FROM json_each(?))
 `;
 
 /** Alphabetical, ignoring case (the names are `COLLATE NOCASE`). */

@@ -3,16 +3,15 @@ import toast from "react-hot-toast";
 import { ClosedError } from "../../db/rpc.ts";
 import { useOpenDatabase } from "../../db/useDatabase.ts";
 import {
-  GET_TRANSACTION,
+  GET_TRANSACTIONS,
   INSERT_CATEGORY,
   LIST_ACCOUNT_NAMES,
   LIST_CATEGORY_NAMES,
   LIST_TRANSACTIONS,
   UPDATE_TRANSACTION,
-  type EditableTransactionField,
   type TransactionRow,
 } from "../../db/queries/transactions.ts";
-import TransactionsTable from "./TransactionsTable.tsx";
+import TransactionsTable, { type TransactionChange } from "./TransactionsTable.tsx";
 
 type Loaded = {
   rows: TransactionRow[];
@@ -58,55 +57,65 @@ function TransactionsPage() {
   }, [database]);
 
   /**
-   * Shows the edit straight away, then writes it to the database. If the
-   * write fails, the field goes back to what the database has.
+   * Shows the changes straight away, then writes them to the database, all
+   * in one transaction. If the write fails, the fields go back to what the
+   * database has.
    *
-   * A category edit also creates the category if it doesn't exist, in the
-   * same transaction: it may be new, or the schema may have just deleted it
-   * as unused while the menus still offered it. Either way the menus can be
-   * behind, so after any category edit they're refreshed from the database.
+   * Setting a category also creates it if it doesn't exist, in the same
+   * transaction: it may be new, or the schema may have just deleted it as
+   * unused while the menus still offered it. Either way the menus can be
+   * behind, so after any category change they're refreshed from the database.
    *
    * The database runs queries in the order they're sent, so a save started
-   * after this includes the edit, and the read after a failure sees every
-   * earlier edit's write.
+   * after this includes the changes, and the read after a failure sees every
+   * earlier write.
    */
-  function commit(
-    rowIndex: number,
-    field: EditableTransactionField,
-    value: string | number | null,
-  ) {
-    if (loaded === null) return;
-    const { id } = loaded.rows[rowIndex]!;
-    const updateRow = (change: (row: TransactionRow) => TransactionRow) =>
-      setLoaded(
-        (current) =>
-          current && {
-            ...current,
-            rows: current.rows.with(rowIndex, change(current.rows[rowIndex]!)),
-          },
-      );
+  function commit(changes: readonly TransactionChange[]) {
+    if (loaded === null || changes.length === 0) return;
+    const ids = changes.map(({ rowIndex }) => loaded.rows[rowIndex]!.id);
+    const apply = (value: (change: TransactionChange, row: TransactionRow) => unknown) =>
+      setLoaded((current) => {
+        if (current === null) return current;
+        const rows = [...current.rows];
+        for (const change of changes) {
+          const row = rows[change.rowIndex]!;
+          rows[change.rowIndex] = { ...row, [change.field]: value(change, row) };
+        }
+        return { ...current, rows };
+      });
 
-    const update = { sql: UPDATE_TRANSACTION[field], bind: [value, id] };
+    const statements = changes.flatMap(({ field, value }, i) => [
+      ...(field === "category" && value !== null ? [{ sql: INSERT_CATEGORY, bind: [value] }] : []),
+      { sql: UPDATE_TRANSACTION[field], bind: [value, ids[i]!] },
+    ]);
+    const setsCategory = changes.some(({ field }) => field === "category");
 
-    updateRow((row) => ({ ...row, [field]: value }));
-    // Before the write, so the edit is never on screen without being unsaved.
+    apply((change) => change.value);
+    // Before the write, so a change is never on screen without being unsaved.
     markDirty();
-    const write =
-      field === "category" && value !== null
-        ? database.batch([{ sql: INSERT_CATEGORY, bind: [value] }, update])
-        : database.query(update.sql, update.bind);
-    write
+    database
+      .batch(statements)
       .catch(async (error: unknown) => {
         if (error instanceof ClosedError) throw error;
         toast.error(
-          `Couldn't change that transaction: ${error instanceof Error ? error.message : String(error)}`,
+          `Couldn't change ${changes.length === 1 ? "that transaction" : "those transactions"}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
         );
-        const [stored] = (await database.query(GET_TRANSACTION, [id])) as TransactionRow[];
-        // If a later edit changed the field again, that edit's write decides it.
-        updateRow((row) => (row[field] === value ? { ...row, [field]: stored![field] } : row));
+        const stored = new Map(
+          ((await database.query(GET_TRANSACTIONS, [JSON.stringify(ids)])) as TransactionRow[]).map(
+            (row) => [row.id, row],
+          ),
+        );
+        // If a later edit changed a field again, that edit's write decides it.
+        apply((change, row) =>
+          row[change.field] === change.value
+            ? stored.get(row.id)![change.field]
+            : row[change.field],
+        );
       })
       .then(async () => {
-        if (field !== "category") return;
+        if (!setsCategory) return;
         const categories = namesOf(await database.query(LIST_CATEGORY_NAMES));
         setLoaded((current) => current && { ...current, categories });
       })

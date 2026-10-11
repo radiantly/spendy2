@@ -72,27 +72,32 @@ async function loggedIn(stored: Uint8Array<ArrayBuffer> | null) {
 const saveButton = () => page.getByRole("button", { name: /^(Save|Saving…)$/ });
 
 /**
- * Holds back the next query matching `match` until it's released (and then
- * run) or failed (and never run). `release` resolves once it has run.
+ * Holds back the next call to the database's `method` whose arguments
+ * match, until it's released (and then run) or failed (and never run).
+ * `release` resolves once it has run.
  */
-function holdNextQuery(match: (sql: string) => boolean) {
-  const query = Database.prototype.query;
+function holdNext<M extends "query" | "batch">(
+  method: M,
+  match: (...args: Parameters<Database[M]>) => boolean,
+) {
+  type Call = (this: Database, ...args: Parameters<Database[M]>) => Promise<unknown>;
+  const original = Database.prototype[method] as Call;
   let settle!: (outcome: "release" | "fail") => void;
   const held = new Promise<"release" | "fail">((resolve) => (settle = resolve));
   let written: Promise<unknown> | undefined;
-  const spy = vi.spyOn(Database.prototype, "query").mockImplementation(function (
+  const spy = vi.spyOn(Database.prototype, method as "query").mockImplementation(function (
     this: Database,
-    sql,
-    bind,
+    ...args
   ) {
-    if (!match(sql)) return query.call(this, sql, bind);
+    const call = args as Parameters<Database[M]>;
+    if (!match(...call)) return original.apply(this, call) as ReturnType<Database["query"]>;
     spy.mockRestore();
     const result = held.then((outcome) => {
       if (outcome === "fail") throw new Error("disk on fire");
-      return query.call(this, sql, bind);
+      return original.apply(this, call);
     });
     written = result;
-    return result;
+    return result as ReturnType<Database["query"]>;
   });
   return {
     release: () => {
@@ -103,14 +108,21 @@ function holdNextQuery(match: (sql: string) => boolean) {
   };
 }
 
-const holdNextUpdate = () => holdNextQuery((sql) => sql.trimStart().startsWith("UPDATE"));
+const holdNextQuery = (match: (sql: string) => boolean) => holdNext("query", (sql) => match(sql));
+/** Edits are written in a batch of statements. */
+const holdNextUpdate = () =>
+  holdNext("batch", (statements) =>
+    statements.some(({ sql }) => sql.trimStart().startsWith("UPDATE")),
+  );
 
 const ACCOUNT = 1;
+const COUNTERPARTY = 2;
 const CATEGORY = 3;
+const REMARKS = 5;
 
 /** The cell in `column` (0-based) of the row showing `text`, once it's shown. */
 async function cellOf(text: string, column: number) {
-  const cell = page.getByRole("row").filter({ hasText: text }).getByRole("cell").nth(column);
+  const cell = page.getByRole("row").filter({ hasText: text }).getByRole("gridcell").nth(column);
   await expect.element(cell).toBeVisible();
   return cell;
 }
@@ -398,6 +410,56 @@ describe("TransactionsPage", () => {
     expect(
       await queryUploaded(blob, "SELECT account_name FROM transactions WHERE id = 'newer'"),
     ).toEqual([{ account_name: "Savings" }]);
+  });
+
+  describe("clearing a range", () => {
+    const WITH_REMARKS = `${TWO_TRANSACTIONS}; UPDATE transactions SET remarks = 'Weekly'`;
+
+    /** Selects from Corner Market's counterparty to Café Lumen's remarks. */
+    async function selectRange() {
+      await userEvent.click(await cellOf("Corner Market", COUNTERPARTY));
+      await userEvent.keyboard("{Escape}");
+      await userEvent.click(await cellOf("Café Lumen", REMARKS), { modifiers: ["Shift"] });
+    }
+
+    it("empties the cells that can be empty, in one write", async () => {
+      await loggedIn(await storedDatabase(WITH_REMARKS));
+      await renderApp("/transactions");
+      const batch = vi.spyOn(Database.prototype, "batch");
+      await selectRange();
+
+      await userEvent.keyboard("{Delete}");
+      await expect.poll(() => page.getByText("Weekly").all()).toHaveLength(0);
+      await userEvent.click(saveButton());
+
+      await expect.element(saveButton()).not.toBeInTheDocument();
+      expect(batch).toHaveBeenCalledTimes(1);
+      const [, blob] = vi.mocked(uploadDatabase).mock.calls[0]!;
+      expect(
+        await queryUploaded(
+          blob,
+          "SELECT id, counterparty, category, remarks FROM transactions ORDER BY id",
+        ),
+      ).toEqual([
+        { id: "newer", counterparty: "Corner Market", category: null, remarks: null },
+        { id: "older", counterparty: "Café Lumen", category: null, remarks: null },
+      ]);
+    });
+
+    it("puts every cell back when the write fails", async () => {
+      await loggedIn(await storedDatabase(WITH_REMARKS));
+      await renderApp("/transactions");
+      vi.spyOn(Database.prototype, "batch").mockRejectedValueOnce(new Error("disk on fire"));
+      await selectRange();
+
+      await userEvent.keyboard("{Delete}");
+
+      await expect
+        .element(page.getByText("Couldn't change those transactions: disk on fire"))
+        .toBeVisible();
+      await expect.poll(() => page.getByText("Weekly").all()).toHaveLength(2);
+      await expect.element(page.getByText("Groceries")).toBeVisible();
+    });
   });
 
   it("marks an edit unsaved before it's written", async () => {

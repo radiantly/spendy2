@@ -3,88 +3,129 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  type CSSProperties,
   type KeyboardEvent,
   type MouseEvent,
+  type RefObject,
 } from "react";
 import toast from "react-hot-toast";
 import type { CellDisplay } from "./columns.ts";
 import { mapOffset, textOffsetAtPoint } from "./caret.ts";
+import type { Edges } from "./grid.ts";
 import { defaultHighlight, menuItems, type MenuConfig, type MenuItem } from "./menu.ts";
 
 /** The outcome of submitting an edit: accepted, or why not. */
 export type SubmitResult = { ok: true } | { ok: false; error: string };
 
+/**
+ * How an edit ended: with the cell kept active (Enter, Escape), moving to the
+ * next or previous cell (Tab, Shift+Tab), or by focus going elsewhere.
+ */
+export type FinishHow = "stay" | "next" | "previous" | "away";
+
+export type CellEditing = {
+  /** The text the input starts with. */
+  text: string;
+  /** Where the caret starts. */
+  caret: number;
+  /** Whether the text was typed, rather than the cell's own: the menu lists only matches. */
+  typed: boolean;
+  /** Makes the input a combobox with this menu of options. */
+  menu?: MenuConfig;
+  /**
+   * While a drag from this cell selects other cells, the edit is paused: its
+   * menu, error, caret and text selection are hidden until the drag comes back.
+   */
+  paused: boolean;
+  inputRef: RefObject<HTMLInputElement | null>;
+  /** `create` is set when the user picked the menu's create item. */
+  submit: (text: string, create: boolean) => SubmitResult;
+  finish: (how: FinishHow) => void;
+};
+
 type EditableCellProps = {
+  id: string;
   display: CellDisplay;
   align?: "end";
   mono?: boolean;
-  /** Absent for read-only cells. */
-  edit?: {
-    /** The text the input starts with. */
-    text: string;
-    /** Set while this cell is being edited: where the caret starts. */
-    caret: number | null;
-    /** Makes the input a combobox with this menu of options. */
-    menu?: MenuConfig;
-    start: (caret: number) => void;
-    /** `create` is set when the user picked the menu's create item. */
-    submit: (text: string, create: boolean) => SubmitResult;
-    finish: () => void;
-  };
+  /** The text an edit starts with. Absent for read-only cells. */
+  editText?: string;
+  active: boolean;
+  selected: boolean;
+  /** For a cell in a range of several: which of its sides are on the range's outline. */
+  rangeEdges?: Edges;
+  /** Set while the cell is being edited. */
+  editing?: CellEditing;
+  /**
+   * The mouse went down on the cell. `offset` is where in the edit text it
+   * was pressed, for an editable cell that isn't being edited yet.
+   */
+  onPress: (event: MouseEvent, offset: number | null) => void;
 };
+
+/** The outline of a range, drawn inside its outer cells. */
+function rangeOutline(sides: Edges): CSSProperties {
+  const line = "var(--color-focus)";
+  const shadows = [
+    sides.top && `inset 0 1px 0 ${line}`,
+    sides.bottom && `inset 0 -1px 0 ${line}`,
+    sides.left && `inset 1px 0 0 ${line}`,
+    sides.right && `inset -1px 0 0 ${line}`,
+  ].filter(Boolean);
+  return shadows.length > 0 ? { boxShadow: shadows.join(", ") } : {};
+}
 
 /**
  * A spreadsheet-style cell: plain text that turns into an input as soon as
- * the mouse goes down on it, with the caret where it was pressed.
+ * the mouse goes down on it, with the caret where it was pressed. What the
+ * press does beyond that (selecting, dragging) is up to the grid.
  */
-function EditableCell({ display, align, mono, edit }: EditableCellProps) {
+function EditableCell({
+  id,
+  display,
+  align,
+  mono,
+  editText,
+  active,
+  selected,
+  rangeEdges,
+  editing,
+  onPress,
+}: EditableCellProps) {
   const valueRef = useRef<HTMLSpanElement>(null);
-  const cellRef = useRef<HTMLDivElement>(null);
-  const editing = edit !== undefined && edit.caret !== null;
 
   function handleMouseDown(event: MouseEvent) {
-    if (!edit || editing || event.button !== 0 || !valueRef.current) return;
-    // Keep the browser from focusing the cell or selecting text; the input
-    // takes focus instead. That also stops focus leaving another cell's
-    // input, so blur it here to submit its edit first.
+    if (event.button !== 0) return;
+    // The grid places the caret and selects text itself, so it can carry
+    // on doing so when a drag leaves the cell and comes back.
     event.preventDefault();
-    if (document.activeElement instanceof HTMLInputElement) document.activeElement.blur();
-    const offset = textOffsetAtPoint(valueRef.current, event.clientX, event.clientY);
-    edit.start(mapOffset(display.text, offset, edit.text));
-  }
-
-  function handleKeyDown(event: KeyboardEvent) {
-    if (!edit || editing || event.target !== event.currentTarget) return;
-    if (event.key === "Enter" || event.key === "F2") {
-      event.preventDefault();
-      edit.start(edit.text.length);
-    }
+    const offset =
+      editText === undefined || editing
+        ? null
+        : mapOffset(
+            display.text,
+            textOffsetAtPoint(valueRef.current!, event.clientX, event.clientY),
+            editText,
+          );
+    onPress(event, offset);
   }
 
   return (
     <div
-      ref={cellRef}
-      role="cell"
-      tabIndex={edit ? 0 : undefined}
+      id={id}
+      role="gridcell"
+      aria-selected={selected}
+      aria-readonly={editText === undefined || undefined}
       onMouseDown={handleMouseDown}
-      onKeyDown={handleKeyDown}
-      className={`relative min-w-0 border-r border-b border-line px-2 outline-none last:border-r-0 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus ${
-        align === "end" ? "text-right" : ""
-      } ${mono ? "font-mono" : ""}`}
+      style={rangeEdges && rangeOutline(rangeEdges)}
+      className={`relative min-w-0 border-r border-b border-line px-2 last:border-r-0 ${
+        rangeEdges && !active ? "bg-focus/15" : ""
+      } ${active ? "outline-2 -outline-offset-2 outline-focus" : ""} ${
+        active && editText !== undefined ? "cursor-text" : ""
+      } ${align === "end" ? "text-right" : ""} ${mono ? "font-mono" : ""}`}
     >
       {editing ? (
-        <CellInput
-          initialText={edit.text}
-          caret={edit.caret!}
-          menu={edit.menu}
-          align={align}
-          submit={edit.submit}
-          finish={(refocus) => {
-            edit.finish();
-            // After Enter or Escape, keep the keyboard on this cell.
-            if (refocus) cellRef.current?.focus();
-          }}
-        />
+        <CellInput {...editing} align={align} />
       ) : (
         <div className="truncate">
           {display.prefix && <span className="text-ink-muted">{display.prefix}</span>}
@@ -100,60 +141,76 @@ function itemKey(item: MenuItem | undefined) {
   return item === undefined ? null : `${item.kind}:${item.value}`;
 }
 
-type CellInputProps = {
-  initialText: string;
-  caret: number;
-  menu?: MenuConfig;
-  align?: "end";
-  submit: (text: string, create: boolean) => SubmitResult;
-  finish: (refocus: boolean) => void;
-};
+/** Popups belong to the input: pressing on them isn't pressing on the cell. */
+function stopPress(event: MouseEvent) {
+  event.preventDefault();
+  event.stopPropagation();
+}
+
+type CellInputProps = CellEditing & { align?: "end" };
 
 /**
- * The input a cell turns into. Enter submits and Escape cancels; leaving the
- * cell submits too, but can't show an error there, so an invalid value is
- * undone instead. With a `menu`, it's a combobox: arrow keys move through the
- * options, and Enter or leaving picks the highlighted one.
+ * The input a cell turns into. Enter submits and Escape cancels, both
+ * keeping the cell active; Tab submits and moves on. Leaving the cell
+ * submits too, but can't show an error there, so an invalid value is undone
+ * instead. With a `menu`, it's a combobox: up and down move through the
+ * options, and Enter, Tab or leaving picks the highlighted one.
  */
-function CellInput({ initialText, caret, menu, align, submit, finish }: CellInputProps) {
+function CellInput({
+  text: initialText,
+  caret,
+  typed,
+  menu,
+  paused,
+  inputRef,
+  submit,
+  finish,
+  align,
+}: CellInputProps) {
   const [text, setText] = useState(initialText);
   const [error, setError] = useState<string | null>(null);
   // Until the user types, the menu lists every option.
-  const [filtering, setFiltering] = useState(false);
+  const [filtering, setFiltering] = useState(typed);
   const items = menu ? menuItems(menu, text, filtering) : [];
   // Which item is highlighted, not where: the options can change while the
   // menu is open (the page refreshes them after each category edit).
   const [highlightKey, setHighlightKey] = useState(() =>
-    itemKey(items[defaultHighlight(items, text, false)]),
+    itemKey(items[defaultHighlight(items, text, typed)]),
   );
   const found = items.findIndex((item) => itemKey(item) === highlightKey);
   const highlight = found >= 0 ? found : defaultHighlight(items, text, filtering);
   const setHighlight = (index: number) => setHighlightKey(itemKey(items[index]));
-  const inputRef = useRef<HTMLInputElement>(null);
-  // Enter and Escape finish the edit themselves; the blur that follows when
-  // the input unmounts must not submit again.
+  // Enter, Escape and Tab finish the edit themselves; the blur that follows
+  // when focus moves on must not submit again.
   const finishedRef = useRef(false);
   const menuId = useId();
+  const errorId = useId();
 
   useLayoutEffect(() => {
     const input = inputRef.current!;
     input.focus();
     input.setSelectionRange(caret, caret);
-  }, [caret]);
+  }, [inputRef, caret]);
 
-  function done(refocus: boolean) {
+  function done(how: FinishHow) {
     finishedRef.current = true;
-    finish(refocus);
+    finish(how);
   }
 
-  function trySubmit(value: string, create: boolean) {
+  function trySubmit(value: string, create: boolean, how: FinishHow) {
     const result = submit(value, create);
-    if (result.ok) done(true);
+    if (result.ok) done(how);
     else setError(result.error);
   }
 
-  function pick(item: MenuItem) {
-    trySubmit(item.value, item.kind === "create");
+  /** What Enter and Tab do. */
+  function commit(how: FinishHow) {
+    if (!menu) trySubmit(text, false, how);
+    else if (highlight >= 0)
+      trySubmit(items[highlight]!.value, items[highlight]!.kind === "create", how);
+    // Nothing to pick: only empty text is submitted as is (to clear the
+    // cell); anything else names no option, as the menu already says.
+    else if (text.trim() === "") trySubmit(text, false, how);
   }
 
   function handleChange(value: string) {
@@ -169,14 +226,13 @@ function CellInput({ initialText, caret, menu, align, submit, finish }: CellInpu
   function handleKeyDown(event: KeyboardEvent<HTMLInputElement>) {
     if (event.key === "Escape") {
       event.preventDefault();
-      done(true);
+      done("stay");
     } else if (event.key === "Enter") {
       event.preventDefault();
-      if (!menu) trySubmit(text, false);
-      else if (highlight >= 0) pick(items[highlight]!);
-      // Nothing to pick: only empty text is submitted as is (to clear the
-      // cell); anything else names no option, as the menu already says.
-      else if (text.trim() === "") trySubmit(text, false);
+      commit("stay");
+    } else if (event.key === "Tab") {
+      event.preventDefault();
+      commit(event.shiftKey ? "previous" : "next");
     } else if (menu && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
       event.preventDefault();
       const step = event.key === "ArrowDown" ? 1 : -1;
@@ -192,11 +248,13 @@ function CellInput({ initialText, caret, menu, align, submit, finish }: CellInpu
     const result = submit(item?.kind === "option" ? item.value : text, false);
     // There's no cell left to show the error on, so say why it was undone.
     if (!result.ok) toast.error(`${result.error}. The change was undone.`);
-    done(false);
+    done("away");
   }
 
   // One popup at a time: an error replaces the menu until the text changes.
-  const showMenu = menu !== undefined && error === null && (items.length > 0 || text.trim() !== "");
+  const showMenu =
+    menu !== undefined && !paused && error === null && (items.length > 0 || text.trim() !== "");
+  const showError = error !== null && !paused;
 
   return (
     <>
@@ -210,12 +268,14 @@ function CellInput({ initialText, caret, menu, align, submit, finish }: CellInpu
         aria-autocomplete={menu ? "list" : undefined}
         aria-expanded={menu ? showMenu && items.length > 0 : undefined}
         aria-controls={menu ? menuId : undefined}
-        aria-activedescendant={highlight >= 0 ? `${menuId}-${highlight}` : undefined}
+        aria-activedescendant={showMenu && highlight >= 0 ? `${menuId}-${highlight}` : undefined}
         aria-invalid={error !== null || undefined}
-        aria-errormessage={error !== null ? "cell-error" : undefined}
+        aria-errormessage={showError ? errorId : undefined}
         className={`absolute inset-0 w-full bg-surface px-2 outline-2 -outline-offset-2 ${
           error !== null ? "outline-danger" : "outline-focus"
-        } ${align === "end" ? "text-right" : ""}`}
+        } ${paused ? "caret-transparent selection:bg-transparent" : ""} ${
+          align === "end" ? "text-right" : ""
+        }`}
       />
       {showMenu && (
         <Menu
@@ -224,13 +284,14 @@ function CellInput({ initialText, caret, menu, align, submit, finish }: CellInpu
           highlight={highlight}
           noMatch={menu.noMatch}
           onHighlight={setHighlight}
-          onPick={pick}
+          onPick={(item) => trySubmit(item.value, item.kind === "create", "stay")}
         />
       )}
-      {error !== null && (
+      {showError && (
         <div
-          id="cell-error"
+          id={errorId}
           role="alert"
+          onMouseDown={stopPress}
           className="absolute top-full left-0 z-10 mt-1 rounded-md bg-danger px-2 py-1 font-sans text-xs whitespace-nowrap text-white"
         >
           {error}
@@ -280,9 +341,9 @@ function Menu({ id, items, highlight, noMatch, onHighlight, onPick }: MenuProps)
   return (
     <div
       ref={popupRef}
-      // Keep focus in the input, so picking doesn't blur it first.
-      onMouseDown={(event) => event.preventDefault()}
-      className={`absolute left-0 z-20 w-max max-w-80 min-w-full overflow-hidden rounded-md border border-line bg-surface font-sans shadow-lg ${
+      // Keeps focus in the input, so picking doesn't blur it first.
+      onMouseDown={stopPress}
+      className={`absolute left-0 z-20 w-max max-w-80 min-w-full cursor-default overflow-hidden rounded-md border border-line bg-surface font-sans shadow-lg ${
         above ? "bottom-full mb-1" : "top-full mt-1"
       }`}
     >
@@ -294,11 +355,14 @@ function Menu({ id, items, highlight, noMatch, onHighlight, onPick }: MenuProps)
               id={`${id}-${index}`}
               role="option"
               aria-selected={index === highlight}
-              onMouseMove={() => index !== highlight && onHighlight(index)}
+              // Only hovering moves the highlight: a drag passing over the
+              // menu on its way to other cells would otherwise change what
+              // leaving the cell saves.
+              onMouseMove={(event) =>
+                event.buttons === 0 && index !== highlight && onHighlight(index)
+              }
               onClick={() => onPick(item)}
-              className={`cursor-default truncate px-2 leading-7 ${
-                index === highlight ? "bg-field" : ""
-              }`}
+              className={`truncate px-2 leading-7 ${index === highlight ? "bg-field" : ""}`}
             >
               {item.kind === "create" ? item.label : item.value}
             </li>
