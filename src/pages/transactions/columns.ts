@@ -3,6 +3,7 @@ import type { EditableTransactionField, TransactionRow } from "../../db/queries/
 import {
   amountEditText,
   formatAmountValue,
+  parseAccount,
   parseAmount,
   parseCategory,
   parseCounterparty,
@@ -10,6 +11,7 @@ import {
   parseRemarks,
   type ParseResult,
 } from "./fields.ts";
+import type { MenuConfig } from "./menu.ts";
 
 /**
  * What a cell shows. `prefix` is shown but not edited, like the currency in
@@ -21,11 +23,20 @@ export type CellEditor = {
   field: EditableTransactionField;
   /** The text the input starts with. */
   editText: (row: TransactionRow) => string;
-  parse: (text: string, context: EditContext) => ParseResult<string | number | null>;
+  /**
+   * The value to store for the text, or why it can't be. `create` is set when
+   * the user picked the menu's create item.
+   */
+  parse: (
+    text: string,
+    context: EditContext & { create: boolean },
+  ) => ParseResult<string | number | null>;
+  /** Makes the cell a combobox: an input with a menu of options. */
+  menu?: (context: EditContext) => MenuConfig;
 };
 
-/** Data the parsers need from outside the row. */
-export type EditContext = { categories: ReadonlySet<string> };
+/** Data the editors need from outside the row. */
+export type EditContext = { categories: readonly string[]; accounts: readonly string[] };
 
 export type TransactionColumnMeta = {
   /** The column's CSS grid track. */
@@ -59,9 +70,14 @@ export const columns = helper.columns([
   helper.accessor("account_name", {
     header: "Account",
     meta: {
-      // Read-only until there's a picker: a typo would break the foreign key.
       track: "minmax(7rem, 1.2fr)",
       display: (row) => ({ text: row.account_name }),
+      editor: {
+        field: "account_name",
+        editText: (row) => row.account_name,
+        parse: (text, { accounts }) => parseAccount(text, accounts),
+        menu: ({ accounts }) => ({ options: accounts, noMatch: "No account found" }),
+      },
     },
   }),
   helper.accessor("counterparty", {
@@ -84,7 +100,12 @@ export const columns = helper.columns([
       editor: {
         field: "category",
         editText: (row) => row.category ?? "",
-        parse: (text, { categories }) => parseCategory(text, categories),
+        parse: (text, { categories, create }) => parseCategory(text, categories, create),
+        menu: ({ categories }) => ({
+          options: categories,
+          createLabel: (name) => `Create category “${name}”`,
+          noMatch: "No category found",
+        }),
       },
     },
   }),

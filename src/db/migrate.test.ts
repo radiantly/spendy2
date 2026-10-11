@@ -1,5 +1,6 @@
 import sqlite3InitModule, { type Database } from "@sqlite.org/sqlite-wasm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { configureConnection } from "./connection.ts";
 import { DatabaseTooNewError, migrate, migrationsFromFiles, type Migration } from "./migrate.ts";
 import { MIGRATIONS } from "./migrations.ts";
 
@@ -8,7 +9,7 @@ const sqlite3 = await sqlite3InitModule();
 let db: Database;
 beforeEach(() => {
   db = new sqlite3.oo1.DB(":memory:");
-  db.exec("PRAGMA foreign_keys = ON");
+  configureConnection(db);
 });
 afterEach(() => db.close());
 
@@ -194,6 +195,110 @@ describe("schema", () => {
     );
   });
 
+  describe("names ignore case", () => {
+    it("rejects a category that differs from another only in case", () => {
+      db.exec("INSERT INTO categories VALUES ('Groceries', NULL)");
+
+      expect(() => db.exec("INSERT INTO categories VALUES ('groceries', NULL)")).toThrow(
+        "UNIQUE constraint failed",
+      );
+    });
+
+    it("rejects an account that differs from another only in case", () => {
+      expect(() => db.exec("INSERT INTO accounts VALUES ('CHECKING', 'SGD')")).toThrow(
+        "UNIQUE constraint failed",
+      );
+    });
+
+    it("lets a transaction refer to a category in another case", () => {
+      db.exec("INSERT INTO categories VALUES ('Groceries', NULL)");
+
+      insertTransaction({ category: "GROCERIES", account_name: "Checking" });
+
+      expect(db.selectValue("SELECT count(*) FROM transactions")).toBe(1);
+    });
+
+    it("rejects a category that is its own parent in another case", () => {
+      expect(() => db.exec("INSERT INTO categories VALUES ('Food', 'food')")).toThrow(
+        "no_self_parent",
+      );
+    });
+
+    it("keeps a category still used by a transaction spelling it in another case", () => {
+      db.exec("INSERT INTO categories VALUES ('Groceries', NULL)");
+      insertTransaction({ category: "Groceries" });
+      insertTransaction({ seq: 2, id: "t2", category: "groceries" });
+
+      db.exec("UPDATE transactions SET category = NULL WHERE id = 't1'");
+
+      expect(db.selectValue("SELECT category FROM transactions WHERE id = 't2'")).toBe("groceries");
+      expect(db.selectValues("SELECT name FROM categories")).toEqual(["Groceries"]);
+    });
+
+    it("rejects a loop spelled in another case", () => {
+      db.exec("INSERT INTO categories VALUES ('Housing', NULL), ('Utilities', 'Housing')");
+
+      expect(() =>
+        db.exec("UPDATE categories SET parent = 'UTILITIES' WHERE name = 'Housing'"),
+      ).toThrow("A category can't be inside its own subcategory");
+    });
+  });
+
+  describe("category loops", () => {
+    const LOOP = "A category can't be inside its own subcategory";
+
+    beforeEach(() => {
+      db.exec(`
+        INSERT INTO categories (name, parent) VALUES
+          ('Housing', NULL), ('Utilities', 'Housing'), ('Power', 'Utilities'),
+          ('Groceries', NULL);
+      `);
+    });
+
+    const parentOf = (name: string) =>
+      db.selectValue("SELECT parent FROM categories WHERE name = ?", [name]);
+
+    it("rejects a loop of two", () => {
+      expect(() =>
+        db.exec("UPDATE categories SET parent = 'Utilities' WHERE name = 'Housing'"),
+      ).toThrow(LOOP);
+      expect(parentOf("Housing")).toBeNull();
+    });
+
+    it("rejects a loop of three", () => {
+      expect(() =>
+        db.exec("UPDATE categories SET parent = 'Power' WHERE name = 'Housing'"),
+      ).toThrow(LOOP);
+    });
+
+    it("rejects a loop made while foreign keys are off, e.g. during a migration", () => {
+      db.exec("PRAGMA foreign_keys = OFF");
+
+      expect(() =>
+        db.exec("INSERT INTO categories VALUES ('Bills', 'Fees'), ('Fees', 'Bills')"),
+      ).toThrow(LOOP);
+    });
+
+    it("allows moving a category elsewhere in the tree", () => {
+      db.exec("UPDATE categories SET parent = 'Housing' WHERE name = 'Power'");
+
+      expect(parentOf("Power")).toBe("Housing");
+    });
+
+    it("allows moving a subtree under an unrelated category", () => {
+      db.exec("UPDATE categories SET parent = 'Groceries' WHERE name = 'Housing'");
+
+      expect(parentOf("Housing")).toBe("Groceries");
+    });
+
+    it("allows renaming a category with a parent and subcategories", () => {
+      db.exec("UPDATE categories SET name = 'Bills' WHERE name = 'Utilities'");
+
+      expect(parentOf("Bills")).toBe("Housing");
+      expect(parentOf("Power")).toBe("Bills");
+    });
+  });
+
   it("rejects a transfer to the same account", () => {
     expect(() => insertTransaction({ transfer_account: "checking" })).toThrow("no_self_transfer");
   });
@@ -221,5 +326,128 @@ describe("schema", () => {
     db.exec("UPDATE accounts SET name = 'savings2' WHERE name = 'savings'");
 
     expect(db.selectValue("SELECT transfer_account FROM transactions")).toBe("savings2");
+  });
+
+  describe("unused categories", () => {
+    beforeEach(() => {
+      db.exec(`
+        INSERT INTO categories (name, parent) VALUES
+          ('Housing', NULL), ('Utilities', 'Housing'), ('Power', 'Utilities'),
+          ('Groceries', NULL), ('Dining out', NULL);
+      `);
+    });
+
+    const categories = () => db.selectValues("SELECT name FROM categories ORDER BY name");
+
+    it("deletes a category when its last transaction moves off it", () => {
+      insertTransaction({ category: "Groceries" });
+
+      db.exec("UPDATE transactions SET category = 'Dining out'");
+
+      expect(categories()).not.toContain("Groceries");
+    });
+
+    it("deletes a category when its last transaction's category is cleared", () => {
+      insertTransaction({ category: "Groceries" });
+
+      db.exec("UPDATE transactions SET category = NULL");
+
+      expect(categories()).not.toContain("Groceries");
+    });
+
+    it("keeps a category another transaction still uses", () => {
+      insertTransaction({ category: "Groceries" });
+      insertTransaction({ seq: 2, id: "t2", category: "Groceries" });
+
+      db.exec("UPDATE transactions SET category = 'Dining out' WHERE id = 't1'");
+
+      expect(categories()).toContain("Groceries");
+    });
+
+    it("deletes a category when its last transaction is deleted", () => {
+      insertTransaction({ category: "Groceries" });
+
+      db.exec("DELETE FROM transactions");
+
+      expect(categories()).not.toContain("Groceries");
+    });
+
+    it("deletes a category whose last transaction goes with its source", () => {
+      insertTransaction({ category: "Groceries" });
+
+      db.exec("DELETE FROM sources");
+
+      expect(categories()).not.toContain("Groceries");
+    });
+
+    it("leaves other unused categories alone", () => {
+      insertTransaction({ category: "Groceries" });
+
+      db.exec("UPDATE transactions SET category = NULL");
+
+      expect(categories()).toContain("Dining out");
+    });
+
+    it("keeps a category that has subcategories", () => {
+      insertTransaction({ category: "Utilities" });
+      insertTransaction({ seq: 2, id: "t2", category: "Power" });
+
+      db.exec("UPDATE transactions SET category = NULL WHERE id = 't1'");
+
+      expect(categories()).toContain("Utilities");
+    });
+
+    it("deletes an unused parent with its last subcategory", () => {
+      insertTransaction({ category: "Utilities" });
+      db.exec("DELETE FROM categories WHERE name = 'Power'");
+
+      db.exec("UPDATE transactions SET category = NULL");
+
+      expect(categories()).not.toContain("Utilities");
+      expect(categories()).not.toContain("Housing");
+    });
+
+    it("keeps a parent that has transactions of its own", () => {
+      insertTransaction({ category: "Utilities" });
+      db.exec("DELETE FROM categories WHERE name = 'Power'");
+      insertTransaction({ seq: 2, id: "t2", category: "Housing" });
+
+      db.exec("UPDATE transactions SET category = NULL WHERE id = 't1'");
+
+      expect(categories()).not.toContain("Utilities");
+      expect(categories()).toContain("Housing");
+    });
+
+    it("deletes unused ancestors at any depth", () => {
+      insertTransaction({ category: "Power" });
+
+      db.exec("UPDATE transactions SET category = NULL");
+
+      expect(categories()).toEqual(["Dining out", "Groceries"]);
+    });
+
+    it("deletes a parent left unused when its subcategory moves elsewhere", () => {
+      insertTransaction({ category: "Utilities" });
+      db.exec("DELETE FROM categories WHERE name = 'Power'");
+
+      db.exec("UPDATE categories SET parent = 'Groceries' WHERE name = 'Utilities'");
+
+      expect(categories()).not.toContain("Housing");
+    });
+
+    it("deletes an unused category's unused parent when it's deleted", () => {
+      db.exec("DELETE FROM categories WHERE name = 'Power'");
+
+      expect(categories()).not.toContain("Utilities");
+    });
+
+    it("keeps a renamed category's transactions on it", () => {
+      insertTransaction({ category: "Groceries" });
+
+      db.exec("UPDATE categories SET name = 'Food' WHERE name = 'Groceries'");
+
+      expect(categories()).toContain("Food");
+      expect(db.selectValue("SELECT category FROM transactions")).toBe("Food");
+    });
   });
 });

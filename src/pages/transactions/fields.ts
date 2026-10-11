@@ -98,12 +98,39 @@ export function parseRemarks(text: string): ParseResult<string | null> {
   return ok(value === "" ? null : value);
 }
 
-/** Empty clears the category; otherwise it must be one of `categories`. */
+/**
+ * The name in `names` that `text` spells, ignoring case and surrounding
+ * spaces, but preferring an exact match: SQLite's NOCASE only folds A-Z, so
+ * names like "épicerie" and "Épicerie" can both exist.
+ */
+export function findName(names: readonly string[], text: string): string | undefined {
+  const value = text.trim();
+  const wanted = value.toLowerCase();
+  return (
+    names.find((name) => name === value) ?? names.find((name) => name.toLowerCase() === wanted)
+  );
+}
+
+/**
+ * Empty clears the category. Otherwise it must name one of `categories`
+ * (ignoring case), or, with `create`, a new category is accepted as typed.
+ */
 export function parseCategory(
   text: string,
-  categories: ReadonlySet<string>,
+  categories: readonly string[],
+  create = false,
 ): ParseResult<string | null> {
   const value = text.trim();
   if (value === "") return ok(null);
-  return categories.has(value) ? ok(value) : fail(`There's no category named “${value}”`);
+  const existing = findName(categories, value);
+  if (existing !== undefined) return ok(existing);
+  return create ? ok(value) : fail(`There's no category named “${value}”`);
+}
+
+/** Must name one of `accounts`, ignoring case. */
+export function parseAccount(text: string, accounts: readonly string[]): ParseResult<string> {
+  const value = text.trim();
+  if (value === "") return fail("Choose an account");
+  const existing = findName(accounts, value);
+  return existing !== undefined ? ok(existing) : fail(`There's no account named “${value}”`);
 }

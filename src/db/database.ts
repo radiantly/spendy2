@@ -7,7 +7,7 @@ import {
 } from "../api/database.ts";
 import type { Session } from "../lib/session.ts";
 import { connect, transfer, type Connection } from "./rpc.ts";
-import type { DatabaseApi } from "./worker.ts";
+import type { DatabaseApi, Statement } from "./worker.ts";
 
 export class DatabaseOpenError extends Error {
   override name = "DatabaseOpenError";
@@ -51,6 +51,11 @@ export class Database {
 
   query(sql: string, bind?: BindingSpec) {
     return this.#connection.remote.query(sql, bind);
+  }
+
+  /** Runs the statements in one transaction: all of them, or none if one fails. */
+  batch(statements: Statement[]) {
+    return this.#connection.remote.batch(statements);
   }
 
   /**

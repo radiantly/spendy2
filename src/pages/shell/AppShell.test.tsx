@@ -3,6 +3,7 @@ import { page, userEvent } from "vitest/browser";
 import toast from "react-hot-toast";
 import { downloadDatabase, uploadDatabase } from "../../api/database.ts";
 import { Database, openDatabase } from "../../db/database.ts";
+import { LIST_CATEGORY_NAMES } from "../../db/queries/transactions.ts";
 import { ClosedError } from "../../db/rpc.ts";
 import { deriveKek } from "../../lib/kek.ts";
 import { saveSession, type Session } from "../../lib/session.ts";
@@ -44,6 +45,7 @@ async function queryUploaded(blob: Uint8Array<ArrayBuffer>, sql: string) {
 
 const TWO_TRANSACTIONS = `
   INSERT INTO accounts VALUES ('Everyday Checking', 'USD');
+  INSERT INTO accounts VALUES ('Savings', 'USD');
   INSERT INTO sources (hash, remarks) VALUES ('h1', 'statement.csv');
   INSERT INTO categories VALUES ('Groceries', NULL);
   INSERT INTO transactions (seq, id, source, account_name, amount, currency, counterparty, category, naive_date)
@@ -70,10 +72,10 @@ async function loggedIn(stored: Uint8Array<ArrayBuffer> | null) {
 const saveButton = () => page.getByRole("button", { name: /^(Save|Saving…)$/ });
 
 /**
- * Holds back the next UPDATE sent to the database until it's released (and
- * then run) or failed (and never run). `release` resolves once it has run.
+ * Holds back the next query matching `match` until it's released (and then
+ * run) or failed (and never run). `release` resolves once it has run.
  */
-function holdNextUpdate() {
+function holdNextQuery(match: (sql: string) => boolean) {
   const query = Database.prototype.query;
   let settle!: (outcome: "release" | "fail") => void;
   const held = new Promise<"release" | "fail">((resolve) => (settle = resolve));
@@ -83,7 +85,7 @@ function holdNextUpdate() {
     sql,
     bind,
   ) {
-    if (!sql.trimStart().startsWith("UPDATE")) return query.call(this, sql, bind);
+    if (!match(sql)) return query.call(this, sql, bind);
     spy.mockRestore();
     const result = held.then((outcome) => {
       if (outcome === "fail") throw new Error("disk on fire");
@@ -99,6 +101,18 @@ function holdNextUpdate() {
     },
     fail: () => settle("fail"),
   };
+}
+
+const holdNextUpdate = () => holdNextQuery((sql) => sql.trimStart().startsWith("UPDATE"));
+
+const ACCOUNT = 1;
+const CATEGORY = 3;
+
+/** The cell in `column` (0-based) of the row showing `text`, once it's shown. */
+async function cellOf(text: string, column: number) {
+  const cell = page.getByRole("row").filter({ hasText: text }).getByRole("cell").nth(column);
+  await expect.element(cell).toBeVisible();
+  return cell;
 }
 
 async function editCounterparty(from: string, to: string) {
@@ -261,16 +275,129 @@ describe("TransactionsPage", () => {
   it("changes the category to an existing one", async () => {
     await loggedIn(await storedDatabase(TWO_TRANSACTIONS));
     await renderApp("/transactions");
-    await expect.element(page.getByText("Café Lumen")).toBeVisible();
-    const cafeRow = page.getByText("Café Lumen").element().closest('[role="row"]')!;
-    const category = cafeRow.children[3] as HTMLElement;
+    const category = await cellOf("Café Lumen", CATEGORY);
 
-    await userEvent.click(page.elementLocator(category));
-    await page.getByRole("textbox").fill("Groceries");
+    await userEvent.click(category);
+    await page.getByRole("combobox").fill("groc");
     await userEvent.keyboard("{Enter}");
 
-    await expect.element(page.elementLocator(category)).toHaveTextContent("Groceries");
+    await expect.element(category).toHaveTextContent("Groceries");
     await expect.element(saveButton()).toBeEnabled();
+  });
+
+  it("creates a new category along with the edit, and offers it from then on", async () => {
+    await loggedIn(await storedDatabase(TWO_TRANSACTIONS));
+    await renderApp("/transactions");
+    const cafe = await cellOf("Café Lumen", CATEGORY);
+
+    await userEvent.click(cafe);
+    await page.getByRole("combobox").fill("Coffee");
+    await userEvent.click(page.getByRole("option", { name: "Create category “Coffee”" }));
+
+    await expect.element(cafe).toHaveTextContent("Coffee");
+    await userEvent.click(await cellOf("Corner Market", CATEGORY));
+    await page.getByRole("combobox").fill("cof");
+    await expect.element(page.getByRole("option", { name: "Coffee", exact: true })).toBeVisible();
+    await userEvent.keyboard("{Escape}");
+
+    await userEvent.click(saveButton());
+    await expect.element(saveButton()).not.toBeInTheDocument();
+    const [, blob] = vi.mocked(uploadDatabase).mock.calls[0]!;
+    expect(
+      await queryUploaded(
+        blob,
+        `SELECT c.name, c.parent, t.id FROM categories c
+         LEFT JOIN transactions t ON t.category = c.name WHERE c.name = 'Coffee'`,
+      ),
+    ).toEqual([{ name: "Coffee", parent: null, id: "older" }]);
+  });
+
+  it("stops offering a category once no transaction uses it", async () => {
+    await loggedIn(await storedDatabase(TWO_TRANSACTIONS));
+    await renderApp("/transactions");
+    const market = await cellOf("Corner Market", CATEGORY);
+
+    await userEvent.click(market);
+    await page.getByRole("combobox").fill("");
+    await userEvent.keyboard("{Enter}");
+    await expect.poll(() => market.element().textContent).toBe("");
+
+    await userEvent.click(await cellOf("Café Lumen", CATEGORY));
+    await page.getByRole("combobox").fill("Groc");
+    await expect
+      .element(page.getByRole("option", { name: "Create category “Groc”" }))
+      .toBeVisible();
+    expect(page.getByRole("option", { name: "Groceries" }).query()).toBeNull();
+    await userEvent.keyboard("{Escape}");
+
+    await userEvent.click(saveButton());
+    await expect.element(saveButton()).not.toBeInTheDocument();
+    const [, blob] = vi.mocked(uploadDatabase).mock.calls[0]!;
+    expect(await queryUploaded(blob, "SELECT name FROM categories")).toEqual([]);
+  });
+
+  it("re-creates a category deleted while the menus were behind", async () => {
+    await loggedIn(await storedDatabase(TWO_TRANSACTIONS));
+    await renderApp("/transactions");
+    const market = await cellOf("Corner Market", CATEGORY);
+    const cafe = await cellOf("Café Lumen", CATEGORY);
+    // The menus keep listing Groceries after it's deleted.
+    const refresh = holdNextQuery((sql) => sql === LIST_CATEGORY_NAMES);
+    const showError = vi.spyOn(toast, "error");
+
+    await userEvent.click(market);
+    await page.getByRole("combobox").fill("");
+    await userEvent.keyboard("{Enter}");
+    await userEvent.click(cafe);
+    await userEvent.click(page.getByRole("option", { name: "Groceries" }));
+    await refresh.release();
+
+    await expect.element(cafe).toHaveTextContent("Groceries");
+    await userEvent.click(saveButton());
+    await expect.element(saveButton()).not.toBeInTheDocument();
+    expect(showError).not.toHaveBeenCalled();
+    const [, blob] = vi.mocked(uploadDatabase).mock.calls[0]!;
+    expect(await queryUploaded(blob, "SELECT id, category FROM transactions ORDER BY id")).toEqual([
+      { id: "newer", category: null },
+      { id: "older", category: "Groceries" },
+    ]);
+  });
+
+  it("forgets a new category whose edit couldn't be written", async () => {
+    await loggedIn(await storedDatabase(TWO_TRANSACTIONS));
+    await renderApp("/transactions");
+    vi.spyOn(Database.prototype, "batch").mockRejectedValueOnce(new Error("disk on fire"));
+    const cafe = await cellOf("Café Lumen", CATEGORY);
+
+    await userEvent.click(cafe);
+    await page.getByRole("combobox").fill("Coffee");
+    await userEvent.keyboard("{Enter}");
+
+    await expect
+      .element(page.getByText("Couldn't change that transaction: disk on fire"))
+      .toBeVisible();
+    await expect.poll(() => cafe.element().textContent).toBe("");
+    await userEvent.click(cafe);
+    await page.getByRole("combobox").fill("Coffee");
+    await expect
+      .element(page.getByRole("option", { name: "Create category “Coffee”" }))
+      .toBeVisible();
+  });
+
+  it("changes the account to another existing one", async () => {
+    await loggedIn(await storedDatabase(TWO_TRANSACTIONS));
+    await renderApp("/transactions");
+
+    await userEvent.click(await cellOf("Corner Market", ACCOUNT));
+    await page.getByRole("combobox").fill("sav");
+    await userEvent.keyboard("{Enter}");
+    await userEvent.click(saveButton());
+
+    await expect.element(saveButton()).not.toBeInTheDocument();
+    const [, blob] = vi.mocked(uploadDatabase).mock.calls[0]!;
+    expect(
+      await queryUploaded(blob, "SELECT account_name FROM transactions WHERE id = 'newer'"),
+    ).toEqual([{ account_name: "Savings" }]);
   });
 
   it("marks an edit unsaved before it's written", async () => {

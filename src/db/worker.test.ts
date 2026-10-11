@@ -31,6 +31,7 @@ describe("database worker", () => {
 
     expect(await db.query("PRAGMA user_version")).toEqual([{ user_version: MIGRATIONS.length }]);
     expect(await db.query("PRAGMA foreign_keys")).toEqual([{ foreign_keys: 1 }]);
+    expect(await db.query("PRAGMA recursive_triggers")).toEqual([{ recursive_triggers: 1 }]);
   });
 
   it("reopens an exported database with its data", async () => {
@@ -96,5 +97,35 @@ describe("database worker", () => {
     const error = await rejection(db.query("SELECT * FROM missing"));
 
     expect((error as Error).message).toContain("no such table: missing");
+  });
+
+  it("runs a batch in one transaction", async () => {
+    const db = startWorker();
+    await db.open(null, await deriveKek(EXPORT_KEY));
+
+    await db.batch([
+      { sql: "INSERT INTO accounts VALUES (?, ?)", bind: ["checking", "USD"] },
+      { sql: "INSERT INTO accounts VALUES (?, ?)", bind: ["savings", "USD"] },
+    ]);
+
+    expect(await db.query("SELECT name FROM accounts ORDER BY name")).toEqual([
+      { name: "checking" },
+      { name: "savings" },
+    ]);
+  });
+
+  it("rolls back the whole batch when a statement fails", async () => {
+    const db = startWorker();
+    await db.open(null, await deriveKek(EXPORT_KEY));
+
+    const error = await rejection(
+      db.batch([
+        { sql: "INSERT INTO accounts VALUES (?, ?)", bind: ["checking", "USD"] },
+        { sql: "INSERT INTO accounts VALUES (?, ?)", bind: ["checking", "EUR"] },
+      ]),
+    );
+
+    expect((error as Error).message).toContain("UNIQUE constraint failed");
+    expect(await db.query("SELECT name FROM accounts")).toEqual([]);
   });
 });

@@ -5,11 +5,14 @@
  */
 import sqlite3InitModule, { type BindingSpec, type Database } from "@sqlite.org/sqlite-wasm";
 import { decryptDatabase, encryptDatabase } from "./blob.ts";
+import { configureConnection } from "./connection.ts";
 import { migrate } from "./migrate.ts";
 import { MIGRATIONS } from "./migrations.ts";
 import { expose, transfer, type WorkerScope } from "./rpc.ts";
 
 const sqlite3Promise = sqlite3InitModule();
+
+export type Statement = { sql: string; bind?: BindingSpec };
 
 let db: Database | undefined;
 let kek: CryptoKey | undefined;
@@ -49,7 +52,7 @@ const api = {
         if (integrity !== "ok") throw new Error(`The database is corrupt: ${String(integrity)}`);
       }
       migrate(next, MIGRATIONS);
-      next.exec("PRAGMA foreign_keys = ON");
+      configureConnection(next);
     } catch (error) {
       next.close();
       throw error;
@@ -73,6 +76,14 @@ const api = {
   /** Runs one statement and returns its rows as objects. */
   async query(sql: string, bind?: BindingSpec) {
     return openDb().selectObjects(sql, bind);
+  },
+
+  /** Runs the statements in one transaction: all of them, or none if one fails. */
+  async batch(statements: Statement[]) {
+    const current = openDb();
+    current.transaction(() => {
+      for (const { sql, bind } of statements) current.exec({ sql, bind });
+    });
   },
 
   async close() {

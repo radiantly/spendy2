@@ -8,6 +8,7 @@ import path from "path";
 import { confirm, intro, isCancel, outro, spinner, text } from "@clack/prompts";
 import sqlite3InitModule from "@sqlite.org/sqlite-wasm";
 import { encryptDatabase } from "../src/db/blob.ts";
+import { configureConnection } from "../src/db/connection.ts";
 import { migrate, migrationsFromFiles } from "../src/db/migrate.ts";
 import { deriveKek } from "../src/lib/kek.ts";
 import { fail, onCancel, readEnv } from "./lib.ts";
@@ -75,7 +76,7 @@ const migrations = migrationsFromFiles(
   ),
 );
 migrate(db, migrations);
-db.exec("PRAGMA foreign_keys = ON");
+configureConnection(db);
 generateTestData(db, count);
 const bytes = sqlite3.capi.sqlite3_js_db_export(db);
 db.close();

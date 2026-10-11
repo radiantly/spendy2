@@ -36,11 +36,19 @@ export const GET_TRANSACTION = `
   WHERE id = ?
 `;
 
+/** Alphabetical, ignoring case (the names are `COLLATE NOCASE`). */
 export const LIST_CATEGORY_NAMES = `SELECT name FROM categories ORDER BY name`;
+
+/** Alphabetical, ignoring case (the names are `COLLATE NOCASE`). */
+export const LIST_ACCOUNT_NAMES = `SELECT name FROM accounts ORDER BY name`;
+
+/** A top-level category, unless one with that name (in any case) exists. Bind `[name]`. */
+export const INSERT_CATEGORY = `INSERT INTO categories (name) VALUES (?) ON CONFLICT DO NOTHING`;
 
 /** The columns an edit may change, each with its UPDATE. Bind `[value, id]`. */
 export const UPDATE_TRANSACTION = {
   naive_date: `UPDATE transactions SET naive_date = ? WHERE id = ?`,
+  account_name: `UPDATE transactions SET account_name = ? WHERE id = ?`,
   counterparty: `UPDATE transactions SET counterparty = ? WHERE id = ?`,
   category: `UPDATE transactions SET category = ? WHERE id = ?`,
   amount: `UPDATE transactions SET amount = ? WHERE id = ?`,

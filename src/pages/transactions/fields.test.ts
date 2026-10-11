@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   amountEditText,
+  findName,
   formatAmount,
+  parseAccount,
   parseAmount,
   parseCategory,
   parseCounterparty,
@@ -106,11 +108,26 @@ describe("parseRemarks", () => {
   });
 });
 
+describe("findName", () => {
+  it("finds a name typed in another case", () => {
+    expect(findName(["Groceries"], " groceries ")).toBe("Groceries");
+  });
+
+  // SQLite's NOCASE only folds A-Z, so these can both exist.
+  it("prefers the exact name when several differ only in case", () => {
+    expect(findName(["épicerie", "Épicerie"], "Épicerie")).toBe("Épicerie");
+  });
+});
+
 describe("parseCategory", () => {
-  const categories = new Set(["Groceries", "Dining out"]);
+  const categories = ["Dining out", "Groceries"];
 
   it("accepts an existing category", () => {
     expect(parseCategory(" Groceries ", categories)).toEqual({ ok: true, value: "Groceries" });
+  });
+
+  it("uses the existing spelling of a category typed in other case", () => {
+    expect(parseCategory("groceries", categories)).toEqual({ ok: true, value: "Groceries" });
   });
 
   it("clears an empty category", () => {
@@ -124,8 +141,33 @@ describe("parseCategory", () => {
     });
   });
 
-  // Quirk worth knowing: matching is exact, so different casing is rejected.
-  it("rejects a category with different casing", () => {
-    expect(parseCategory("groceries", categories).ok).toBe(false);
+  it("accepts a new category when creating", () => {
+    expect(parseCategory(" Rent ", categories, true)).toEqual({ ok: true, value: "Rent" });
+  });
+
+  it("uses an existing category even when creating", () => {
+    expect(parseCategory("GROCERIES", categories, true)).toEqual({
+      ok: true,
+      value: "Groceries",
+    });
+  });
+});
+
+describe("parseAccount", () => {
+  const accounts = ["Everyday Checking", "Savings"];
+
+  it("accepts an existing account, in any case", () => {
+    expect(parseAccount(" savings ", accounts)).toEqual({ ok: true, value: "Savings" });
+  });
+
+  it("rejects an unknown account", () => {
+    expect(parseAccount("fdsafjsdoif", accounts)).toEqual({
+      ok: false,
+      error: "There's no account named “fdsafjsdoif”",
+    });
+  });
+
+  it("rejects an empty account", () => {
+    expect(parseAccount("  ", accounts)).toEqual({ ok: false, error: "Choose an account" });
   });
 });

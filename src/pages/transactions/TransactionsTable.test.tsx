@@ -2,12 +2,13 @@ import type { ComponentProps } from "react";
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { page, userEvent, type Locator } from "vitest/browser";
 import { render } from "vitest-browser-react";
-import { Toaster } from "react-hot-toast";
+import toast, { Toaster } from "react-hot-toast";
 import type { TransactionRow } from "../../db/queries/transactions.ts";
 import TransactionsTable, { ROW_HEIGHT } from "./TransactionsTable.tsx";
 
 const ROW_COUNT = 100_000;
-const CATEGORIES = new Set(["Groceries", "Dining out"]);
+const CATEGORIES = ["Dining out", "Groceries"];
+const ACCOUNTS = ["Everyday Checking", "Rewards Credit Card", "Savings"];
 
 function makeRows(count: number): TransactionRow[] {
   return Array.from({ length: count }, (_, i) => ({
@@ -27,17 +28,28 @@ let onCommit: Mock<ComponentProps<typeof TransactionsTable>["onCommit"]>;
 
 beforeEach(async () => {
   onCommit = vi.fn();
+  // Toasts live in a global store; one left from an earlier test would cover the cells.
+  toast.remove();
   await page.viewport(1280, 800);
   window.scrollTo(0, 0);
 });
 
-async function renderTable() {
-  return render(
+function table(categories = CATEGORIES) {
+  return (
     <>
-      <TransactionsTable rows={rows} categories={CATEGORIES} onCommit={onCommit} />
+      <TransactionsTable
+        rows={rows}
+        categories={categories}
+        accounts={ACCOUNTS}
+        onCommit={onCommit}
+      />
       <Toaster />
-    </>,
+    </>
   );
+}
+
+async function renderTable() {
+  return render(table());
 }
 
 /** Presses the mouse on the left half of character `index` of an element's text. */
@@ -54,6 +66,21 @@ async function pressAtCharacter(locator: Locator, index: number) {
 }
 
 const input = () => page.getByRole("textbox");
+const combobox = () => page.getByRole("combobox");
+const options = () =>
+  page
+    .getByRole("option")
+    .elements()
+    .map((option) => option.textContent);
+const highlighted = () => page.getByRole("option", { selected: true });
+
+/** The cell in `column` (0-based) of the row showing `text`. */
+function cellOf(text: string, column: number) {
+  const row = page.getByText(text, { exact: true }).element().closest('[role="row"]')!;
+  return page.elementLocator(row.children[column]!);
+}
+const ACCOUNT = 1;
+const CATEGORY = 3;
 const renderedRows = () =>
   document.querySelectorAll('[role="rowgroup"] + [role="rowgroup"] > [role="row"]');
 
@@ -226,19 +253,6 @@ describe("TransactionsTable", () => {
       expect(onCommit).not.toHaveBeenCalled();
     });
 
-    it("rejects a category that doesn't exist", async () => {
-      await renderTable();
-      const category = page.getByText("Groceries").first();
-      await pressAtCharacter(category, 0);
-
-      await input().fill("Rent");
-      await userEvent.keyboard("{Enter}");
-
-      await expect
-        .element(page.getByRole("alert"))
-        .toHaveTextContent("There's no category named “Rent”");
-    });
-
     it("commits the open edit when another cell is pressed", async () => {
       await renderTable();
       await pressAtCharacter(page.getByText("Corner Market"), 0);
@@ -261,14 +275,6 @@ describe("TransactionsTable", () => {
       expect(input().element()).toHaveProperty("value", "Corner Shop");
     });
 
-    it("doesn't edit read-only cells", async () => {
-      await renderTable();
-
-      await userEvent.click(page.getByText("Everyday Checking").first());
-
-      await expect.element(input()).not.toBeInTheDocument();
-    });
-
     it("starts editing from the keyboard with Enter, caret at the end", async () => {
       await renderTable();
       const cell = page
@@ -289,6 +295,284 @@ describe("TransactionsTable", () => {
       await userEvent.keyboard("{Enter}");
 
       expect(document.activeElement?.textContent).toBe("Corner Market");
+    });
+  });
+
+  describe("combobox", () => {
+    it("opens a menu of every option, with the current one highlighted", async () => {
+      await renderTable();
+
+      await userEvent.click(cellOf("Corner Market", ACCOUNT));
+
+      await expect.element(combobox()).toHaveFocus();
+      await expect.element(combobox()).toHaveAttribute("aria-expanded", "true");
+      expect(options()).toEqual(ACCOUNTS);
+      await expect.element(highlighted()).toHaveTextContent("Everyday Checking");
+      expect(combobox().element().getAttribute("aria-activedescendant")).toBe(
+        highlighted().element().id,
+      );
+    });
+
+    it("filters the options as the user types, ignoring case", async () => {
+      await renderTable();
+      await userEvent.click(cellOf("Corner Market", ACCOUNT));
+
+      await combobox().fill("CARD");
+
+      expect(options()).toEqual(["Rewards Credit Card"]);
+      await expect.element(highlighted()).toHaveTextContent("Rewards Credit Card");
+    });
+
+    it("picks the highlighted option on Enter", async () => {
+      await renderTable();
+      await userEvent.click(cellOf("Corner Market", ACCOUNT));
+
+      await combobox().fill("sav");
+      await userEvent.keyboard("{Enter}");
+
+      expect(onCommit).toHaveBeenCalledWith(0, "account_name", "Savings");
+      await expect.element(combobox()).not.toBeInTheDocument();
+    });
+
+    it("moves the highlight with the arrow keys", async () => {
+      await renderTable();
+      await userEvent.click(cellOf("Corner Market", ACCOUNT));
+
+      await userEvent.keyboard("{ArrowDown}{ArrowDown}{ArrowDown}{ArrowUp}");
+
+      await expect.element(highlighted()).toHaveTextContent("Rewards Credit Card");
+      await userEvent.keyboard("{Enter}");
+      expect(onCommit).toHaveBeenCalledWith(0, "account_name", "Rewards Credit Card");
+    });
+
+    it("picks an option with the mouse", async () => {
+      await renderTable();
+      await userEvent.click(cellOf("Corner Market", ACCOUNT));
+
+      await userEvent.click(page.getByRole("option", { name: "Savings" }));
+
+      expect(onCommit).toHaveBeenCalledWith(0, "account_name", "Savings");
+      await expect.element(combobox()).not.toBeInTheDocument();
+    });
+
+    it("says when no account matches, and doesn't save on Enter", async () => {
+      await renderTable();
+      await userEvent.click(cellOf("Corner Market", ACCOUNT));
+
+      await combobox().fill("fdsafjsdoif");
+      await userEvent.keyboard("{Enter}");
+
+      await expect.element(page.getByText("No account found")).toBeVisible();
+      await expect.element(combobox()).toHaveAttribute("aria-expanded", "false");
+      await expect.element(combobox()).toHaveFocus();
+      expect(onCommit).not.toHaveBeenCalled();
+    });
+
+    it("saves an exact match when leaving the cell, in the option's own case", async () => {
+      await renderTable();
+      await userEvent.click(cellOf("Corner Market", ACCOUNT));
+
+      await combobox().fill("savings");
+      combobox().element().blur();
+
+      expect(onCommit).toHaveBeenCalledWith(0, "account_name", "Savings");
+    });
+
+    it("saves the highlighted account when leaving the cell", async () => {
+      await renderTable();
+      await userEvent.click(cellOf("Corner Market", ACCOUNT));
+
+      await combobox().fill("Sav");
+      combobox().element().blur();
+
+      expect(onCommit).toHaveBeenCalledWith(0, "account_name", "Savings");
+    });
+
+    it("saves an option picked with the arrow keys when leaving the cell", async () => {
+      await renderTable();
+      await userEvent.click(cellOf("Corner Market", ACCOUNT));
+
+      await userEvent.keyboard("{ArrowDown}");
+      combobox().element().blur();
+
+      expect(onCommit).toHaveBeenCalledWith(0, "account_name", "Rewards Credit Card");
+    });
+
+    it("undoes an account that names no option when leaving the cell", async () => {
+      await renderTable();
+      await userEvent.click(cellOf("Corner Market", ACCOUNT));
+
+      await combobox().fill("fdsafjsdoif");
+      combobox().element().blur();
+
+      await expect
+        .element(page.getByText("There's no account named “fdsafjsdoif”. The change was undone."))
+        .toBeVisible();
+      expect(onCommit).not.toHaveBeenCalled();
+    });
+
+    it("saves the highlighted existing category when leaving the cell", async () => {
+      await renderTable();
+      await userEvent.click(cellOf("Shop 1", CATEGORY));
+
+      await combobox().fill("gro");
+      combobox().element().blur();
+
+      expect(onCommit).toHaveBeenCalledWith(1, "category", "Groceries");
+    });
+
+    it("doesn't create a category highlighted with the arrow keys when leaving the cell", async () => {
+      await renderTable();
+      await userEvent.click(cellOf("Shop 1", CATEGORY));
+
+      await combobox().fill("gro");
+      await userEvent.keyboard("{ArrowDown}");
+      await expect.element(highlighted()).toHaveTextContent("Create category “gro”");
+      combobox().element().blur();
+
+      await expect
+        .element(page.getByText("There's no category named “gro”. The change was undone."))
+        .toBeVisible();
+      expect(onCommit).not.toHaveBeenCalled();
+    });
+
+    it("offers to create a category that doesn't exist", async () => {
+      await renderTable();
+      await userEvent.click(cellOf("Corner Market", CATEGORY));
+
+      await combobox().fill("Pets");
+
+      expect(options()).toEqual(["Create category “Pets”"]);
+      await userEvent.keyboard("{Enter}");
+      expect(onCommit).toHaveBeenCalledWith(0, "category", "Pets");
+    });
+
+    it("picks the first matching category over creating one", async () => {
+      await renderTable();
+      await userEvent.click(cellOf("Shop 1", CATEGORY));
+
+      await combobox().fill("gro");
+
+      expect(options()).toEqual(["Groceries", "Create category “gro”"]);
+      await userEvent.keyboard("{Enter}");
+      expect(onCommit).toHaveBeenCalledWith(1, "category", "Groceries");
+    });
+
+    it("creates the category when its item is picked with the mouse", async () => {
+      await renderTable();
+      await userEvent.click(cellOf("Shop 1", CATEGORY));
+
+      await combobox().fill("gro");
+      await userEvent.click(page.getByRole("option", { name: "Create category “gro”" }));
+
+      expect(onCommit).toHaveBeenCalledWith(1, "category", "gro");
+    });
+
+    it("doesn't create a category when leaving the cell", async () => {
+      await renderTable();
+      await userEvent.click(cellOf("Shop 1", CATEGORY));
+
+      await combobox().fill("Pets");
+      combobox().element().blur();
+
+      await expect
+        .element(page.getByText("There's no category named “Pets”. The change was undone."))
+        .toBeVisible();
+      expect(onCommit).not.toHaveBeenCalled();
+    });
+
+    it("clears the category with empty text and Enter", async () => {
+      await renderTable();
+      await userEvent.click(cellOf("Corner Market", CATEGORY));
+
+      await combobox().fill("");
+      await expect.element(highlighted()).not.toBeInTheDocument();
+      await userEvent.keyboard("{Enter}");
+
+      expect(onCommit).toHaveBeenCalledWith(0, "category", null);
+    });
+
+    it("shows an empty account's error instead of the menu", async () => {
+      await renderTable();
+      await userEvent.click(cellOf("Corner Market", ACCOUNT));
+
+      await combobox().fill("");
+      await userEvent.keyboard("{Enter}");
+
+      await expect.element(page.getByRole("alert")).toHaveTextContent("Choose an account");
+      await expect.element(page.getByRole("listbox")).not.toBeInTheDocument();
+      await combobox().fill("S");
+      await expect.element(page.getByRole("listbox")).toBeVisible();
+    });
+
+    describe("when the options change while the menu is open", () => {
+      it("keeps the same option highlighted when one is added above it", async () => {
+        const screen = await renderTable();
+        await userEvent.click(cellOf("Corner Market", CATEGORY));
+
+        await screen.rerender(table(["Coffee", ...CATEGORIES]));
+
+        await expect.element(highlighted()).toHaveTextContent("Groceries");
+        await userEvent.keyboard("{Enter}");
+        expect(onCommit).not.toHaveBeenCalled();
+      });
+
+      it("keeps the same option highlighted when one above it is removed", async () => {
+        const screen = await renderTable();
+        await userEvent.click(cellOf("Corner Market", CATEGORY));
+
+        await screen.rerender(table(["Groceries"]));
+
+        await expect.element(highlighted()).toHaveTextContent("Groceries");
+        await userEvent.keyboard("{Enter}");
+        expect(onCommit).not.toHaveBeenCalled();
+      });
+
+      it("falls back to the default highlight when the highlighted option is removed", async () => {
+        const screen = await renderTable();
+        await userEvent.click(cellOf("Shop 1", CATEGORY));
+        await combobox().fill("i");
+        await userEvent.keyboard("{ArrowDown}");
+        await expect.element(highlighted()).toHaveTextContent("Groceries");
+
+        await screen.rerender(table(["Dining out"]));
+
+        // The first match, not whatever is now second (the create item).
+        await expect.element(highlighted()).toHaveTextContent("Dining out");
+      });
+    });
+
+    it("opens the menu above a cell near the bottom of the window", async () => {
+      await renderTable();
+      const lastVisible = [...renderedRows()]
+        .filter((row) => row.getBoundingClientRect().bottom <= window.innerHeight)
+        .at(-1)!;
+      const cell = page.elementLocator(lastVisible.children[ACCOUNT]!);
+
+      await userEvent.click(cell);
+
+      const menu = page.getByRole("listbox").element().parentElement!.getBoundingClientRect();
+      expect(menu.bottom).toBeLessThanOrEqual(cell.element().getBoundingClientRect().top);
+    });
+
+    it("keeps the highlighted option scrolled into view", async () => {
+      const many = Array.from({ length: 30 }, (_, i) => `Category ${String(i).padStart(2, "0")}`);
+      await render(
+        <TransactionsTable
+          rows={rows.slice(0, 5)}
+          categories={many}
+          accounts={ACCOUNTS}
+          onCommit={onCommit}
+        />,
+      );
+      await userEvent.click(cellOf("Shop 1", CATEGORY));
+      await userEvent.keyboard("{ArrowDown}".repeat(20));
+
+      const list = page.getByRole("listbox").element().getBoundingClientRect();
+      const option = highlighted().element().getBoundingClientRect();
+      expect(highlighted().element().textContent).toBe("Category 19");
+      expect(option.top).toBeGreaterThanOrEqual(list.top);
+      expect(option.bottom).toBeLessThanOrEqual(list.bottom);
     });
   });
 });

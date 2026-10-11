@@ -14,7 +14,8 @@ type Editing = { rowIndex: number; columnId: string; caret: number };
 
 type TransactionsTableProps = {
   rows: TransactionRow[];
-  categories: ReadonlySet<string>;
+  categories: readonly string[];
+  accounts: readonly string[];
   onCommit: (rowIndex: number, field: CellEditor["field"], value: string | number | null) => void;
 };
 
@@ -22,7 +23,7 @@ type TransactionsTableProps = {
  * Every transaction on one long page. Only the rows in (and near) the
  * viewport are rendered; the page scrolls as if all of them were there.
  */
-function TransactionsTable({ rows, categories, onCommit }: TransactionsTableProps) {
+function TransactionsTable({ rows, categories, accounts, onCommit }: TransactionsTableProps) {
   // The table and virtualizer are mutable objects that return new results
   // from the same instance, so the React Compiler would memoize reads of
   // them and render stale rows. They are only read here, so opting this
@@ -60,11 +61,12 @@ function TransactionsTable({ rows, categories, onCommit }: TransactionsTableProp
     rowIndex: number,
     editor: CellEditor,
     text: string,
+    create: boolean,
   ): SubmitResult {
     // Unchanged text is never parsed, so a stored value the parser wouldn't
     // accept can still be left as it is.
     if (text === editor.editText(row)) return { ok: true };
-    const result = editor.parse(text, { categories });
+    const result = editor.parse(text, { categories, accounts, create });
     if (!result.ok) return result;
     // Typed differently but the same value, like `1234.5` for `1234.50`.
     if (result.value === row[editor.field]) return { ok: true };
@@ -134,6 +136,8 @@ function TransactionsTable({ rows, categories, onCommit }: TransactionsTableProp
                       editor && {
                         text: editor.editText(row.original),
                         caret,
+                        // Only the cell being edited shows its menu.
+                        menu: caret !== null ? editor.menu?.({ categories, accounts }) : undefined,
                         start: (offset) =>
                           setEditing({
                             rowIndex: item.index,
@@ -141,7 +145,8 @@ function TransactionsTable({ rows, categories, onCommit }: TransactionsTableProp
                             caret: offset,
                           }),
                         // row.index is the position in `rows`, item.index in the rendered order.
-                        submit: (text) => submit(row.original, row.index, editor, text),
+                        submit: (text, create) =>
+                          submit(row.original, row.index, editor, text, create),
                         // Only if still editing this cell: clicking another cell finishes
                         // this one after the other has started.
                         finish: () =>
