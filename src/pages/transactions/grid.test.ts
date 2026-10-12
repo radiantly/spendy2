@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   bounds,
   cellAtPoint,
+  clampSelection,
   collapsed,
   contains,
   edges,
@@ -87,6 +88,24 @@ describe("tab", () => {
 
   it("drops a range, moving from the active cell", () => {
     expect(tab({ active: at(2, 1), head: at(5, 3) }, false, SIZE)).toEqual(collapsed(at(2, 2)));
+  });
+});
+
+describe("clampSelection", () => {
+  it("keeps a selection that fits", () => {
+    const selection = { active: at(2, 1), head: at(5, 3) };
+    expect(clampSelection(selection, SIZE)).toBe(selection);
+  });
+
+  it("moves cells past the last row or column onto it", () => {
+    expect(clampSelection({ active: at(12, 1), head: at(3, 6) }, SIZE)).toEqual({
+      active: at(9, 1),
+      head: at(3, 3),
+    });
+  });
+
+  it("selects nothing in a grid without cells", () => {
+    expect(clampSelection(collapsed(at(0, 0)), { rows: 0, columns: 4 })).toBeNull();
   });
 });
 

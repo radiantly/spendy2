@@ -32,13 +32,14 @@ const tokenUnencodedSchema = z.codec(
 export const tokenSchema = latin1Base64Schema.pipe(tokenUnencodedSchema);
 export type Token = z.infer<typeof tokenSchema>;
 
+export const databaseEtagSchema = z.codec(z.string().regex(/^".{64}"$/), z.hash("sha256"), {
+  decode: (etag) => etag.slice(1, -1),
+  encode: (hash) => `"${hash}"`,
+});
+
 export const databasePutPreconditionSchema = z.union([
   z.object({
-    "if-match": z
-      .string()
-      .regex(/^".{64}"$/)
-      .transform((s) => s.slice(1, -1))
-      .pipe(z.hash("sha256")),
+    "if-match": databaseEtagSchema,
     "if-none-match": z.never().optional(),
   }),
   z.object({
@@ -48,6 +49,10 @@ export const databasePutPreconditionSchema = z.union([
 ]);
 
 export type DatabasePutPrecondition = z.infer<typeof databasePutPreconditionSchema>;
+
+export const databaseGetPreconditionSchema = z.object({
+  "if-none-match": databaseEtagSchema.optional(),
+});
 
 // Body format: SPENDY + version byte + ?
 // The rest is only read by clients; for v1 see src/db/blob.ts.

@@ -19,6 +19,11 @@ export type DatabaseContextValue = {
    * null when there's no open database; network failures throw.
    */
   save: () => Promise<UploadResult | null>;
+  /**
+   * Keeps a version saved elsewhere from replacing the open one until the
+   * returned function is called, for state the replacement would lose.
+   */
+  holdUpdates: () => () => void;
   /** Tries to open the database again after an error. */
   retry: () => void;
 };

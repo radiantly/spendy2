@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import toast from "react-hot-toast";
-import { downloadDatabase, uploadDatabase } from "../../api/database.ts";
+import { downloadDatabase, downloadDatabaseIfChanged, uploadDatabase } from "../../api/database.ts";
 import { Database, openDatabase } from "../../db/database.ts";
 import { LIST_CATEGORY_NAMES } from "../../db/queries/transactions.ts";
 import { ClosedError } from "../../db/rpc.ts";
@@ -10,7 +10,11 @@ import { saveSession, type Session } from "../../lib/session.ts";
 import { EXPORT_KEY, TOKEN } from "../../test/fixtures.ts";
 import { renderApp } from "../../test/renderAuthPage.tsx";
 
-vi.mock("../../api/database.ts", () => ({ downloadDatabase: vi.fn(), uploadDatabase: vi.fn() }));
+vi.mock("../../api/database.ts", () => ({
+  downloadDatabase: vi.fn(),
+  downloadDatabaseIfChanged: vi.fn(),
+  uploadDatabase: vi.fn(),
+}));
 
 const SHA_A = "a".repeat(64);
 const SHA_B = "b".repeat(64);
@@ -58,6 +62,8 @@ beforeEach(async () => {
   vi.mocked(downloadDatabase).mockReset();
   vi.mocked(uploadDatabase).mockReset();
   vi.mocked(uploadDatabase).mockResolvedValue({ success: true, sha256: SHA_B });
+  vi.mocked(downloadDatabaseIfChanged).mockReset();
+  vi.mocked(downloadDatabaseIfChanged).mockResolvedValue({ success: false, code: "NOT_MODIFIED" });
   await page.viewport(1280, 800);
 });
 
@@ -525,5 +531,142 @@ describe("TransactionsPage", () => {
     await new Promise((resolve) => setTimeout(resolve));
 
     expect(showError).not.toHaveBeenCalled();
+  });
+});
+
+describe("a version saved elsewhere", () => {
+  const SHA_C = "c".repeat(64);
+  /** Corner Market renamed, as if on another device. */
+  const RENAMED = `${TWO_TRANSACTIONS}; UPDATE transactions SET counterparty = 'Corner Shop' WHERE id = 'newer'`;
+
+  /** The page checks for a newer version when it's shown again, as well as every 10 seconds. */
+  const checkForUpdates = () => document.dispatchEvent(new Event("visibilitychange"));
+
+  async function savedElsewhere(sql: string) {
+    const blob = await storedDatabase(sql);
+    vi.mocked(downloadDatabaseIfChanged).mockResolvedValue({ success: true, blob, sha256: SHA_C });
+  }
+
+  async function opened() {
+    await loggedIn(await storedDatabase(TWO_TRANSACTIONS));
+    await renderApp("/transactions");
+    await expect.element(page.getByText("Corner Market")).toBeVisible();
+  }
+
+  it("is shown in place of the open one", async () => {
+    await opened();
+    await savedElsewhere(RENAMED);
+
+    checkForUpdates();
+
+    await expect.element(page.getByText("Corner Shop")).toBeVisible();
+    expect(downloadDatabaseIfChanged).toHaveBeenCalledWith(TOKEN, SHA_A);
+    expect(saveButton().query()).toBeNull();
+  });
+
+  it("is then the version edits are saved over", async () => {
+    await opened();
+    await savedElsewhere(RENAMED);
+    checkForUpdates();
+    await expect.element(page.getByText("Corner Shop")).toBeVisible();
+
+    await editCounterparty("Café Lumen", "Café Sol");
+    await userEvent.click(saveButton());
+
+    await expect.element(saveButton()).not.toBeInTheDocument();
+    const [, blob, precondition] = vi.mocked(uploadDatabase).mock.calls[0]!;
+    expect(precondition).toEqual({ ifMatch: SHA_C });
+    expect(await queryUploaded(blob, "SELECT counterparty FROM transactions ORDER BY id")).toEqual([
+      { counterparty: "Corner Shop" },
+      { counterparty: "Café Sol" },
+    ]);
+  });
+
+  it("is checked for against the version just saved", async () => {
+    await opened();
+    await editCounterparty("Corner Market", "Corner Shop");
+    await userEvent.click(saveButton());
+    await expect.element(saveButton()).not.toBeInTheDocument();
+
+    checkForUpdates();
+
+    expect(downloadDatabaseIfChanged).toHaveBeenLastCalledWith(TOKEN, SHA_B);
+  });
+
+  it("isn't checked for while there are unsaved changes", async () => {
+    await opened();
+    await editCounterparty("Café Lumen", "Café Sol");
+    await expect.element(saveButton()).toBeVisible();
+    await savedElsewhere(RENAMED);
+
+    checkForUpdates();
+
+    expect(downloadDatabaseIfChanged).not.toHaveBeenCalled();
+    await expect.element(page.getByText("Café Sol")).toBeVisible();
+  });
+
+  it("isn't checked for while a cell is being edited, but is once it isn't", async () => {
+    await opened();
+    await savedElsewhere(RENAMED);
+    await userEvent.click(page.getByText("Café Lumen"));
+    await expect.element(page.getByRole("textbox")).toHaveFocus();
+
+    checkForUpdates();
+    expect(downloadDatabaseIfChanged).not.toHaveBeenCalled();
+    await userEvent.keyboard("{Escape}");
+    checkForUpdates();
+
+    await expect.element(page.getByText("Corner Shop")).toBeVisible();
+  });
+
+  it("is dropped when an edit is made while it downloads", async () => {
+    await opened();
+    const blob = await storedDatabase(RENAMED);
+    let finishDownload!: () => void;
+    vi.mocked(downloadDatabaseIfChanged).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finishDownload = () => resolve({ success: true, blob, sha256: SHA_C });
+        }),
+    );
+
+    checkForUpdates();
+    await editCounterparty("Café Lumen", "Café Sol");
+    await expect.element(saveButton()).toBeVisible();
+    finishDownload();
+    // Give it the chance to (wrongly) replace the data.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    await expect.element(page.getByText("Café Sol")).toBeVisible();
+    await expect.element(page.getByText("Corner Market")).toBeVisible();
+    await userEvent.click(saveButton());
+    await expect.element(saveButton()).not.toBeInTheDocument();
+    expect(vi.mocked(uploadDatabase).mock.calls[0]![2]).toEqual({ ifMatch: SHA_A });
+  });
+
+  it("is checked for again after a check fails", async () => {
+    await opened();
+    vi.mocked(downloadDatabaseIfChanged).mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    checkForUpdates();
+    await expect.poll(() => vi.mocked(downloadDatabaseIfChanged).mock.calls).toHaveLength(1);
+    await savedElsewhere(RENAMED);
+
+    checkForUpdates();
+
+    await expect.element(page.getByText("Corner Shop")).toBeVisible();
+  });
+
+  it("keeps the active cell on a row that exists when it has fewer rows", async () => {
+    await opened();
+    await userEvent.click(await cellOf("Café Lumen", COUNTERPARTY));
+    await userEvent.keyboard("{Escape}");
+    await savedElsewhere(`${TWO_TRANSACTIONS}; DELETE FROM transactions WHERE id = 'older'`);
+
+    checkForUpdates();
+
+    await expect.element(page.getByText("Café Lumen")).not.toBeInTheDocument();
+    const grid = page.getByRole("grid").element();
+    const active = document.getElementById(grid.getAttribute("aria-activedescendant")!);
+    expect(active?.textContent).toBe("Corner Market");
   });
 });

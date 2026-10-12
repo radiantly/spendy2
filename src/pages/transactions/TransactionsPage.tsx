@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import toast from "react-hot-toast";
 import { ClosedError } from "../../db/rpc.ts";
-import { useOpenDatabase } from "../../db/useDatabase.ts";
+import { useHoldUpdates, useOpenDatabase } from "../../db/useDatabase.ts";
 import {
   GET_TRANSACTIONS,
   INSERT_CATEGORY,
@@ -29,6 +29,9 @@ function TransactionsPage() {
   const { database, markDirty } = useOpenDatabase();
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
+  // A newer version would replace the rows under the edit, losing it.
+  const [editing, setEditing] = useState(false);
+  useHoldUpdates(editing);
 
   useEffect(() => {
     let cancelled = false;
@@ -155,6 +158,7 @@ function TransactionsPage() {
           categories={loaded.categories}
           accounts={loaded.accounts}
           onCommit={commit}
+          onEditingChange={setEditing}
         />
       )}
     </div>

@@ -42,9 +42,12 @@ function putDatabase(
   });
 }
 
-function getDatabase(token: string | undefined) {
+function getDatabase(token: string | undefined, headers: Record<string, string> = {}) {
   return exports.default.fetch("http://localhost/api/users/me/database", {
-    headers: token === undefined ? {} : { Authorization: `Bearer ${token}` },
+    headers: {
+      ...(token === undefined ? {} : { Authorization: `Bearer ${token}` }),
+      ...headers,
+    },
   });
 }
 
@@ -301,6 +304,59 @@ describe("GET /api/users/me/database", () => {
       "If-Match": `"${sha256}"`,
     });
     expect(upload.status).toBe(204);
+  });
+
+  describe("If-None-Match", () => {
+    it("returns 304 for the current version, without reading object storage", async () => {
+      const token = await newUser();
+      const etag = await firstUpload(token, databaseBlob("v1"));
+      const reads = s3.getCount;
+
+      const response = await getDatabase(token, { "If-None-Match": etag });
+
+      expect(response.status).toBe(304);
+      expect(response.headers.get("ETag")).toBe(etag);
+      expect(await response.arrayBuffer()).toHaveProperty("byteLength", 0);
+      expect(s3.getCount).toBe(reads);
+    });
+
+    it("returns the database when it has changed since", async () => {
+      const token = await newUser();
+      const old = await firstUpload(token, databaseBlob("v1"));
+      const body = databaseBlob("v2");
+      const etag = (await putDatabase(token, body, { "If-Match": old })).headers.get("ETag");
+
+      const response = await getDatabase(token, { "If-None-Match": old });
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get("ETag")).toBe(etag);
+      expect(new Uint8Array(await response.arrayBuffer())).toEqual(body);
+    });
+
+    it("returns 404 when there's no database", async () => {
+      const token = await newUser();
+
+      const response = await getDatabase(token, { "If-None-Match": `"${"a".repeat(64)}"` });
+
+      expect(response.status).toBe(404);
+    });
+
+    it("requires authentication", async () => {
+      const token = await newUser();
+      const etag = await firstUpload(token, databaseBlob("v1"));
+
+      expect((await getDatabase(undefined, { "If-None-Match": etag })).status).toBe(401);
+    });
+
+    it.each(["*", 'W/"abc"', `"${"a".repeat(64)}", "${"b".repeat(64)}"`])(
+      "rejects an If-None-Match it doesn't support: %s",
+      async (header) => {
+        const token = await newUser();
+        await firstUpload(token, databaseBlob("v1"));
+
+        expect((await getDatabase(token, { "If-None-Match": header })).status).toBe(400);
+      },
+    );
   });
 
   it("forgets the stored hash when the object is gone", async () => {

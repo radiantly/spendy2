@@ -4,7 +4,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { forwardFetchToWorker, loginToken, registerUser } from "../../worker/test/helpers.ts";
 import { installFakeS3 } from "../../worker/test/fake-s3.ts";
 import { toSha256Schema } from "../../worker/schemas.ts";
-import { downloadDatabase, uploadDatabase } from "./database.ts";
+import { downloadDatabase, downloadDatabaseIfChanged, uploadDatabase } from "./database.ts";
 import { TOKEN } from "../test/fixtures.ts";
 
 let token: string;
@@ -61,6 +61,39 @@ describe("downloadDatabase", () => {
     vi.stubGlobal("fetch", () => Promise.reject(new TypeError("Failed to fetch")));
 
     await expect(downloadDatabase(token)).rejects.toThrow("Failed to fetch");
+  });
+});
+
+describe("downloadDatabaseIfChanged", () => {
+  it("reports the version it names as not modified", async () => {
+    const { sha256 } = await uploadDatabase(token, blob("first"), { ifNoneMatch: true }).then(
+      (result) => (result.success ? result : expect.unreachable()),
+    );
+
+    expect(await downloadDatabaseIfChanged(token, sha256)).toEqual({
+      success: false,
+      code: "NOT_MODIFIED",
+    });
+  });
+
+  it("returns the newer blob and its sha256", async () => {
+    const first = blob("first");
+    await uploadDatabase(token, first.slice(), { ifNoneMatch: true });
+    const second = blob("second");
+    await uploadDatabase(token, second.slice(), { ifMatch: await sha256Of(first) });
+
+    expect(await downloadDatabaseIfChanged(token, await sha256Of(first))).toEqual({
+      success: true,
+      blob: second,
+      sha256: await sha256Of(second),
+    });
+  });
+
+  it("reports a database that's gone as not found", async () => {
+    expect(await downloadDatabaseIfChanged(token, "a".repeat(64))).toEqual({
+      success: false,
+      code: "NOT_FOUND",
+    });
   });
 });
 

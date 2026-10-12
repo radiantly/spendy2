@@ -1,13 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { DatabaseOpenError, openDatabase } from "./database.ts";
+import { DatabaseOpenError, openDatabase, openNewerDatabase } from "./database.ts";
 import { ClosedError } from "./rpc.ts";
 import { encryptDatabase } from "./blob.ts";
-import { downloadDatabase, uploadDatabase } from "../api/database.ts";
+import { downloadDatabase, downloadDatabaseIfChanged, uploadDatabase } from "../api/database.ts";
 import { deriveKek } from "../lib/kek.ts";
 import type { Session } from "../lib/session.ts";
 import { EXPORT_KEY, TOKEN } from "../test/fixtures.ts";
 
-vi.mock("../api/database.ts", () => ({ downloadDatabase: vi.fn(), uploadDatabase: vi.fn() }));
+vi.mock("../api/database.ts", () => ({
+  downloadDatabase: vi.fn(),
+  downloadDatabaseIfChanged: vi.fn(),
+  uploadDatabase: vi.fn(),
+}));
 
 const SHA_A = "a".repeat(64);
 const SHA_B = "b".repeat(64);
@@ -19,6 +23,7 @@ async function session(): Promise<Session> {
 beforeEach(() => {
   vi.mocked(downloadDatabase).mockReset();
   vi.mocked(uploadDatabase).mockReset();
+  vi.mocked(downloadDatabaseIfChanged).mockReset();
   vi.mocked(downloadDatabase).mockResolvedValue({ success: false, code: "NOT_FOUND" });
   vi.mocked(uploadDatabase).mockResolvedValue({ success: true, sha256: SHA_A });
 });
@@ -165,4 +170,98 @@ describe("Database.save", () => {
     expect(db.sha256).toBe(SHA_A);
     db.close();
   });
+});
+
+describe("openNewerDatabase", () => {
+  /** A stored database with one account, `name`. */
+  async function storedWithAccount(name: string) {
+    const db = await openDatabase(await session());
+    await db.query("INSERT INTO accounts VALUES (?, 'SGD')", [name]);
+    await db.save();
+    const blob = vi.mocked(uploadDatabase).mock.calls.at(-1)![1];
+    db.close();
+    return blob;
+  }
+
+  /** The database open here, saved as SHA_A. */
+  async function openSaved() {
+    const blob = await storedWithAccount("checking");
+    vi.mocked(downloadDatabase).mockResolvedValueOnce({ success: true, blob, sha256: SHA_A });
+    return openDatabase(await session());
+  }
+
+  it("asks for the stored version only if it isn't the one open", async () => {
+    const current = await openSaved();
+    vi.mocked(downloadDatabaseIfChanged).mockResolvedValue({
+      success: false,
+      code: "NOT_MODIFIED",
+    });
+
+    expect(await openNewerDatabase(await session(), current)).toBeNull();
+    expect(downloadDatabaseIfChanged).toHaveBeenCalledWith(TOKEN, SHA_A);
+    current.close();
+  });
+
+  it("opens a newer version", async () => {
+    const current = await openSaved();
+    const blob = await storedWithAccount("savings");
+    vi.mocked(downloadDatabaseIfChanged).mockResolvedValue({ success: true, blob, sha256: SHA_B });
+
+    const newer = await openNewerDatabase(await session(), current);
+
+    expect(newer!.sha256).toBe(SHA_B);
+    expect(await newer!.query("SELECT name FROM accounts")).toEqual([{ name: "savings" }]);
+    // The open one is left to its owner.
+    expect(await current.query("SELECT name FROM accounts")).toEqual([{ name: "checking" }]);
+    newer!.close();
+    current.close();
+  });
+
+  it("ignores a download of the version already open", async () => {
+    const current = await openSaved();
+    const blob = await storedWithAccount("checking");
+    vi.mocked(downloadDatabaseIfChanged).mockResolvedValue({ success: true, blob, sha256: SHA_A });
+
+    expect(await openNewerDatabase(await session(), current)).toBeNull();
+    current.close();
+  });
+
+  it("opens a database first saved elsewhere, when this one never was", async () => {
+    const current = await openDatabase(await session());
+    const blob = await storedWithAccount("savings");
+    vi.mocked(downloadDatabase).mockResolvedValue({ success: true, blob, sha256: SHA_B });
+
+    const newer = await openNewerDatabase(await session(), current);
+
+    expect(newer!.sha256).toBe(SHA_B);
+    expect(downloadDatabaseIfChanged).not.toHaveBeenCalled();
+    newer!.close();
+    current.close();
+  });
+
+  it("returns null while a database that was never saved still isn't", async () => {
+    const current = await openDatabase(await session());
+
+    expect(await openNewerDatabase(await session(), current)).toBeNull();
+    current.close();
+  });
+
+  it("returns null when the stored database is gone", async () => {
+    const current = await openSaved();
+    vi.mocked(downloadDatabaseIfChanged).mockResolvedValue({ success: false, code: "NOT_FOUND" });
+
+    expect(await openNewerDatabase(await session(), current)).toBeNull();
+    current.close();
+  });
+
+  it.each(["UNAUTHORIZED", "DOWNLOAD_FAILED"] as const)(
+    "throws when the download is %s",
+    async (code) => {
+      const current = await openSaved();
+      vi.mocked(downloadDatabaseIfChanged).mockResolvedValue({ success: false, code });
+
+      await expect(openNewerDatabase(await session(), current)).rejects.toMatchObject({ code });
+      current.close();
+    },
+  );
 });

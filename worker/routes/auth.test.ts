@@ -57,18 +57,9 @@ function decodeToken(token: string) {
 }
 
 function getSessionIds(username: string) {
-  return runInDurableObject(env.USER.getByName(username), (_instance, state) => {
-    const tableExists =
-      state.storage.sql
-        .exec(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sessions';`)
-        .toArray().length > 0;
-    if (!tableExists) return [];
-
-    return state.storage.sql
-      .exec<{ id: string }>(`SELECT id FROM sessions;`)
-      .toArray()
-      .map((row) => row.id);
-  });
+  return runInDurableObject(env.USER.getByName(username), (_instance, state) => [
+    ...(state.storage.kv.get<Set<string>>("ACTIVE_SESSIONS") ?? []),
+  ]);
 }
 
 describe("POST /api/auth/login", () => {

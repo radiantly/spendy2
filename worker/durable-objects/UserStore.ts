@@ -3,111 +3,7 @@ import * as opaque from "@serenity-kit/opaque";
 import { S3, S3Error } from "../s3.ts";
 import type { DatabasePutPrecondition } from "../schemas.ts";
 
-class RegistrationRecordStore {
-  private readonly sql;
-  constructor(sql: SqlStorage) {
-    this.sql = sql;
-  }
-
-  get tableExists() {
-    return (
-      this.sql
-        .exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'registration_record';")
-        .toArray().length > 0
-    );
-  }
-
-  set(registrationRecord: string) {
-    const { record } = this.sql
-      .exec<{ record: string }>(
-        `
-        CREATE TABLE IF NOT EXISTS registration_record (
-          id      INTEGER NOT NULL PRIMARY KEY CHECK (id = 0),
-          record  TEXT NOT NULL
-        );
-
-        INSERT INTO registration_record (id, record) VALUES (0, ?)
-        ON CONFLICT (id) DO UPDATE
-          SET id = id
-        RETURNING record`,
-        registrationRecord,
-      )
-      .one();
-
-    return record === registrationRecord;
-  }
-
-  get() {
-    if (!this.tableExists) return;
-
-    const { record } = this.sql
-      .exec<{ record: string }>("SELECT record FROM registration_record")
-      .one();
-
-    return record;
-  }
-}
-
-class SessionStore {
-  private readonly sql;
-  private readonly maxSessionCount;
-  constructor(sql: SqlStorage, maxSessionCount: number) {
-    this.sql = sql;
-    this.maxSessionCount = maxSessionCount;
-  }
-
-  get tableExists() {
-    return (
-      this.sql
-        .exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sessions';")
-        .toArray().length > 0
-    );
-  }
-
-  has(sessionId: string) {
-    if (!this.tableExists) return false;
-
-    return this.sql.exec("SELECT 1 FROM sessions WHERE id = ?", sessionId).toArray().length > 0;
-  }
-
-  create() {
-    const sessionId = crypto.randomUUID();
-    this.sql.exec(
-      `
-      CREATE TABLE IF NOT EXISTS sessions (
-        id              TEXT NOT NULL PRIMARY KEY,
-        created_at      INTEGER NOT NULL
-      );
-      
-      INSERT INTO sessions (id, created_at) VALUES (?, ?);`,
-      sessionId,
-      Date.now(),
-    );
-
-    // delete the oldest session if the number of sessions exceed the max session count
-    this.sql.exec(
-      `
-      DELETE FROM sessions WHERE id NOT IN (
-        SELECT id FROM sessions ORDER BY created_at DESC, rowid DESC LIMIT ?
-      );`,
-      this.maxSessionCount,
-    );
-    return sessionId;
-  }
-
-  delete(sessionId: string) {
-    if (!this.tableExists) return false;
-
-    let cursor = this.sql.exec(`DELETE FROM sessions WHERE id = ?;`, sessionId);
-    return cursor.rowsWritten > 0;
-  }
-}
-
 export class UserStore extends DurableObject<Env> {
-  sql: SqlStorage;
-  private _registrationRecord?: RegistrationRecordStore;
-  private _sessions?: SessionStore;
-
   // for login
   private loginState?: string;
   private loginOnlyAfter = 0;
@@ -119,8 +15,19 @@ export class UserStore extends DurableObject<Env> {
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
-    this.sql = ctx.storage.sql;
     this.s3 = new S3(env);
+  }
+
+  private getKv<K extends keyof KvSchema>(key: K): KvSchema[K] | undefined {
+    return this.ctx.storage.kv.get<KvSchema[K]>(key);
+  }
+
+  private putKv<K extends keyof KvSchema>(key: K, value: KvSchema[K]) {
+    return this.ctx.storage.kv.put(key, value);
+  }
+
+  private deleteKv<K extends keyof KvSchema>(key: K) {
+    return this.ctx.storage.kv.delete(key);
   }
 
   /**
@@ -134,18 +41,6 @@ export class UserStore extends DurableObject<Env> {
     return result;
   }
 
-  private get registrationRecord() {
-    if (this._registrationRecord === undefined)
-      this._registrationRecord = new RegistrationRecordStore(this.sql);
-    return this._registrationRecord;
-  }
-
-  private get sessions() {
-    if (this._sessions === undefined)
-      this._sessions = new SessionStore(this.sql, this.env.MAX_SESSIONS_PER_USER);
-    return this._sessions;
-  }
-
   private get username() {
     const name = this.ctx.id.name;
     if (name === undefined) throw new Error("UserStore must be addressed by name");
@@ -153,21 +48,23 @@ export class UserStore extends DurableObject<Env> {
   }
 
   async alarm() {
-    // TODO: delete registration record
+    if (this.getKv("DATABASE_SHA256") === undefined) await this.ctx.storage.deleteAll();
   }
 
   async registerNewUser(registrationRecord: string): Promise<RegisterNewUserResponse> {
-    if (!this.registrationRecord.set(registrationRecord))
-      return { success: false, code: "USER_ALREADY_EXISTS" };
+    const currentRecord = this.getKv("REGISTRATION_RECORD");
+    if (currentRecord !== undefined) return { success: false, code: "USER_ALREADY_EXISTS" };
 
-    // delete user if they do not login
+    this.putKv("REGISTRATION_RECORD", registrationRecord);
+
+    // delete user if they do not create any data
     await this.ctx.storage.setAlarm(Date.now() + this.env.USER_CLEANUP_DELAY_SECONDS * 1000);
     return { success: true };
   }
 
   private startLogin(startLoginRequest: string) {
     const userIdentifier = this.username;
-    const registrationRecord = this.registrationRecord.get();
+    const registrationRecord = this.getKv("REGISTRATION_RECORD");
 
     let result: opaque.server.LoginStartResult;
     try {
@@ -220,12 +117,25 @@ export class UserStore extends DurableObject<Env> {
     this.loginAttempts = 0;
     this.loginOnlyAfter = 0;
 
-    const sessionId = this.sessions.create();
+    // get active sessions
+    const sessions = this.getKv("ACTIVE_SESSIONS") ?? new Set();
+    const sessionId = crypto.randomUUID();
+    sessions.add(sessionId);
+
+    // delete oldest session if it has crossed MAX_SESSIONS_PER_USER
+    for (const session of sessions) {
+      if (sessions.size <= this.env.MAX_SESSIONS_PER_USER) break;
+      sessions.delete(session);
+    }
+    this.putKv("ACTIVE_SESSIONS", sessions);
+
     return { success: true, sessionId };
   }
 
   async logout(sessionId: string): Promise<LogoutResponse> {
-    if (!this.sessions.delete(sessionId)) return { success: false, code: "UNAUTHORIZED" };
+    const sessions = this.getKv("ACTIVE_SESSIONS") ?? new Set();
+    if (!sessions.delete(sessionId)) return { success: false, code: "UNAUTHORIZED" };
+    this.putKv("ACTIVE_SESSIONS", sessions);
     return { success: true };
   }
 
@@ -239,10 +149,11 @@ export class UserStore extends DurableObject<Env> {
     body: ArrayBuffer,
     sha256: string,
   ): Promise<UploadDatabaseResponse> {
-    if (!this.sessions.has(sessionId)) return { success: false, code: "UNAUTHORIZED" };
+    const sessions = this.getKv("ACTIVE_SESSIONS") ?? new Set();
+    if (!sessions.has(sessionId)) return { success: false, code: "UNAUTHORIZED" };
 
     return this.withDatabaseLock(async () => {
-      const current = this.ctx.storage.kv.get<string>(DATABASE_SHA256_KEY);
+      const current = this.getKv("DATABASE_SHA256");
       const precondition_satisfied =
         "if-none-match" in precondition
           ? current === undefined
@@ -256,17 +167,30 @@ export class UserStore extends DurableObject<Env> {
         throw error;
       }
 
-      this.ctx.storage.kv.put(DATABASE_SHA256_KEY, sha256);
+      this.putKv("DATABASE_SHA256", sha256);
       return { success: true, sha256 };
     });
   }
 
-  async downloadDatabase(sessionId: string): Promise<DownloadDatabaseResponse> {
-    if (!this.sessions.has(sessionId)) return { success: false, code: "UNAUTHORIZED" };
+  /**
+   * With `ifNoneMatch`, the sha256 of the version the client has: if it's
+   * still the current one, there's nothing to send. That's decided from the
+   * stored hash alone, so checking for changes never reaches object storage.
+   */
+  async downloadDatabase(
+    sessionId: string,
+    ifNoneMatch?: string,
+  ): Promise<DownloadDatabaseResponse> {
+    const sessions = this.getKv("ACTIVE_SESSIONS") ?? new Set();
+    if (!sessions.has(sessionId)) return { success: false, code: "UNAUTHORIZED" };
 
     // the lock is only held until the response headers arrive, the body is
     // streamed afterwards
     return this.withDatabaseLock(async () => {
+      const current = this.getKv("DATABASE_SHA256");
+      if (ifNoneMatch !== undefined && current === ifNoneMatch)
+        return { success: true, modified: false, sha256: current };
+
       let blob;
       try {
         blob = await this.s3.get(this.databaseBlobName);
@@ -276,17 +200,21 @@ export class UserStore extends DurableObject<Env> {
       }
 
       if (blob === undefined) {
-        this.ctx.storage.kv.delete(DATABASE_SHA256_KEY);
+        this.deleteKv("DATABASE_SHA256");
         return { success: false, code: "NOT_FOUND" };
       }
-      this.ctx.storage.kv.put(DATABASE_SHA256_KEY, blob.sha256);
+      this.putKv("DATABASE_SHA256", blob.sha256);
 
-      return { success: true, body: blob.body, sha256: blob.sha256 };
+      return { success: true, modified: true, body: blob.body, sha256: blob.sha256 };
     });
   }
 }
 
-const DATABASE_SHA256_KEY = "databaseSha256";
+interface KvSchema {
+  REGISTRATION_RECORD: string;
+  ACTIVE_SESSIONS: Set<string>;
+  DATABASE_SHA256: string;
+}
 
 export type UploadDatabaseResponse =
   | { success: true; sha256: string }
@@ -296,7 +224,8 @@ export type UploadDatabaseResponse =
     };
 
 export type DownloadDatabaseResponse =
-  | { success: true; body: ReadableStream<Uint8Array>; sha256: string }
+  | { success: true; modified: true; body: ReadableStream<Uint8Array>; sha256: string }
+  | { success: true; modified: false; sha256: string }
   | { success: false; code: "UNAUTHORIZED" | "NOT_FOUND" | "STORAGE_ERROR" };
 
 export type RegisterNewUserResponse =

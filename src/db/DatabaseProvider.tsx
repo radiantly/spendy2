@@ -1,11 +1,19 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { pollWhileVisible } from "../lib/pollWhileVisible.ts";
 import type { Session } from "../lib/session.ts";
-import { openDatabase, type Database } from "./database.ts";
+import { openDatabase, openNewerDatabase, type Database } from "./database.ts";
 import { DatabaseContext, type DatabaseState } from "./databaseContext.ts";
+
+/** How often to check for a version saved elsewhere (ms), while the page is visible. */
+const UPDATE_INTERVAL = 10_000;
 
 /**
  * Opens the user's database for its children and tracks unsaved changes.
- * The database closes when the provider unmounts or the session changes.
+ * The database closes when the provider unmounts.
+ *
+ * While there's nothing to lose, a version saved elsewhere (another tab or
+ * device) replaces the open one. Nothing is lost when there are no unsaved
+ * changes, no save is running, and nothing has asked to hold updates back.
  */
 function DatabaseProvider({ session, children }: { session: Session; children: ReactNode }) {
   const [state, setState] = useState<DatabaseState>({ status: "loading" });
@@ -16,14 +24,44 @@ function DatabaseProvider({ session, children }: { session: Session; children: R
   const [saving, setSaving] = useState(false);
   const dirty = editCount !== savedEditCount;
 
+  // Whether there are unsaved changes or a save is running. Set as soon as
+  // either starts, so a check finishing before the next render sees it.
+  const busyRef = useRef(false);
+  useLayoutEffect(() => {
+    busyRef.current = dirty || saving;
+  });
+  const holdsRef = useRef(0);
+
   useEffect(() => {
     let cancelled = false;
     let opened: Database | undefined;
+    let stopPolling: (() => void) | undefined;
+    let checking = false;
+    const canReplace = () => !busyRef.current && holdsRef.current === 0;
+
+    async function checkForUpdate() {
+      if (checking || !opened || !canReplace()) return;
+      checking = true;
+      try {
+        const newer = await openNewerDatabase(session, opened);
+        if (!newer) return;
+        // Something changed while it downloaded.
+        if (cancelled || !canReplace()) return newer.close();
+        opened = newer;
+        setState({ status: "ready", database: newer });
+      } catch {
+        // Tried again on the next check; saving reports any lasting problem.
+      } finally {
+        checking = false;
+      }
+    }
+
     openDatabase(session).then(
       (database) => {
         if (cancelled) return database.close();
         opened = database;
         setState({ status: "ready", database });
+        stopPolling = pollWhileVisible(() => void checkForUpdate(), UPDATE_INTERVAL);
       },
       (error: unknown) => {
         if (!cancelled) setState({ status: "error", error });
@@ -31,9 +69,18 @@ function DatabaseProvider({ session, children }: { session: Session; children: R
     );
     return () => {
       cancelled = true;
-      opened?.close();
+      stopPolling?.();
     };
   }, [session, attempt]);
+
+  // A database closes once it's no longer the one shown: replaced by a newer
+  // version or a new session, or unmounted. This runs after the pages using
+  // it have let go of it, so their unfinished reads are already ignored.
+  useEffect(() => {
+    if (state.status !== "ready") return;
+    const { database } = state;
+    return () => database.close();
+  }, [state]);
 
   useEffect(() => {
     if (!dirty) return;
@@ -46,6 +93,7 @@ function DatabaseProvider({ session, children }: { session: Session; children: R
   async function save() {
     if (state.status !== "ready") return null;
     const savingEditCount = editCount;
+    busyRef.current = true;
     setSaving(true);
     try {
       const result = await state.database.save();
@@ -56,14 +104,28 @@ function DatabaseProvider({ session, children }: { session: Session; children: R
     }
   }
 
+  function holdUpdates() {
+    holdsRef.current++;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      holdsRef.current--;
+    };
+  }
+
   return (
     <DatabaseContext
       value={{
         state,
         dirty,
         saving,
-        markDirty: () => setEditCount((count) => count + 1),
+        markDirty: () => {
+          busyRef.current = true;
+          setEditCount((count) => count + 1);
+        },
         save,
+        holdUpdates,
         retry: () => {
           setState({ status: "loading" });
           setAttempt((count) => count + 1);

@@ -119,7 +119,7 @@ describe("POST /api/users", () => {
       expect(response.status).toBe(409);
     });
 
-    it("accepts the same registration record twice", async () => {
+    it("returns 409 for the same registration record again", async () => {
       const registrationRecord = await createRegistrationRecord("alice");
       await postUsers({ username: "alice", registrationRecord });
 
@@ -127,7 +127,7 @@ describe("POST /api/users", () => {
         username: "alice",
         registrationRecord,
       });
-      expect(response.status).toBe(201);
+      expect(response.status).toBe(409);
     });
   });
 });

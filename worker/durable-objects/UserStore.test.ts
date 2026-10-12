@@ -2,6 +2,7 @@ import { env } from "cloudflare:workers";
 import { reset, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import * as opaque from "@serenity-kit/opaque";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { loginToken, registerUser } from "../test/helpers.ts";
 
 const CLEANUP_DELAY_MS = env.USER_CLEANUP_DELAY_SECONDS * 1000;
 
@@ -16,14 +17,17 @@ function startLoginRequest() {
 }
 
 function getRegistrationRecord(state: DurableObjectState) {
-  return state.storage.sql
-    .exec<{ record: string }>(`SELECT record FROM registration_record;`)
-    .toArray()[0]?.record;
+  return state.storage.kv.get<string>("REGISTRATION_RECORD");
 }
 
-/** Whether any table other than the runtime's internal ones exists. */
-function hasUserTables(state: DurableObjectState) {
-  return (
+/**
+ * Whether anything is stored: a key, or a table other than the runtime's
+ * internal ones. Both are checked, so the answer doesn't depend on which one
+ * the durable object happens to use.
+ */
+function hasStorage(state: DurableObjectState) {
+  const hasKeys = [...state.storage.kv.list()].length > 0;
+  const hasTables =
     state.storage.sql
       .exec(
         `
@@ -32,8 +36,8 @@ function hasUserTables(state: DurableObjectState) {
           AND name NOT LIKE '\\_cf%' ESCAPE '\\'
           AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\';`,
       )
-      .toArray().length > 0
-  );
+      .toArray().length > 0;
+  return hasKeys || hasTables;
 }
 
 describe("UserStore", () => {
@@ -41,7 +45,7 @@ describe("UserStore", () => {
     const stub = env.USER.getByName("alice");
 
     await runInDurableObject(stub, (_instance, state) => {
-      expect(hasUserTables(state)).toBe(false);
+      expect(hasStorage(state)).toBe(false);
     });
   });
 
@@ -73,15 +77,17 @@ describe("UserStore", () => {
     });
   });
 
-  it("accepts an identical registration record again", async () => {
+  it("rejects an identical registration record again", async () => {
     const stub = env.USER.getByName("alice");
     await stub.registerNewUser("record");
 
-    expect(await stub.registerNewUser("record")).toEqual({ success: true });
+    expect(await stub.registerNewUser("record")).toEqual({
+      success: false,
+      code: "USER_ALREADY_EXISTS",
+    });
   });
 
-  // TODO: the alarm is implemented in a later phase
-  describe.skip("alarm", () => {
+  describe("alarm", () => {
     it("deletes all storage when the alarm fires before a login", async () => {
       const stub = env.USER.getByName("alice");
       await stub.registerNewUser("record");
@@ -89,7 +95,7 @@ describe("UserStore", () => {
       expect(await runDurableObjectAlarm(stub)).toBe(true);
 
       await runInDurableObject(stub, (_instance, state) => {
-        expect(hasUserTables(state)).toBe(false);
+        expect(hasStorage(state)).toBe(false);
       });
     });
 
@@ -105,26 +111,33 @@ describe("UserStore", () => {
       });
     });
 
-    it("keeps the user when the alarm fires after a login", async () => {
+    it("deletes a user who logged in but never saved a database", async () => {
       const stub = env.USER.getByName("alice");
       await stub.registerNewUser("record");
       await runInDurableObject(stub, (_instance, state) => {
-        state.storage.sql.exec(`
-          CREATE TABLE IF NOT EXISTS sessions (
-            id          TEXT NOT NULL PRIMARY KEY,
-            created_at  INTEGER NOT NULL
-          );`);
-        state.storage.sql.exec(
-          `INSERT INTO sessions (id, created_at) VALUES (?, ?);`,
-          crypto.randomUUID(),
-          Date.now(),
-        );
+        state.storage.kv.put("ACTIVE_SESSIONS", new Set([crypto.randomUUID()]));
+      });
+
+      expect(await runDurableObjectAlarm(stub)).toBe(true);
+
+      await runInDurableObject(stub, (_instance, state) => {
+        expect(hasStorage(state)).toBe(false);
+      });
+    });
+
+    it("keeps a user who has saved a database", async () => {
+      const stub = env.USER.getByName("alice");
+      await stub.registerNewUser("record");
+      await runInDurableObject(stub, (_instance, state) => {
+        state.storage.kv.put("ACTIVE_SESSIONS", new Set([crypto.randomUUID()]));
+        state.storage.kv.put("DATABASE_SHA256", "0".repeat(64));
       });
 
       expect(await runDurableObjectAlarm(stub)).toBe(true);
 
       await runInDurableObject(stub, (_instance, state) => {
         expect(getRegistrationRecord(state)).toBe("record");
+        expect(state.storage.kv.get("DATABASE_SHA256")).toBe("0".repeat(64));
       });
     });
   });
@@ -136,7 +149,7 @@ describe("UserStore", () => {
       const result = await instance.startLoginRatelimited(startLoginRequest());
 
       expect(result.success).toBe(true);
-      expect(hasUserTables(state)).toBe(false);
+      expect(hasStorage(state)).toBe(false);
       expect(await state.storage.getAlarm()).toBeNull();
     });
   });
@@ -160,7 +173,7 @@ describe("UserStore", () => {
       await expect(instance.startLoginRatelimited(startLoginRequest())).rejects.toThrow(
         "UserStore must be addressed by name",
       );
-      expect(hasUserTables(state)).toBe(false);
+      expect(hasStorage(state)).toBe(false);
     });
   });
 
@@ -181,8 +194,7 @@ describe("UserStore", () => {
         ).toEqual(unauthorized);
         expect(await instance.downloadDatabase(crypto.randomUUID())).toEqual(unauthorized);
 
-        expect(hasUserTables(state)).toBe(false);
-        expect([...state.storage.kv.list()]).toEqual([]);
+        expect(hasStorage(state)).toBe(false);
       });
       expect(fetchSpy).not.toHaveBeenCalled();
     });
@@ -197,19 +209,18 @@ describe("UserStore", () => {
           success: false,
           code: "UNAUTHORIZED",
         });
-        expect(hasUserTables(state)).toBe(false);
+        expect(hasStorage(state)).toBe(false);
       });
     });
 
     it("does not accept a session evicted by the session limit", async () => {
-      const stub = env.USER.getByName("alice");
+      await registerUser("alice");
+      const sessionIds: string[] = [];
+      for (let i = 0; i <= env.MAX_SESSIONS_PER_USER; i++)
+        sessionIds.push(atob(await loginToken("alice")).split(":")[1]!);
 
-      await runInDurableObject(stub, async (instance) => {
-        const sessionIds: string[] = [];
-        for (let i = 0; i <= env.MAX_SESSIONS_PER_USER; i++)
-          sessionIds.push(instance["sessions"].create());
-
-        expect(await instance.logout(sessionIds[0])).toEqual({
+      await runInDurableObject(env.USER.getByName("alice"), async (instance) => {
+        expect(await instance.logout(sessionIds[0]!)).toEqual({
           success: false,
           code: "UNAUTHORIZED",
         });
@@ -221,12 +232,13 @@ describe("UserStore", () => {
 
     it("accepts sessions created by an earlier instance", async () => {
       const stub = env.USER.getByName("alice");
+      const sessionId = crypto.randomUUID();
+      // Stored, but never seen by the instance that answers below.
+      await runInDurableObject(stub, (_instance, state) => {
+        state.storage.kv.put("ACTIVE_SESSIONS", new Set([sessionId]));
+      });
 
       await runInDurableObject(stub, async (instance) => {
-        const sessionId = instance["sessions"].create();
-        // simulates a fresh instance after the durable object was evicted
-        instance["_sessions"] = undefined;
-
         expect(await instance.logout(sessionId)).toEqual({ success: true });
       });
     });

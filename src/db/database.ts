@@ -1,6 +1,7 @@
 import type { BindingSpec } from "@sqlite.org/sqlite-wasm";
 import {
   downloadDatabase,
+  downloadDatabaseIfChanged,
   uploadDatabase,
   type DownloadErrorCode,
   type UploadResult,
@@ -101,8 +102,38 @@ export async function openDatabase(session: Session): Promise<Database> {
   const download = await downloadDatabase(session.token);
   if (!download.success && download.code !== "NOT_FOUND")
     throw new DatabaseOpenError(download.code);
-  const stored = download.success ? download : null;
+  return open(session, download.success ? download : null);
+}
 
+/**
+ * Downloads and opens the stored database if it's newer than `current`:
+ * saved since `current` was, or, if `current` was never saved, saved for
+ * the first time elsewhere. Returns null otherwise, including when there's
+ * no stored database. `current` stays open.
+ *
+ * Throws as `openDatabase` does.
+ */
+export async function openNewerDatabase(
+  session: Session,
+  current: Database,
+): Promise<Database | null> {
+  const download =
+    current.sha256 === null
+      ? await downloadDatabase(session.token)
+      : await downloadDatabaseIfChanged(session.token, current.sha256);
+  if (!download.success) {
+    if (download.code === "NOT_FOUND" || download.code === "NOT_MODIFIED") return null;
+    throw new DatabaseOpenError(download.code);
+  }
+  if (download.sha256 === current.sha256) return null;
+  return open(session, download);
+}
+
+/** Opens `stored` in a new worker, or creates a new database if it's null. */
+async function open(
+  session: Session,
+  stored: { blob: Uint8Array<ArrayBuffer>; sha256: string } | null,
+) {
   const worker = new Worker(new URL("./worker.ts", import.meta.url), { type: "module" });
   const connection = connect<DatabaseApi>(worker);
   try {

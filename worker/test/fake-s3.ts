@@ -22,6 +22,7 @@ export function installFakeS3() {
   let holdingPuts = false;
   let heldPutCount = 0;
   let putCount = 0;
+  let getCount = 0;
 
   const bucketUrl = `${env.S3_ENDPOINT}/${env.S3_BUCKET}/`;
 
@@ -53,6 +54,7 @@ export function installFakeS3() {
     }
 
     if (request.method === "GET") {
+      getCount++;
       const object = objects.get(key);
       if (object === undefined) return new Response("NoSuchKey", { status: 404 });
       return new Response(object.body, { headers: object.metadata });
@@ -70,6 +72,10 @@ export function installFakeS3() {
     /** Number of PUT requests that reached the bucket. */
     get putCount() {
       return putCount;
+    },
+    /** Number of GET requests that reached the bucket. */
+    get getCount() {
+      return getCount;
     },
     /** Every following request fails with the given status. */
     failRequests(status: number) {

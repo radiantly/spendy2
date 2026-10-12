@@ -101,12 +101,17 @@ const textSelection = () => {
   return [element.selectionStart, element.selectionEnd];
 };
 
-/** Renders the table and makes a cell active, without editing it. */
-async function activate(text: string, column: number) {
-  await renderTable();
+/** Makes a cell active, without editing it. */
+async function makeActive(text: string, column: number) {
   await userEvent.click(cellOf(text, column));
   await userEvent.keyboard("{Escape}");
   await expect.element(grid()).toHaveFocus();
+}
+
+/** Renders the table and makes a cell active, without editing it. */
+async function activate(text: string, column: number) {
+  await renderTable();
+  await makeActive(text, column);
 }
 
 const renderedRows = () =>
@@ -743,6 +748,49 @@ describe("TransactionsTable", () => {
 
       expect(onCommit).not.toHaveBeenCalled();
       await expect.element(input()).not.toBeInTheDocument();
+    });
+  });
+
+  describe("when the rows change", () => {
+    it("keeps the active cell on a row that's still there", async () => {
+      const screen = await render(table());
+      await makeActive("Shop 3", COUNTERPARTY);
+
+      await screen.rerender(
+        <TransactionsTable
+          rows={rows.slice(0, 2)}
+          categories={CATEGORIES}
+          accounts={ACCOUNTS}
+          onCommit={onCommit}
+        />,
+      );
+
+      expect(activeCell()?.textContent).toBe("Shop 1");
+      await userEvent.keyboard("{ArrowUp}");
+      expect(activeCell()?.textContent).toBe("Corner Market");
+    });
+  });
+
+  describe("reporting edits", () => {
+    it("says when a cell starts and stops being edited", async () => {
+      const onEditingChange = vi.fn();
+      const screen = await render(
+        <TransactionsTable
+          rows={rows}
+          categories={CATEGORIES}
+          accounts={ACCOUNTS}
+          onCommit={onCommit}
+          onEditingChange={onEditingChange}
+        />,
+      );
+
+      await userEvent.click(cellOf("Corner Market", COUNTERPARTY));
+      expect(onEditingChange.mock.calls).toEqual([[true]]);
+      await userEvent.keyboard("{Escape}");
+      expect(onEditingChange.mock.calls).toEqual([[true], [false]]);
+      await userEvent.click(cellOf("Shop 1", COUNTERPARTY));
+      screen.unmount();
+      expect(onEditingChange.mock.calls).toEqual([[true], [false], [true], [false]]);
     });
   });
 

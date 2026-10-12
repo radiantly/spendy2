@@ -15,6 +15,7 @@ import EditableCell, { type FinishHow, type SubmitResult } from "./EditableCell.
 import {
   bounds,
   cellAtPoint,
+  clampSelection,
   collapsed,
   contains,
   edges,
@@ -95,6 +96,8 @@ type TransactionsTableProps = {
   accounts: readonly string[];
   /** Changes to store; several at once when a range is cleared. */
   onCommit: (changes: TransactionChange[]) => void;
+  /** Called when a cell starts being edited, and when it stops. */
+  onEditingChange?: (editing: boolean) => void;
 };
 
 /**
@@ -103,7 +106,13 @@ type TransactionsTableProps = {
  * as soon as it's pressed. Only the rows in (and near) the viewport are
  * rendered; the page scrolls as if all of them were there.
  */
-function TransactionsTable({ rows, categories, accounts, onCommit }: TransactionsTableProps) {
+function TransactionsTable({
+  rows,
+  categories,
+  accounts,
+  onCommit,
+  onEditingChange,
+}: TransactionsTableProps) {
   // The table and virtualizer are mutable objects that return new results
   // from the same instance, so the React Compiler would memoize reads of
   // them and render stale rows. They are only read here, so opting this
@@ -113,8 +122,19 @@ function TransactionsTable({ rows, categories, accounts, onCommit }: Transaction
   const table = useTable({ features, columns, data: rows });
   const tableRows = table.getRowModel().rows;
   const size = { rows: tableRows.length, columns: columns.length };
-  const [selection, setSelection] = useState<GridSelection | null>(null);
+  // The rows can change under the selection, so it's kept to the cells there are.
+  const [unclamped, setSelection] = useState<GridSelection | null>(null);
+  const selection = unclamped && clampSelection(unclamped, size);
   const [editing, setEditing] = useState<Editing | null>(null);
+  const isEditing = editing !== null;
+  // Before the browser can run anything else, so a parent holding something
+  // back during edits does so from the press that starts one.
+  useLayoutEffect(() => {
+    if (!isEditing) return;
+    onEditingChange?.(true);
+    // Also when the table goes away mid-edit.
+    return () => onEditingChange?.(false);
+  }, [isEditing, onEditingChange]);
   const gridId = useId();
   const cellId = (cell: CellPosition) => `${gridId}-${cell.row}-${cell.column}`;
 

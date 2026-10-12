@@ -57,6 +57,19 @@ export function clampPosition(cell: CellPosition, size: GridSize): CellPosition 
   };
 }
 
+/**
+ * `selection` within a grid of `size`, which may have shrunk since it was
+ * made: cells past the edges move onto them. Null when there are no cells.
+ */
+export function clampSelection(selection: GridSelection, size: GridSize): GridSelection | null {
+  if (size.rows === 0 || size.columns === 0) return null;
+  const active = clampPosition(selection.active, size);
+  const head = clampPosition(selection.head, size);
+  return samePosition(active, selection.active) && samePosition(head, selection.head)
+    ? selection
+    : { active, head };
+}
+
 /** Where `motion` goes from `cell`. Stops at the edges. */
 export function target(cell: CellPosition, motion: Motion, size: GridSize): CellPosition {
   const last = { row: size.rows - 1, column: size.columns - 1 };

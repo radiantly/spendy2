@@ -4,6 +4,8 @@ import { requireAuth } from "../../middleware/requireAuth.ts";
 import { sValidator } from "@hono/standard-validator";
 import {
   databaseBlobSchema,
+  databaseEtagSchema,
+  databaseGetPreconditionSchema,
   databasePutPreconditionSchema,
   toSha256Schema,
 } from "../../schemas.ts";
@@ -38,14 +40,17 @@ database.put(
     }
 
     return c.body(null, 204, {
-      ETag: `"${result.sha256}"`,
+      ETag: databaseEtagSchema.encode(sha256),
     });
   },
 );
 
-database.get("/", requireAuth, async (c) => {
+database.get("/", requireAuth, sValidator("header", databaseGetPreconditionSchema), async (c) => {
   const userStore = c.env.USER.getByName(c.var.username);
-  const result = await userStore.downloadDatabase(c.var.sessionId);
+  const result = await userStore.downloadDatabase(
+    c.var.sessionId,
+    c.req.valid("header")["if-none-match"],
+  );
   if (!result.success) {
     const STATUS: Record<typeof result.code, ContentfulStatusCode> = {
       UNAUTHORIZED: 401,
@@ -55,9 +60,12 @@ database.get("/", requireAuth, async (c) => {
     return c.json({ error: result.code }, STATUS[result.code]);
   }
 
+  if (!result.modified)
+    return c.body(null, 304, { ETag: databaseEtagSchema.encode(result.sha256) });
+
   return c.body(result.body, 200, {
     "Content-Type": "application/octet-stream",
-    ETag: `"${result.sha256}"`,
+    ETag: databaseEtagSchema.encode(result.sha256),
   });
 });
 
