@@ -5,24 +5,12 @@
  */
 
 import { AMOUNT_DECIMALS, AMOUNT_SCALE } from "../../db/queries/transactions.ts";
+import { currencyDecimals } from "../../lib/money.ts";
 
 export type ParseResult<T> = { ok: true; value: T } | { ok: false; error: string };
 
 const ok = <T>(value: T): ParseResult<T> => ({ ok: true, value });
 const fail = (error: string): ParseResult<never> => ({ ok: false, error });
-
-/** The number of decimals a currency is usually shown with, e.g. 2 for USD, 0 for JPY. */
-function currencyDecimals(currency: string) {
-  try {
-    return (
-      new Intl.NumberFormat("en-US", { style: "currency", currency }).resolvedOptions()
-        .maximumFractionDigits ?? 2
-    );
-  } catch {
-    // Not an ISO 4217 code; the schema allows any text.
-    return 2;
-  }
-}
 
 function formatScaled(amount: number, minDecimals: number, maxDecimals: number, grouping: boolean) {
   return new Intl.NumberFormat("en-US", {

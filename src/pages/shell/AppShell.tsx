@@ -1,4 +1,5 @@
-import { Navigate, NavLink, Outlet } from "react-router";
+import { Activity, type ReactNode } from "react";
+import { matchPath, Navigate, NavLink, useLocation } from "react-router";
 import { useAuth } from "../../auth/useAuth.ts";
 import DatabaseProvider from "../../db/DatabaseProvider.tsx";
 import { useDatabase } from "../../db/useDatabase.ts";
@@ -6,11 +7,14 @@ import Logo from "../../components/Logo.tsx";
 import SaveControls from "./SaveControls.tsx";
 import { describeOpenError } from "./openError.ts";
 
+/** A page behind login, shown at `path`. */
+export type ShellPage = { path: string; element: ReactNode };
+
 /**
  * Layout for the pages behind login: the header, and the user's database
- * opened for the page. Pages render only once the database is ready.
+ * opened for the pages. Pages render only once the database is ready.
  */
-function AppShell() {
+function AppShell({ pages }: { pages: readonly ShellPage[] }) {
   const { state, endSession } = useAuth();
   if (state.status === "loading") return null;
   if (state.status === "anonymous") return <Navigate to="/login" replace />;
@@ -28,7 +32,7 @@ function AppShell() {
       <div className="flex min-h-svh min-w-fit flex-col">
         <Header username={state.session.username} />
         <main className="flex flex-1 flex-col">
-          <DatabaseGate />
+          <DatabaseGate pages={pages} />
         </main>
       </div>
     </DatabaseProvider>
@@ -75,8 +79,9 @@ function Tab({ to, children }: { to: string; children: string }) {
   );
 }
 
-function DatabaseGate() {
+function DatabaseGate({ pages }: { pages: readonly ShellPage[] }) {
   const { state, retry } = useDatabase();
+  const { pathname } = useLocation();
 
   if (state.status === "loading")
     return (
@@ -101,7 +106,14 @@ function DatabaseGate() {
       </div>
     );
 
-  return <Outlet />;
+  // Every page stays rendered, the others hidden, so switching back to one
+  // finds it as it was left rather than loading again. A hidden page's
+  // effects are cleaned up, and run again when it's shown.
+  return pages.map(({ path, element }) => (
+    <Activity key={path} mode={matchPath(path, pathname) ? "visible" : "hidden"}>
+      {element}
+    </Activity>
+  ));
 }
 
 export default AppShell;

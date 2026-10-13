@@ -3,38 +3,18 @@ import { page, userEvent } from "vitest/browser";
 import toast from "react-hot-toast";
 import { downloadDatabase, downloadDatabaseIfChanged, uploadDatabase } from "../../api/database.ts";
 import { Database, openDatabase } from "../../db/database.ts";
-import { LIST_CATEGORY_NAMES } from "../../db/queries/transactions.ts";
+import { LIST_CATEGORY_NAMES, LIST_TRANSACTIONS } from "../../db/queries/transactions.ts";
 import { ClosedError } from "../../db/rpc.ts";
-import { deriveKek } from "../../lib/kek.ts";
-import { loadSession, saveSession, type Session } from "../../lib/session.ts";
-import { EXPORT_KEY, TOKEN } from "../../test/fixtures.ts";
+import { loadSession } from "../../lib/session.ts";
+import { TOKEN } from "../../test/fixtures.ts";
 import { renderApp } from "../../test/renderAuthPage.tsx";
+import { loggedIn, SHA_A, SHA_B, session, storedDatabase } from "../../test/storedDatabase.ts";
 
 vi.mock("../../api/database.ts", () => ({
   downloadDatabase: vi.fn(),
   downloadDatabaseIfChanged: vi.fn(),
   uploadDatabase: vi.fn(),
 }));
-
-const SHA_A = "a".repeat(64);
-const SHA_B = "b".repeat(64);
-
-async function session(): Promise<Session> {
-  return { username: "alice", token: TOKEN, kek: await deriveKek(EXPORT_KEY) };
-}
-
-/** Builds a stored database blob by running `sql` on a new database. */
-async function storedDatabase(sql: string) {
-  vi.mocked(downloadDatabase).mockResolvedValueOnce({ success: false, code: "NOT_FOUND" });
-  vi.mocked(uploadDatabase).mockResolvedValueOnce({ success: true, sha256: SHA_A });
-  const db = await openDatabase(await session());
-  for (const statement of sql.split(";").filter((s) => s.trim())) await db.query(statement);
-  await db.save();
-  const blob = vi.mocked(uploadDatabase).mock.calls.at(-1)![1];
-  db.close();
-  vi.mocked(uploadDatabase).mockClear();
-  return blob;
-}
 
 /** Opens an uploaded blob and runs a query on it. */
 async function queryUploaded(blob: Uint8Array<ArrayBuffer>, sql: string) {
@@ -66,14 +46,6 @@ beforeEach(async () => {
   vi.mocked(downloadDatabaseIfChanged).mockResolvedValue({ success: false, code: "NOT_MODIFIED" });
   await page.viewport(1280, 800);
 });
-
-async function loggedIn(stored: Uint8Array<ArrayBuffer> | null) {
-  await saveSession(await session());
-  if (stored === null)
-    vi.mocked(downloadDatabase).mockResolvedValue({ success: false, code: "NOT_FOUND" });
-  else
-    vi.mocked(downloadDatabase).mockResolvedValue({ success: true, blob: stored, sha256: SHA_A });
-}
 
 const saveButton = () => page.getByRole("button", { name: /^(Save|Saving…)$/ });
 
@@ -542,6 +514,75 @@ describe("TransactionsPage", () => {
     await new Promise((resolve) => setTimeout(resolve));
 
     expect(showError).not.toHaveBeenCalled();
+  });
+});
+
+describe("switching pages", () => {
+  const tab = (name: string) => page.getByRole("link", { name });
+  const period = (name: string) => page.getByRole("button", { name, exact: true });
+  // The overview lists the same transactions, hidden or not.
+  const inTable = (text: string) => page.getByRole("grid").getByText(text);
+
+  async function showAllTime() {
+    await userEvent.click(period("All"));
+    await expect.element(period("All")).toHaveAttribute("aria-pressed", "true");
+  }
+
+  it("shows the transactions straight away on coming back, while they're read again", async () => {
+    await opened();
+    await userEvent.click(tab("Overview"));
+    await expect.element(page.getByRole("region", { name: "Recent" })).toBeVisible();
+    const reread = holdNextQuery((sql) => sql === LIST_TRANSACTIONS);
+
+    await userEvent.click(tab("Transactions"));
+
+    await expect.element(inTable("Corner Market")).toBeVisible();
+    expect(page.getByText("Loading transactions…").query()).toBeNull();
+    await reread.release();
+  });
+
+  it("keeps the overview's period", async () => {
+    await loggedIn(await storedDatabase(TWO_TRANSACTIONS));
+    await renderApp("/");
+    await showAllTime();
+
+    await userEvent.click(tab("Transactions"));
+    await expect.element(inTable("Corner Market")).toBeVisible();
+    await userEvent.click(tab("Overview"));
+
+    await expect.element(period("All")).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("shows an edit on the overview", async () => {
+    await loggedIn(await storedDatabase(TWO_TRANSACTIONS));
+    await renderApp("/");
+    await showAllTime();
+    const recent = page.getByRole("region", { name: "Recent" });
+    await expect.element(recent).toMatchTextContent(/Corner Market/);
+
+    await userEvent.click(tab("Transactions"));
+    await userEvent.click(inTable("Corner Market"));
+    await page.getByRole("textbox").fill("Corner Shop");
+    await userEvent.keyboard("{Enter}");
+    await expect.element(saveButton()).toHaveAccessibleName("Save");
+    await userEvent.click(tab("Overview"));
+
+    await expect.element(recent).toMatchTextContent(/Corner Shop/);
+  });
+
+  it("finishes an edit left open by going back", async () => {
+    const { router } = await opened();
+    await userEvent.click(inTable("Corner Market"));
+    await page.getByRole("textbox").fill("Corner Shop");
+
+    // As the browser's back button would, without leaving the cell first.
+    // Hiding the page takes focus from the cell, which finishes the edit.
+    await router.navigate("/");
+
+    await expect.element(saveButton()).toHaveAccessibleName("Save");
+    await router.navigate("/transactions");
+    await expect.element(inTable("Corner Shop")).toBeVisible();
+    expect(page.getByRole("textbox").query()).toBeNull();
   });
 });
 

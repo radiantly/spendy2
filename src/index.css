@@ -13,6 +13,12 @@
   --color-lime: #daf65e;
   --color-violet: #6a3cf5;
   --color-coral: #f4845f;
+  --color-lavender: #b9a3f7;
+  --color-sky: #8ccbf5;
+  --color-mint: #7ed6b0;
+  --color-amber: #f2c14e;
+  /* Text on the accent-coloured cards, which look the same in both themes. */
+  --color-paper: #f4f1ea;
 
   --color-canvas: #faf9f5;
   --color-surface: #ffffff;
@@ -23,6 +29,9 @@
   --color-ink-on-lime: #0e0e10;
   --color-focus: var(--color-lime);
   --color-danger: #c2410c;
+  /* Money coming in, and warnings, as text on the page. */
+  --color-gain: #4d7c0f;
+  --color-warning: #a16207;
   --color-strength-0: #f0603e;
   --color-strength-1: #f5934c;
   --color-strength-2: #f2c14e;
@@ -39,6 +48,8 @@
     --color-ink: #f4f1ea;
     --color-ink-muted: #8e8e96;
     --color-danger: #f4845f;
+    --color-gain: var(--color-lime);
+    --color-warning: var(--color-amber);
     --color-strength-0: #f4845f;
     --color-strength-1: #f7a96b;
     --color-strength-2: #f2c14e;

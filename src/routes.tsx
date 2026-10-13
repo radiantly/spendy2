@@ -1,17 +1,20 @@
 import type { RouteObject } from "react-router";
 import type { IconContext } from "react-icons";
 import AuthPage from "./pages/auth/AuthPage.tsx";
-import AppShell from "./pages/shell/AppShell.tsx";
+import OverviewPage from "./pages/overview/OverviewPage.tsx";
+import AppShell, { type ShellPage } from "./pages/shell/AppShell.tsx";
 import TransactionsPage from "./pages/transactions/TransactionsPage.tsx";
+
+/** The pages behind login. The shell keeps them all rendered, showing the one at the URL. */
+const shellPages: ShellPage[] = [
+  { path: "/", element: <OverviewPage /> },
+  { path: "/transactions", element: <TransactionsPage /> },
+];
 
 export const routes: RouteObject[] = [
   {
-    element: <AppShell />,
-    children: [
-      // A placeholder until the dashboard is built.
-      { path: "/", element: <p className="m-auto text-ink-muted">Overview</p> },
-      { path: "/transactions", element: <TransactionsPage /> },
-    ],
+    element: <AppShell pages={shellPages} />,
+    children: shellPages.map(({ path }) => ({ path })),
   },
   { path: "/login", element: <AuthPage mode="login" /> },
   { path: "/register", element: <AuthPage mode="register" /> },
