@@ -25,6 +25,12 @@ export type AuthContextValue = {
    * Network failures throw; storage failures don't (see LoginOutcome).
    */
   login: (username: string, password: string, options: LoginOptions) => Promise<LoginOutcome>;
+  /**
+   * For when the server no longer accepts `session`: forgets it, here and in
+   * storage, which logs out if it's the current one. A login made since (in
+   * this tab or another) is kept.
+   */
+  endSession: (session: Session) => void;
 };
 
 export const AuthContext = createContext<AuthContextValue | null>(null);

@@ -3,10 +3,9 @@ import { RemoteError } from "../../db/rpc.ts";
 
 /** What to tell the user when their database couldn't be opened. */
 export function describeOpenError(error: unknown): string {
+  // An ended session isn't an error here: it logs out (see DatabaseProvider).
   if (error instanceof DatabaseOpenError)
-    return error.code === "UNAUTHORIZED"
-      ? "Your session has ended. Log in again to open your database."
-      : "Couldn't download your database. The server may be having trouble.";
+    return "Couldn't download your database. The server may be having trouble.";
 
   if (error instanceof RemoteError) {
     if (error.code === "DECRYPTION_FAILED")

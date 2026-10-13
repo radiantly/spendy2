@@ -30,3 +30,12 @@ export function saveSession(session: Session): Promise<void> {
 export function clearSession(): Promise<void> {
   return del(SESSION_KEY, store);
 }
+
+/**
+ * Clears the stored session if it's still the one with `token`; another tab
+ * may have replaced it with a newer login since.
+ */
+export async function forgetSession(token: string): Promise<void> {
+  const stored = await loadSession();
+  if (stored?.token === token) await clearSession();
+}

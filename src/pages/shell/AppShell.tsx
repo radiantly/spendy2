@@ -11,13 +11,17 @@ import { describeOpenError } from "./openError.ts";
  * opened for the page. Pages render only once the database is ready.
  */
 function AppShell() {
-  const { state } = useAuth();
+  const { state, endSession } = useAuth();
   if (state.status === "loading") return null;
   if (state.status === "anonymous") return <Navigate to="/login" replace />;
 
   return (
     // A new session gets a fresh provider, so nothing carries over between users.
-    <DatabaseProvider key={state.session.token} session={state.session}>
+    <DatabaseProvider
+      key={state.session.token}
+      session={state.session}
+      onSessionEnded={() => endSession(state.session)}
+    >
       {/* At least as wide as the content: a page wider than the screen (like
           the transactions table on a phone) scrolls sideways as a whole, and
           everything spans that full width rather than just the screen's. */}

@@ -6,7 +6,7 @@ import { Database, openDatabase } from "../../db/database.ts";
 import { LIST_CATEGORY_NAMES } from "../../db/queries/transactions.ts";
 import { ClosedError } from "../../db/rpc.ts";
 import { deriveKek } from "../../lib/kek.ts";
-import { saveSession, type Session } from "../../lib/session.ts";
+import { loadSession, saveSession, type Session } from "../../lib/session.ts";
 import { EXPORT_KEY, TOKEN } from "../../test/fixtures.ts";
 import { renderApp } from "../../test/renderAuthPage.tsx";
 
@@ -137,6 +137,17 @@ async function editCounterparty(from: string, to: string) {
   await userEvent.click(page.getByText(from));
   await page.getByRole("textbox").fill(to);
   await userEvent.keyboard("{Enter}");
+}
+
+/** The page checks for a newer version when it's shown again, as well as every 10 seconds. */
+const checkForUpdates = () => document.dispatchEvent(new Event("visibilitychange"));
+
+/** Logged in, with the transactions page open on TWO_TRANSACTIONS. */
+async function opened() {
+  await loggedIn(await storedDatabase(TWO_TRANSACTIONS));
+  const app = await renderApp("/transactions");
+  await expect.element(page.getByText("Corner Market")).toBeVisible();
+  return app;
 }
 
 describe("AppShell", () => {
@@ -539,18 +550,9 @@ describe("a version saved elsewhere", () => {
   /** Corner Market renamed, as if on another device. */
   const RENAMED = `${TWO_TRANSACTIONS}; UPDATE transactions SET counterparty = 'Corner Shop' WHERE id = 'newer'`;
 
-  /** The page checks for a newer version when it's shown again, as well as every 10 seconds. */
-  const checkForUpdates = () => document.dispatchEvent(new Event("visibilitychange"));
-
   async function savedElsewhere(sql: string) {
     const blob = await storedDatabase(sql);
     vi.mocked(downloadDatabaseIfChanged).mockResolvedValue({ success: true, blob, sha256: SHA_C });
-  }
-
-  async function opened() {
-    await loggedIn(await storedDatabase(TWO_TRANSACTIONS));
-    await renderApp("/transactions");
-    await expect.element(page.getByText("Corner Market")).toBeVisible();
   }
 
   it("is shown in place of the open one", async () => {
@@ -668,5 +670,56 @@ describe("a version saved elsewhere", () => {
     const grid = page.getByRole("grid").element();
     const active = document.getElementById(grid.getAttribute("aria-activedescendant")!);
     expect(active?.textContent).toBe("Corner Market");
+  });
+});
+
+describe("a session the server no longer accepts", () => {
+  it("logs out when opening the database", async () => {
+    await loggedIn(null);
+    vi.mocked(downloadDatabase).mockResolvedValue({ success: false, code: "UNAUTHORIZED" });
+
+    const { router } = await renderApp("/transactions");
+
+    await expect.poll(() => router.state.location.pathname).toBe("/login");
+    await expect.poll(() => loadSession()).toBeNull();
+  });
+
+  it("logs out when checking for a version saved elsewhere", async () => {
+    const { router } = await opened();
+    vi.mocked(downloadDatabaseIfChanged).mockResolvedValue({
+      success: false,
+      code: "UNAUTHORIZED",
+    });
+
+    checkForUpdates();
+
+    await expect.poll(() => router.state.location.pathname).toBe("/login");
+    await expect.poll(() => loadSession()).toBeNull();
+  });
+
+  it("keeps an edit made while the check runs, for saving to report", async () => {
+    const { router } = await opened();
+    let finishCheck!: () => void;
+    vi.mocked(downloadDatabaseIfChanged).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finishCheck = () => resolve({ success: false, code: "UNAUTHORIZED" });
+        }),
+    );
+
+    checkForUpdates();
+    await editCounterparty("Café Lumen", "Café Sol");
+    await expect.element(saveButton()).toBeVisible();
+    finishCheck();
+    // Give it the chance to (wrongly) log out.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    expect(router.state.location.pathname).toBe("/transactions");
+    await expect.element(page.getByText("Café Sol")).toBeVisible();
+    vi.mocked(uploadDatabase).mockResolvedValue({ success: false, code: "UNAUTHORIZED" });
+    await userEvent.click(saveButton());
+    await expect
+      .element(page.getByText("Your session has ended. Log in again to save."))
+      .toBeVisible();
   });
 });

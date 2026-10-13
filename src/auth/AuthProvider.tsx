@@ -1,7 +1,13 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { loginUser } from "../api/auth.ts";
 import { deriveKek } from "../lib/kek.ts";
-import { clearSession, loadSession, saveSession, type Session } from "../lib/session.ts";
+import {
+  clearSession,
+  forgetSession,
+  loadSession,
+  saveSession,
+  type Session,
+} from "../lib/session.ts";
 import {
   AuthContext,
   type AuthState,
@@ -69,7 +75,18 @@ function AuthProvider({ children }: { children: ReactNode }) {
     return { success: true, persisted };
   }
 
-  return <AuthContext value={{ state, login }}>{children}</AuthContext>;
+  function endSession(session: Session) {
+    setState((prev) =>
+      prev.status === "authenticated" && prev.session.token === session.token
+        ? { status: "anonymous" }
+        : prev,
+    );
+    // Storage failures leave the session to be restored next visit, where
+    // the server turns it away again.
+    forgetSession(session.token).catch(() => {});
+  }
+
+  return <AuthContext value={{ state, login, endSession }}>{children}</AuthContext>;
 }
 
 export default AuthProvider;

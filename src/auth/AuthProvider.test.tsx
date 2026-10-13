@@ -116,6 +116,57 @@ describe("AuthProvider", () => {
     expect(await loadSession()).toBeNull();
   });
 
+  describe("ending a session", () => {
+    async function loggedIn() {
+      await storeSession();
+      const rendered = await renderAuth();
+      await expect.poll(() => rendered.result.current.state.status).toBe("authenticated");
+      const { state } = rendered.result.current;
+      if (state.status !== "authenticated") throw new Error("not logged in");
+      return { ...rendered, session: state.session };
+    }
+
+    it("logs out and forgets the stored session", async () => {
+      const { result, act, session } = await loggedIn();
+
+      await act(() => result.current.endSession(session));
+
+      expect(result.current.state.status).toBe("anonymous");
+      await expect.poll(() => loadSession()).toBeNull();
+    });
+
+    it("keeps a login made since in another tab", async () => {
+      const { result, act, session } = await loggedIn();
+      await saveSession({ ...session, token: "newer-token" });
+
+      await act(() => result.current.endSession(session));
+
+      expect(result.current.state.status).toBe("anonymous");
+      // Give it the chance to (wrongly) clear it.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(await loadSession()).toMatchObject({ token: "newer-token" });
+    });
+
+    it("keeps a login made since in this tab", async () => {
+      const { result, act, session } = await loggedIn();
+      vi.mocked(loginUser).mockResolvedValue({
+        success: true,
+        token: "newer-token",
+        exportKey: EXPORT_KEY,
+      });
+      await act(async () => {
+        await result.current.login("alice", "pw", { persist: true });
+      });
+
+      await act(() => result.current.endSession(session));
+
+      const { state } = result.current;
+      expect(state.status === "authenticated" && state.session.token).toBe("newer-token");
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(await loadSession()).toMatchObject({ token: "newer-token" });
+    });
+  });
+
   it("throws outside an AuthProvider", async () => {
     await expect(renderHook(() => useAuth())).rejects.toThrow(
       "useAuth must be used inside <AuthProvider>",

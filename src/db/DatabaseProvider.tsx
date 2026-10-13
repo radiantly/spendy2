@@ -1,11 +1,23 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useEffectEvent,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { pollWhileVisible } from "../lib/pollWhileVisible.ts";
 import type { Session } from "../lib/session.ts";
-import { openDatabase, openNewerDatabase, type Database } from "./database.ts";
+import { DatabaseOpenError, openDatabase, openNewerDatabase, type Database } from "./database.ts";
 import { DatabaseContext, type DatabaseState } from "./databaseContext.ts";
 
 /** How often to check for a version saved elsewhere (ms), while the page is visible. */
 const UPDATE_INTERVAL = 10_000;
+
+/** Whether the server turned the session away. */
+function isSessionEnded(error: unknown) {
+  return error instanceof DatabaseOpenError && error.code === "UNAUTHORIZED";
+}
 
 /**
  * Opens the user's database for its children and tracks unsaved changes.
@@ -14,8 +26,20 @@ const UPDATE_INTERVAL = 10_000;
  * While there's nothing to lose, a version saved elsewhere (another tab or
  * device) replaces the open one. Nothing is lost when there are no unsaved
  * changes, no save is running, and nothing has asked to hold updates back.
+ *
+ * `onSessionEnded` is called when the server no longer accepts `session`:
+ * on opening, or on checking for a newer version while there's nothing to
+ * lose. With unsaved changes, it's left for saving to report.
  */
-function DatabaseProvider({ session, children }: { session: Session; children: ReactNode }) {
+function DatabaseProvider({
+  session,
+  onSessionEnded,
+  children,
+}: {
+  session: Session;
+  onSessionEnded: () => void;
+  children: ReactNode;
+}) {
   const [state, setState] = useState<DatabaseState>({ status: "loading" });
   const [attempt, setAttempt] = useState(0);
   // Counting edits rather than a flag keeps edits made during a save unsaved.
@@ -31,6 +55,7 @@ function DatabaseProvider({ session, children }: { session: Session; children: R
     busyRef.current = dirty || saving;
   });
   const holdsRef = useRef(0);
+  const sessionEnded = useEffectEvent(() => onSessionEnded());
 
   useEffect(() => {
     let cancelled = false;
@@ -49,8 +74,10 @@ function DatabaseProvider({ session, children }: { session: Session; children: R
         if (cancelled || !canReplace()) return newer.close();
         opened = newer;
         setState({ status: "ready", database: newer });
-      } catch {
-        // Tried again on the next check; saving reports any lasting problem.
+      } catch (error) {
+        // Logging out now would lose what changed during the check.
+        if (isSessionEnded(error) && !cancelled && canReplace()) sessionEnded();
+        // Anything else is tried again on the next check; saving reports any lasting problem.
       } finally {
         checking = false;
       }
@@ -64,7 +91,9 @@ function DatabaseProvider({ session, children }: { session: Session; children: R
         stopPolling = pollWhileVisible(() => void checkForUpdate(), UPDATE_INTERVAL);
       },
       (error: unknown) => {
-        if (!cancelled) setState({ status: "error", error });
+        if (cancelled) return;
+        if (isSessionEnded(error)) sessionEnded();
+        else setState({ status: "error", error });
       },
     );
     return () => {
