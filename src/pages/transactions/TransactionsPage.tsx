@@ -9,8 +9,10 @@ import {
   LIST_CATEGORY_NAMES,
   LIST_TRANSACTIONS,
   UPDATE_TRANSACTION,
+  updateBinds,
   type TransactionRow,
 } from "../../db/queries/transactions.ts";
+import { hasPatch, patchEntries } from "./patch.ts";
 import TransactionsTable, { type TransactionChange } from "./TransactionsTable.tsx";
 
 type Loaded = {
@@ -76,24 +78,28 @@ function TransactionsPage() {
   function commit(changes: readonly TransactionChange[]) {
     if (loaded === null || changes.length === 0) return;
     const ids = changes.map(({ rowIndex }) => loaded.rows[rowIndex]!.id);
-    const apply = (value: (change: TransactionChange, row: TransactionRow) => unknown) =>
+    const apply = (
+      patchFor: (change: TransactionChange, row: TransactionRow) => Partial<TransactionRow>,
+    ) =>
       setLoaded((current) => {
         if (current === null) return current;
         const rows = [...current.rows];
         for (const change of changes) {
           const row = rows[change.rowIndex]!;
-          rows[change.rowIndex] = { ...row, [change.field]: value(change, row) };
+          rows[change.rowIndex] = { ...row, ...patchFor(change, row) };
         }
         return { ...current, rows };
       });
 
-    const statements = changes.flatMap(({ field, value }, i) => [
-      ...(field === "category" && value !== null ? [{ sql: INSERT_CATEGORY, bind: [value] }] : []),
-      { sql: UPDATE_TRANSACTION[field], bind: [value, ids[i]!] },
+    const statements = changes.flatMap(({ field, patch }, i) => [
+      ...("category" in patch && patch.category !== null
+        ? [{ sql: INSERT_CATEGORY, bind: [patch.category] }]
+        : []),
+      { sql: UPDATE_TRANSACTION[field], bind: updateBinds(patch, ids[i]!) },
     ]);
     const setsCategory = changes.some(({ field }) => field === "category");
 
-    apply((change) => change.value);
+    apply((change) => change.patch);
     // Before the write, so a change is never on screen without being unsaved.
     markDirty();
     database
@@ -110,12 +116,15 @@ function TransactionsPage() {
             (row) => [row.id, row],
           ),
         );
-        // If a later edit changed a field again, that edit's write decides it.
-        apply((change, row) =>
-          row[change.field] === change.value
-            ? stored.get(row.id)![change.field]
-            : row[change.field],
-        );
+        // If a later edit changed the field again, that edit's write decides
+        // it. A field's columns go back together, so they always match.
+        apply((change, row) => {
+          if (!hasPatch(row, change.patch)) return {};
+          const original = stored.get(row.id)!;
+          return Object.fromEntries(
+            patchEntries(change.patch).map(([column]) => [column, original[column]]),
+          );
+        });
       })
       .then(async () => {
         if (!setsCategory) return;

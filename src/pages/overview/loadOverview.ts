@@ -101,6 +101,7 @@ export async function loadOverview(
         .then(rowsOf<MonthlyTotals>),
       database
         .query(LIST_RECENT_TRANSACTIONS, {
+          $base: base,
           $from: period.from,
           $to: period.to,
           $limit: RECENT_COUNT,

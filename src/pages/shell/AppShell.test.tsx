@@ -32,10 +32,10 @@ const TWO_TRANSACTIONS = `
   INSERT INTO accounts VALUES ('Savings', 'USD');
   INSERT INTO sources (hash, remarks) VALUES ('h1', 'statement.csv');
   INSERT INTO categories VALUES ('Groceries', NULL);
-  INSERT INTO transactions (seq, id, source, account_name, amount, currency, counterparty, category, naive_date)
-    VALUES (1, 'older', 'h1', 'Everyday Checking', -50000, 'USD', 'Café Lumen', NULL, '2026-10-01');
-  INSERT INTO transactions (seq, id, source, account_name, amount, currency, counterparty, category, naive_date)
-    VALUES (2, 'newer', 'h1', 'Everyday Checking', -462000, 'USD', 'Corner Market', 'Groceries', '2026-10-09')
+  INSERT INTO transactions (seq, id, source, account_name, amount_numerator, amount_denominator, currency, counterparty, category, naive_date)
+    VALUES (1, 'older', 'h1', 'Everyday Checking', -5, 1, 'USD', 'Café Lumen', NULL, '2026-10-01');
+  INSERT INTO transactions (seq, id, source, account_name, amount_numerator, amount_denominator, currency, counterparty, category, naive_date)
+    VALUES (2, 'newer', 'h1', 'Everyday Checking', -231, 5, 'USD', 'Corner Market', 'Groceries', '2026-10-09')
 `;
 
 beforeEach(async () => {
@@ -514,6 +514,61 @@ describe("TransactionsPage", () => {
     await new Promise((resolve) => setTimeout(resolve));
 
     expect(showError).not.toHaveBeenCalled();
+  });
+
+  describe("amounts", () => {
+    async function editAmount(from: string, to: string) {
+      await userEvent.click(page.getByText(from, { exact: true }));
+      await page.getByRole("textbox").fill(to);
+      await userEvent.keyboard("{Enter}");
+    }
+
+    const storedAmount = async () => {
+      await userEvent.click(saveButton());
+      await expect.element(saveButton()).not.toBeInTheDocument();
+      const [, blob] = vi.mocked(uploadDatabase).mock.calls[0]!;
+      return queryUploaded(
+        blob,
+        "SELECT amount_numerator, amount_denominator FROM transactions WHERE id = 'newer'",
+      );
+    };
+
+    it("stores an edited amount exactly, and shows it rounded", async () => {
+      await opened();
+
+      await editAmount("-46.20", "-12.345");
+
+      await expect.element(page.getByText("-12.35", { exact: true })).toBeVisible();
+      expect(await storedAmount()).toEqual([{ amount_numerator: -2469, amount_denominator: 200 }]);
+    });
+
+    it("puts back the stored amount when an edit can't be written", async () => {
+      await opened();
+      const update = holdNextUpdate();
+
+      await editAmount("-46.20", "-12.5");
+      update.fail();
+
+      await expect
+        .element(page.getByText("Couldn't change that transaction: disk on fire"))
+        .toBeVisible();
+      await expect.element(page.getByText("-46.20", { exact: true })).toBeVisible();
+    });
+
+    it("doesn't let a failed edit undo part of a later edit with the same denominator", async () => {
+      await opened();
+      const update = holdNextUpdate();
+
+      await editAmount("-46.20", "-12.5");
+      await editAmount("-12.50", "-7.5");
+      update.fail();
+
+      await expect
+        .element(page.getByText("Couldn't change that transaction: disk on fire"))
+        .toBeVisible();
+      await expect.element(page.getByText("-7.50", { exact: true })).toBeVisible();
+      expect(await storedAmount()).toEqual([{ amount_numerator: -15, amount_denominator: 2 }]);
+    });
   });
 });
 

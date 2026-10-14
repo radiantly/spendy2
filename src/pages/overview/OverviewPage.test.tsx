@@ -25,13 +25,17 @@ const insert = (
   category: string | null,
   extra: { currency?: string; converted?: number; transfer?: string; duplicateOf?: string } = {},
 ) => `
-  INSERT INTO transactions (seq, id, source, account_name, transfer_account, amount, currency,
-    converted_amount, converted_currency, counterparty, category, duplicate_of, naive_date)
+  INSERT INTO transactions (seq, id, source, account_name, transfer_account, amount_numerator,
+    amount_denominator, currency, counterparty, category, duplicate_of, naive_date)
   VALUES (${seq}, 't${seq}', 's', '${account}', ${extra.transfer ? `'${extra.transfer}'` : "NULL"},
-    ${Math.round(amount * 10_000)}, '${extra.currency ?? "USD"}',
-    ${extra.converted === undefined ? "NULL, NULL" : `${Math.round(extra.converted * 10_000)}, 'USD'`},
+    ${Math.round(amount * 100)}, 100, '${extra.currency ?? "USD"}',
     '${counterparty}', ${category === null ? "NULL" : `'${category}'`},
     ${extra.duplicateOf ? `'${extra.duplicateOf}'` : "NULL"}, '${date}')
+  ${
+    extra.converted === undefined
+      ? ""
+      : `; INSERT INTO conversions VALUES ('t${seq}', 'USD', ${Math.round(extra.converted * 100)}, 100)`
+  }
 `;
 
 /** Today is Oct 9, 2026 (see the mock of period.ts). */

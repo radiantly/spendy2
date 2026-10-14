@@ -11,66 +11,109 @@ import {
   parseRemarks,
 } from "./fields.ts";
 
+const r = (numerator: number, denominator = 1) => ({ numerator, denominator });
+
 describe("formatAmount", () => {
   it.each([
-    [100_000, "USD", "USD 10.00"],
-    [-12_345_000, "USD", "USD -1,234.50"],
-    [1_000_000, "INR", "INR 100.00"],
-    [15_000_000, "JPY", "JPY 1,500"],
-    [12_340, "BHD", "BHD 1.234"],
-    [12_345, "CLF", "CLF 1.2345"],
-    [100_000, "POINTS", "POINTS 10.00"],
-  ])("formats %i %s as %s", (amount, currency, expected) => {
+    [r(10), "USD", "USD 10.00"],
+    [r(-2469, 2), "USD", "USD -1,234.50"],
+    [r(100), "INR", "INR 100.00"],
+    [r(1500), "JPY", "JPY 1,500"],
+    [r(617, 500), "BHD", "BHD 1.234"],
+    [r(2469, 2000), "CLF", "CLF 1.2345"],
+    [r(10), "POINTS", "POINTS 10.00"],
+  ])("formats %o %s as %s", (amount, currency, expected) => {
     expect(formatAmount(amount, currency)).toBe(expected);
+  });
+
+  it.each([
+    // The float nearest 1.005 is below it, so rounding the float gives 1.00.
+    [r(201, 200), "USD 1.01"],
+    [r(-201, 200), "USD -1.01"],
+    [r(1, 3), "USD 0.33"],
+    [r(2, 3), "USD 0.67"],
+    [r(-1, 3), "USD -0.33"],
+    [r(-1, 300), "USD -0.00"],
+  ])("rounds %o half away from zero to %s", (amount, expected) => {
+    expect(formatAmount(amount, "USD")).toBe(expected);
+  });
+
+  it("formats amounts too large for a float exactly", () => {
+    expect(formatAmount(r(9_007_199_254_740_991, 100), "USD")).toBe("USD 90,071,992,547,409.91");
   });
 });
 
 describe("amountEditText", () => {
   it.each([
-    [100_000, "USD", "10.00"],
-    [-12_345_000, "USD", "-1234.50"],
-    [12_345_055, "USD", "1234.5055"],
-    [15_000_000, "JPY", "1500"],
-    [12_345, "CLF", "1.2345"],
-    [10_000, "CLF", "1.0000"],
-  ])("edits %i %s as %s", (amount, currency, expected) => {
+    [r(10), "USD", "10.00"],
+    [r(-2469, 2), "USD", "-1234.50"],
+    [r(1500), "JPY", "1500"],
+    [r(2469, 2000), "CLF", "1.2345"],
+    [r(1), "CLF", "1.0000"],
+  ])("edits %o %s as %s", (amount, currency, expected) => {
     expect(amountEditText(amount, currency)).toBe(expected);
   });
 
+  it("has only the currency's decimals, so more are rounded", () => {
+    expect(amountEditText(r(1, 3), "USD")).toBe("0.33");
+    expect(amountEditText(r(246_911, 200), "USD")).toBe("1234.56");
+  });
+
   it("round-trips through parseAmount", () => {
-    for (const amount of [0, 1, -1, 9_999, 12_345_055, -987_654_321_000])
+    for (const amount of [r(0), r(1, 100), r(-1, 100), r(9_999, 100), r(-987_654_321, 10)])
       expect(parseAmount(amountEditText(amount, "USD"))).toEqual({ ok: true, value: amount });
   });
 });
 
 describe("parseAmount", () => {
   it.each([
-    ["10", 100_000],
-    ["-12.5", -125_000],
-    ["+3", 30_000],
-    ["1,234.56", 12_345_600],
-    [" 7 ", 70_000],
-    [".5", 5_000],
-    ["5.", 50_000],
-    ["1.2345", 12_345],
-    ["1.00005", 10_001],
-    ["1.000049", 10_000],
-    ["-0.00005", -1],
-    ["0.99995", 10_000],
-    ["-0", 0],
-  ])("parses %s as %i", (text, expected) => {
+    ["10", r(10)],
+    ["-12.5", r(-25, 2)],
+    ["+3", r(3)],
+    ["1,234.56", r(30_864, 25)],
+    [" 7 ", r(7)],
+    [".5", r(1, 2)],
+    ["5.", r(5)],
+    ["1.2345", r(2469, 2000)],
+    ["1.00005", r(20_001, 20_000)],
+    ["10.500", r(21, 2)],
+    ["-0.00005", r(-1, 20_000)],
+    ["-0", r(0)],
+    ["-0.000", r(0)],
+  ])("parses %s exactly as %o", (text, expected) => {
     expect(parseAmount(text)).toEqual({ ok: true, value: expected });
   });
 
-  it.each(["", "abc", "1.2.3", "--1", "1e3", ".", "USD 10", "1 000"])("rejects %j", (text) => {
-    expect(parseAmount(text).ok).toBe(false);
-  });
+  it.each(["", "abc", "1.2.3", "--1", "1e3", ".", "USD 10", "1 000", "1/3"])(
+    "rejects %j",
+    (text) => {
+      expect(parseAmount(text).ok).toBe(false);
+    },
+  );
 
   it("rejects amounts beyond what can be stored exactly", () => {
     expect(parseAmount("900719925474.0992")).toEqual({
       ok: false,
       error: "That amount is too large",
     });
+  });
+
+  it("accepts the largest amount that can be stored exactly", () => {
+    expect(parseAmount("900719925474.0991")).toEqual({
+      ok: true,
+      value: r(9_007_199_254_740_991, 10_000),
+    });
+  });
+
+  it("rejects more decimals than can be stored exactly", () => {
+    expect(parseAmount("0.0000000000000001")).toEqual({
+      ok: false,
+      error: "That amount has too many decimals",
+    });
+  });
+
+  it("accepts trailing zeros past what can be stored, as they don't change the amount", () => {
+    expect(parseAmount("1.50000000000000000000")).toEqual({ ok: true, value: r(3, 2) });
   });
 });
 

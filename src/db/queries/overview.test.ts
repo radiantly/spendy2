@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { configureConnection } from "../connection.ts";
 import { migrate } from "../migrate.ts";
 import { MIGRATIONS } from "../migrations.ts";
+import { reduce, type Rational } from "../../lib/rational.ts";
 import {
   GET_OVERVIEW_META,
   GET_PERIOD_SUMMARY,
@@ -35,14 +36,19 @@ type Transaction = {
   id?: string;
   date?: string;
   account?: string;
-  amount: number;
+  amount: number | Rational;
   currency?: string;
-  converted?: [number, string];
+  /** The amount in other currencies. */
+  conversions?: Record<string, number>;
   category?: string | null;
   transfer?: string;
   duplicateOf?: string;
   counterparty?: string;
 };
+
+/** A whole-units amount, to the cent, as the schema stores it. */
+const stored = (amount: number | Rational) =>
+  typeof amount === "number" ? reduce(Math.round(amount * 100), 100)! : amount;
 
 /** Inserts a transaction; amounts are in whole units. Returns its id. */
 function add({
@@ -51,32 +57,39 @@ function add({
   account = "Checking",
   amount,
   currency = "USD",
-  converted,
+  conversions = {},
   category = null,
   transfer,
   duplicateOf,
   counterparty = "Somewhere",
 }: Transaction) {
   seq++;
+  const { numerator, denominator } = stored(amount);
   db.exec({
-    sql: `INSERT INTO transactions (seq, id, source, account_name, transfer_account, amount, currency,
-      converted_amount, converted_currency, counterparty, category, duplicate_of, naive_date)
-      VALUES (?, ?, 's', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    sql: `INSERT INTO transactions (seq, id, source, account_name, transfer_account, amount_numerator,
+      amount_denominator, currency, counterparty, category, duplicate_of, naive_date)
+      VALUES (?, ?, 's', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     bind: [
       seq,
       id,
       account,
       transfer ?? null,
-      amount * 10_000,
+      numerator,
+      denominator,
       currency,
-      converted ? converted[0] * 10_000 : null,
-      converted ? converted[1] : null,
       counterparty,
       category,
       duplicateOf ?? null,
       date,
     ],
   });
+  for (const [to, value] of Object.entries(conversions)) {
+    const conversion = stored(value);
+    db.exec({
+      sql: "INSERT INTO conversions VALUES (?, ?, ?, ?)",
+      bind: [id, to, conversion.numerator, conversion.denominator],
+    });
+  }
   return id;
 }
 
@@ -97,12 +110,27 @@ describe("GET_OVERVIEW_META", () => {
     expect(rows(GET_OVERVIEW_META)[0]).toMatchObject({ last_import: null });
   });
 
-  it("picks the currency most transactions are in, counting conversions", () => {
-    add({ amount: -1, currency: "EUR", account: "Travel", converted: [-1.1, "USD"] });
-    add({ amount: -1, currency: "EUR", account: "Travel", converted: [-1.1, "USD"] });
-    add({ amount: -1, currency: "EUR", account: "Travel" });
+  it("picks the currency most transactions have an amount in, counting conversions", () => {
+    add({ amount: -1 });
+    add({ amount: -1, currency: "EUR", account: "Travel", conversions: { USD: -1.1, INR: -90 } });
+    add({ amount: -1, currency: "EUR", account: "Travel", conversions: { USD: -1.1, INR: -90 } });
 
     expect(rows(GET_OVERVIEW_META)[0]).toMatchObject({ base_currency: "USD" });
+  });
+
+  it("counts a converted transaction in its own currency too", () => {
+    add({ amount: -1, currency: "EUR", account: "Travel", conversions: { USD: -1.1 } });
+    add({ amount: -1, currency: "EUR", account: "Travel", conversions: { USD: -1.1 } });
+    add({ amount: -1, currency: "EUR", account: "Travel" });
+
+    expect(rows(GET_OVERVIEW_META)[0]).toMatchObject({ base_currency: "EUR" });
+  });
+
+  it("breaks a tie by the currency's name", () => {
+    add({ amount: -1 });
+    add({ amount: -1, currency: "EUR", account: "Travel" });
+
+    expect(rows(GET_OVERVIEW_META)[0]).toMatchObject({ base_currency: "EUR" });
   });
 
   it("spans the transactions' dates", () => {
@@ -123,21 +151,38 @@ describe("GET_PERIOD_SUMMARY", () => {
     add({ amount: 1000, category: "Salary" });
     add({ amount: -999, date: "2026-09-30" });
 
-    expect(summary()).toMatchObject({ spent: 425_000, income: 10_000_000, transactions: 3 });
+    expect(summary()).toMatchObject({ spent: 42.5, income: 1000, transactions: 3 });
+  });
+
+  it("adds up fractions", () => {
+    for (let i = 0; i < 3; i++) add({ amount: { numerator: -1, denominator: 3 } });
+
+    expect(summary()!.spent).toBeCloseTo(1, 10);
   });
 
   it("uses a conversion to the base currency", () => {
-    add({ amount: -20, currency: "EUR", account: "Travel", converted: [-21.8, "USD"] });
+    add({ amount: -20, currency: "EUR", account: "Travel", conversions: { USD: -21.8 } });
 
-    expect(summary()).toMatchObject({ spent: 218_000, unconverted: 0 });
+    expect(summary()).toMatchObject({ spent: 21.8, unconverted: 0 });
+  });
+
+  it("counts a transaction with several conversions once, in the base currency", () => {
+    add({
+      amount: -20,
+      currency: "EUR",
+      account: "Travel",
+      conversions: { INR: -1800, USD: -21.8 },
+    });
+
+    expect(summary()).toMatchObject({ spent: 21.8, transactions: 1, unconverted: 0 });
   });
 
   it("leaves out, and counts, transactions with no amount in the base currency", () => {
     add({ amount: -10 });
     add({ amount: -5000, currency: "INR", account: "India" });
-    add({ amount: -20, currency: "EUR", account: "Travel", converted: [-1800, "INR"] });
+    add({ amount: -20, currency: "EUR", account: "Travel", conversions: { INR: -1800 } });
 
-    expect(summary()).toMatchObject({ spent: 100_000, unconverted: 2, transactions: 3 });
+    expect(summary()).toMatchObject({ spent: 10, unconverted: 2, transactions: 3 });
   });
 
   it("leaves transfers out of spending, income and what needs a category", () => {
@@ -151,7 +196,7 @@ describe("GET_PERIOD_SUMMARY", () => {
     const original = add({ amount: -12, category: "Groceries" });
     add({ amount: -12, duplicateOf: original });
 
-    expect(summary()).toMatchObject({ spent: 120_000, uncategorized: 0 });
+    expect(summary()).toMatchObject({ spent: 12, uncategorized: 0 });
   });
 
   it("counts transactions without a category", () => {
@@ -166,7 +211,7 @@ describe("GET_PERIOD_SUMMARY", () => {
     add({ amount: -2, date: "2026-10-31" });
     add({ amount: -4, date: "2026-11-01" });
 
-    expect(summary()).toMatchObject({ spent: 30_000 });
+    expect(summary()).toMatchObject({ spent: 3 });
   });
 });
 
@@ -178,8 +223,8 @@ describe("LIST_DAILY_SPENDING", () => {
     add({ amount: 50, date: "2026-10-04" });
 
     expect(rows(LIST_DAILY_SPENDING, OCTOBER)).toEqual([
-      { date: "2026-10-03", spent: 50_000 },
-      { date: "2026-10-07", spent: 10_000 },
+      { date: "2026-10-03", spent: 5 },
+      { date: "2026-10-07", spent: 1 },
     ]);
   });
 });
@@ -193,8 +238,8 @@ describe("LIST_CATEGORY_SPENDING", () => {
 
     expect(rows(LIST_CATEGORY_SPENDING, OCTOBER)).toEqual(
       expect.arrayContaining([
-        { category: "Groceries", spent: 150_000 },
-        { category: null, spent: 10_000 },
+        { category: "Groceries", spent: 15 },
+        { category: null, spent: 1 },
       ]),
     );
     expect(rows(LIST_CATEGORY_SPENDING, OCTOBER)).toHaveLength(2);
@@ -204,9 +249,7 @@ describe("LIST_CATEGORY_SPENDING", () => {
     add({ amount: -10, category: "groceries" });
     add({ amount: -5, category: "Groceries" });
 
-    expect(rows(LIST_CATEGORY_SPENDING, OCTOBER)).toEqual([
-      { category: "Groceries", spent: 150_000 },
-    ]);
+    expect(rows(LIST_CATEGORY_SPENDING, OCTOBER)).toEqual([{ category: "Groceries", spent: 15 }]);
   });
 });
 
@@ -226,8 +269,8 @@ describe("LIST_MONTHLY_TOTALS", () => {
     add({ amount: -300, date: "2026-10-01", transfer: "Savings" });
 
     expect(rows(LIST_MONTHLY_TOTALS, { ...OCTOBER, $from: "2026-09-01" })).toEqual([
-      { month: "2026-09", income: 10_000_000, spent: 100_000 },
-      { month: "2026-10", income: 0, spent: 50_000 },
+      { month: "2026-09", income: 1000, spent: 10 },
+      { month: "2026-10", income: 0, spent: 5 },
     ]);
   });
 });
@@ -255,20 +298,20 @@ describe("LIST_ACCOUNT_ACTIVITY", () => {
     add({ amount: -40 });
     add({ amount: -300, transfer: "Savings" });
     add({ amount: 50, transfer: "Savings" });
-    add({ amount: -24, account: "Travel", currency: "EUR", converted: [-26.4, "USD"] });
+    add({ amount: -24, account: "Travel", currency: "EUR", conversions: { USD: -26.4 } });
 
     const accounts = rows(LIST_ACCOUNT_ACTIVITY, bind);
     expect(accounts.find(({ name }) => name === "Checking")).toEqual({
       name: "Checking",
       currency: "USD",
       transactions: 4,
-      money_in: 25_600_000,
-      money_out: 400_000,
-      transfers: -2_500_000,
+      money_in: 2560,
+      money_out: 40,
+      transfers: -250,
     });
     expect(accounts.find(({ name }) => name === "Travel")).toMatchObject({
       currency: "EUR",
-      money_out: 240_000,
+      money_out: 24,
     });
   });
 
@@ -286,12 +329,12 @@ describe("LIST_ACCOUNT_ACTIVITY", () => {
     const original = add({ amount: -12 });
     add({ amount: -12, duplicateOf: original });
 
-    expect(rows(LIST_ACCOUNT_ACTIVITY, bind)[0]).toMatchObject({ money_out: 120_000 });
+    expect(rows(LIST_ACCOUNT_ACTIVITY, bind)[0]).toMatchObject({ money_out: 12 });
   });
 });
 
 describe("LIST_RECENT_TRANSACTIONS", () => {
-  const bind = { $from: OCTOBER.$from, $to: OCTOBER.$to, $limit: 2 };
+  const bind = { ...OCTOBER, $limit: 2 };
 
   it("lists the latest in the period, newest first, later imports first on a day", () => {
     add({ id: "old", amount: -1, date: "2026-10-01" });
@@ -309,6 +352,33 @@ describe("LIST_RECENT_TRANSACTIONS", () => {
     expect(rows(LIST_RECENT_TRANSACTIONS, bind)).toMatchObject([
       { category: "Groceries", category_parent: "Food", duplicate: 0 },
       { category: null, category_parent: null, duplicate: 1 },
+    ]);
+  });
+
+  it("has the exact amount, and only its conversion to the base currency", () => {
+    add({
+      amount: { numerator: -1, denominator: 3 },
+      currency: "EUR",
+      account: "Travel",
+      conversions: { INR: -30, USD: -0.36 },
+    });
+    add({ amount: -1, date: "2026-10-01" });
+
+    expect(rows(LIST_RECENT_TRANSACTIONS, bind)).toMatchObject([
+      {
+        amount_numerator: -1,
+        amount_denominator: 3,
+        currency: "EUR",
+        base_numerator: -9,
+        base_denominator: 25,
+      },
+      {
+        amount_numerator: -1,
+        amount_denominator: 1,
+        currency: "USD",
+        base_numerator: null,
+        base_denominator: null,
+      },
     ]);
   });
 });

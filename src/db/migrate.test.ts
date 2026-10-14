@@ -155,7 +155,8 @@ describe("schema", () => {
       id: "t1",
       source: "h1",
       account_name: "checking",
-      amount: -12_500,
+      amount_numerator: -5,
+      amount_denominator: 4,
       currency: "SGD",
       counterparty: "Coffee",
       naive_date: "2026-10-10",
@@ -169,13 +170,25 @@ describe("schema", () => {
   }
 
   it("creates the tables", () => {
-    expect(tables()).toEqual(["accounts", "categories", "sources", "transactions"]);
+    expect(tables()).toEqual(["accounts", "categories", "conversions", "sources", "transactions"]);
   });
 
   it("accepts a valid transaction", () => {
     insertTransaction();
 
     expect(db.selectValue("SELECT count(*) FROM transactions")).toBe(1);
+  });
+
+  it("rejects a value of the wrong type", () => {
+    expect(() => insertTransaction({ amount_numerator: "-1.25" })).toThrow(
+      "SQLITE_CONSTRAINT_DATATYPE",
+    );
+  });
+
+  it.each([0, -4])("rejects the amount denominator %i", (denominator) => {
+    expect(() => insertTransaction({ amount_denominator: denominator })).toThrow(
+      "CHECK constraint",
+    );
   });
 
   it("sets the import timestamp of a source", () => {
@@ -307,12 +320,86 @@ describe("schema", () => {
     expect(() => insertTransaction({ duplicate_of: "t1" })).toThrow("no_self_duplicate");
   });
 
-  it.each([{ converted_amount: 100 }, { converted_currency: "USD" }])(
-    "rejects half a conversion: %o",
-    (conversion) => {
-      expect(() => insertTransaction(conversion)).toThrow("valid_conversion");
-    },
-  );
+  describe("conversions", () => {
+    const OWN_CURRENCY = "A transaction can't be converted to its own currency";
+
+    function insertConversion(currency: string, transactionId = "t1") {
+      db.exec({
+        sql: "INSERT INTO conversions VALUES (?, ?, -9, 10)",
+        bind: [transactionId, currency],
+      });
+    }
+
+    const conversions = () =>
+      db.selectArrays("SELECT transaction_id, currency FROM conversions ORDER BY currency");
+
+    beforeEach(() => insertTransaction());
+
+    it("allows conversions to several currencies", () => {
+      insertConversion("USD");
+      insertConversion("EUR");
+
+      expect(conversions()).toEqual([
+        ["t1", "EUR"],
+        ["t1", "USD"],
+      ]);
+    });
+
+    it("rejects a second conversion to the same currency", () => {
+      insertConversion("USD");
+
+      expect(() => insertConversion("USD")).toThrow("UNIQUE constraint failed");
+    });
+
+    it("rejects a conversion of a missing transaction", () => {
+      expect(() => insertConversion("USD", "missing")).toThrow("FOREIGN KEY constraint failed");
+    });
+
+    it("rejects a zero denominator", () => {
+      expect(() => db.exec("INSERT INTO conversions VALUES ('t1', 'USD', 1, 0)")).toThrow(
+        "CHECK constraint",
+      );
+    });
+
+    it("rejects a conversion to the transaction's own currency", () => {
+      expect(() => insertConversion("SGD")).toThrow(OWN_CURRENCY);
+    });
+
+    it("rejects changing a conversion to the transaction's own currency", () => {
+      insertConversion("USD");
+
+      expect(() => db.exec("UPDATE conversions SET currency = 'SGD'")).toThrow(OWN_CURRENCY);
+    });
+
+    it("rejects moving a conversion to a transaction in its currency", () => {
+      insertTransaction({ seq: 2, id: "t2", currency: "USD" });
+      insertConversion("USD");
+
+      expect(() => db.exec("UPDATE conversions SET transaction_id = 't2'")).toThrow(OWN_CURRENCY);
+    });
+
+    it("rejects changing a transaction's currency to one it has a conversion to", () => {
+      insertConversion("USD");
+
+      expect(() => db.exec("UPDATE transactions SET currency = 'USD'")).toThrow(OWN_CURRENCY);
+    });
+
+    it("deletes a transaction's conversions with it", () => {
+      insertConversion("USD");
+
+      db.exec("DELETE FROM transactions");
+
+      expect(conversions()).toEqual([]);
+    });
+
+    it("keeps a transaction's conversions when its id changes", () => {
+      insertConversion("USD");
+
+      db.exec("UPDATE transactions SET id = 't9'");
+
+      expect(conversions()).toEqual([["t9", "USD"]]);
+    });
+  });
 
   it("enforces foreign keys", () => {
     expect(() => insertTransaction({ account_name: "missing" })).toThrow(

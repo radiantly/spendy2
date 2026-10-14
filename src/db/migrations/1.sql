@@ -3,19 +3,19 @@
 CREATE TABLE accounts (
   name              TEXT NOT NULL COLLATE NOCASE PRIMARY KEY,
   default_currency  TEXT NOT NULL
-);
+) STRICT;
 
 CREATE TABLE sources (
   hash              TEXT NOT NULL PRIMARY KEY,
   remarks           TEXT NOT NULL,
   import_timestamp  INTEGER NOT NULL DEFAULT (unixepoch())
-);
+) STRICT;
 
 CREATE TABLE categories (
   name              TEXT NOT NULL COLLATE NOCASE PRIMARY KEY,
   parent            TEXT COLLATE NOCASE REFERENCES categories(name) ON UPDATE CASCADE ON DELETE SET NULL,
   CONSTRAINT no_self_parent CHECK (name <> parent)
-);
+) STRICT;
 
 -- if timestamp is NULL, transactions will be ordered by (naive_date, seq).
 CREATE TABLE transactions (
@@ -27,11 +27,10 @@ CREATE TABLE transactions (
   -- if the counterparty is an existing account
   transfer_account  TEXT COLLATE NOCASE REFERENCES accounts(name) ON UPDATE CASCADE ON DELETE SET NULL,
 
-  -- amount is actual amount multiplied by 10000 and rounded
-  amount            INTEGER NOT NULL,
+  -- amount is a rational number, both parts of the fraction stored
+  amount_numerator  INTEGER NOT NULL,
+  amount_denominator INTEGER NOT NULL CHECK (amount_denominator > 0),
   currency          TEXT NOT NULL,
-  converted_amount  INTEGER,
-  converted_currency TEXT,
   counterparty      TEXT NOT NULL,
   category          TEXT COLLATE NOCASE REFERENCES categories(name) ON UPDATE CASCADE ON DELETE SET NULL,
   duplicate_of      TEXT REFERENCES transactions(id) ON UPDATE CASCADE ON DELETE SET NULL,
@@ -40,13 +39,47 @@ CREATE TABLE transactions (
   timestamp         INTEGER,
   remarks           TEXT,
   CONSTRAINT no_self_duplicate CHECK (id <> duplicate_of),
-  CONSTRAINT no_self_transfer CHECK (account_name <> transfer_account),
-  CONSTRAINT valid_conversion CHECK ((converted_amount IS NULL) = (converted_currency IS NULL))
-);
+  CONSTRAINT no_self_transfer CHECK (account_name <> transfer_account)
+) STRICT;
+
+-- A transaction's amount in other currencies, at most one per currency.
+CREATE TABLE conversions (
+  transaction_id    TEXT NOT NULL REFERENCES transactions(id) ON UPDATE CASCADE ON DELETE CASCADE,
+  currency          TEXT NOT NULL,
+  amount_numerator  INTEGER NOT NULL,
+  amount_denominator INTEGER NOT NULL CHECK (amount_denominator > 0),
+  PRIMARY KEY (transaction_id, currency)
+) STRICT;
 
 -- for the foreign keys' cascades, and the checks below
 CREATE INDEX transactions_category ON transactions(category);
 CREATE INDEX categories_parent ON categories(parent);
+-- for the amounts in one currency
+CREATE INDEX conversions_currency ON conversions(currency);
+
+-- A conversion is into another currency: a transaction's amount in its own
+-- currency is its amount. Checked from both sides, so neither a conversion nor
+-- a change of the transaction's currency can make one.
+CREATE TRIGGER no_conversion_to_own_currency_on_insert
+BEFORE INSERT ON conversions
+WHEN EXISTS (SELECT 1 FROM transactions WHERE id = NEW.transaction_id AND currency = NEW.currency)
+BEGIN
+  SELECT RAISE(ABORT, 'A transaction can''t be converted to its own currency');
+END;
+
+CREATE TRIGGER no_conversion_to_own_currency_on_update
+BEFORE UPDATE OF transaction_id, currency ON conversions
+WHEN EXISTS (SELECT 1 FROM transactions WHERE id = NEW.transaction_id AND currency = NEW.currency)
+BEGIN
+  SELECT RAISE(ABORT, 'A transaction can''t be converted to its own currency');
+END;
+
+CREATE TRIGGER no_currency_with_conversion
+BEFORE UPDATE OF currency ON transactions
+WHEN EXISTS (SELECT 1 FROM conversions WHERE transaction_id = NEW.id AND currency = NEW.currency)
+BEGIN
+  SELECT RAISE(ABORT, 'A transaction can''t be converted to its own currency');
+END;
 
 -- Every category with each of its ancestors: parent, grandparent, and so on.
 -- UNION stops even on a loop already in the data.

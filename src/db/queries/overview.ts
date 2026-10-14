@@ -3,10 +3,15 @@
  * components, so the validate-database script can import and check them.
  *
  * Totals are in one base currency: a transaction counts in it when its
- * amount is in that currency, or it was converted to it. Transfers between
+ * amount is in that currency, or it has a conversion to it. Transfers between
  * the user's own accounts and transactions marked as duplicates are left out of spending
- * and income. Amounts are × `AMOUNT_SCALE`; dates are `YYYY-MM-DD`.
+ * and income. Totals are summed as floats, in whole units of the currency
+ * (12.5 for 12.50); dates are `YYYY-MM-DD`.
  */
+
+/** The float value of the amount stored in `table`. */
+const amountOf = (table: string) =>
+  `(${table}.amount_numerator * 1.0 / ${table}.amount_denominator)`;
 
 /**
  * The transactions from `$from` to `$to` (inclusive), with
@@ -15,19 +20,21 @@
  */
 const IN_PERIOD = `
   WITH t AS (
-    SELECT *,
+    SELECT transactions.*,
       CASE
-        WHEN currency = $base THEN amount
-        WHEN converted_currency = $base THEN converted_amount
+        WHEN transactions.currency = $base THEN ${amountOf("transactions")}
+        ELSE ${amountOf("conversion")}
       END AS base_amount,
       transfer_account IS NULL AND duplicate_of IS NULL AS counted
     FROM transactions
+    LEFT JOIN conversions AS conversion
+      ON conversion.transaction_id = transactions.id AND conversion.currency = $base
     WHERE naive_date BETWEEN $from AND $to
   )
 `;
 
 export type OverviewMeta = {
-  /** The currency most transactions are in, counting their conversion if they have one. */
+  /** The currency most transactions have an amount in, their own or a conversion. */
   base_currency: string | null;
   first_date: string | null;
   last_date: string | null;
@@ -38,8 +45,9 @@ export type OverviewMeta = {
 /** What the rest of the queries need to know first. No binds. */
 export const GET_OVERVIEW_META = `
   SELECT
-    (SELECT coalesce(converted_currency, currency) AS currency
-      FROM transactions GROUP BY 1 ORDER BY count(*) DESC, 1 LIMIT 1) AS base_currency,
+    (SELECT currency
+      FROM (SELECT currency FROM transactions UNION ALL SELECT currency FROM conversions)
+      GROUP BY 1 ORDER BY count(*) DESC, 1 LIMIT 1) AS base_currency,
     (SELECT min(naive_date) FROM transactions) AS first_date,
     (SELECT max(naive_date) FROM transactions) AS last_date,
     (SELECT max(import_timestamp) FROM sources) AS last_import
@@ -141,7 +149,7 @@ export const LIST_ACCOUNT_ACTIVITY = `
     coalesce(sum(CASE WHEN t.transfer_account IS NOT NULL AND t.duplicate_of IS NULL
       AND t.currency = account.default_currency THEN t.amount END), 0) AS transfers
   FROM accounts AS account
-  LEFT JOIN transactions AS t
+  LEFT JOIN (SELECT *, ${amountOf("transactions")} AS amount FROM transactions) AS t
     ON t.account_name = account.name AND t.naive_date BETWEEN $from AND $to
   GROUP BY account.name
   ORDER BY count(t.id) DESC, account.name
@@ -157,13 +165,18 @@ export type RecentTransaction = {
   transfer_account: string | null;
   /** 1 if it's marked as a duplicate of another transaction, else 0. */
   duplicate: number;
-  amount: number;
+  amount_numerator: number;
+  amount_denominator: number;
   currency: string;
-  converted_amount: number | null;
-  converted_currency: string | null;
+  /** The amount's conversion to `$base`, if it has one (never when it's in `$base`). */
+  base_numerator: number | null;
+  base_denominator: number | null;
 };
 
-/** The latest transactions in the period, newest first. Bind `{ $from, $to, $limit }`. */
+/**
+ * The latest transactions in the period, newest first. Bind
+ * `{ $base, $from, $to, $limit }`.
+ */
 export const LIST_RECENT_TRANSACTIONS = `
   SELECT
     t.id, t.naive_date, t.counterparty, t.account_name,
@@ -171,10 +184,14 @@ export const LIST_RECENT_TRANSACTIONS = `
     parent.name AS category_parent,
     t.transfer_account,
     t.duplicate_of IS NOT NULL AS duplicate,
-    t.amount, t.currency, t.converted_amount, t.converted_currency
+    t.amount_numerator, t.amount_denominator, t.currency,
+    conversion.amount_numerator AS base_numerator,
+    conversion.amount_denominator AS base_denominator
   FROM transactions AS t
   LEFT JOIN categories AS category ON category.name = t.category
   LEFT JOIN categories AS parent ON parent.name = category.parent
+  LEFT JOIN conversions AS conversion
+    ON conversion.transaction_id = t.id AND conversion.currency = $base
   WHERE t.naive_date BETWEEN $from AND $to
   ORDER BY t.naive_date DESC, t.seq DESC
   LIMIT $limit

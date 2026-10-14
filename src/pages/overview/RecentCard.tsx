@@ -8,7 +8,7 @@ import { formatDay } from "./period.ts";
 
 /** The period's latest transactions. */
 function RecentCard({ overview, className = "" }: { overview: Overview; className?: string }) {
-  const { recent, categories, topCategoryOf, period } = overview;
+  const { recent, categories, topCategoryOf, period, currency } = overview;
   const colors = categoryColors(categories);
   // Dates only need their year when the period spans more than one.
   const withYear = period.from.slice(0, 4) !== period.to.slice(0, 4);
@@ -58,19 +58,30 @@ function RecentCard({ overview, className = "" }: { overview: Overview; classNam
               </div>
               <div className="flex shrink-0 flex-col items-end gap-0.5 font-mono">
                 <span
-                  className={`text-sm font-medium ${transaction.amount > 0 ? "text-gain" : ""}`}
+                  className={`text-sm font-medium ${transaction.amount_numerator > 0 ? "text-gain" : ""}`}
                 >
-                  {formatMoney(transaction.amount, transaction.currency, { signed: true })}
-                </span>
-                {transaction.converted_amount !== null &&
-                  transaction.converted_currency !== null && (
-                    <span className="text-[11px] text-ink-muted">
-                      ≈{" "}
-                      {formatMoney(transaction.converted_amount, transaction.converted_currency, {
-                        signed: true,
-                      })}
-                    </span>
+                  {formatMoney(
+                    {
+                      numerator: transaction.amount_numerator,
+                      denominator: transaction.amount_denominator,
+                    },
+                    transaction.currency,
+                    { signed: true },
                   )}
+                </span>
+                {transaction.base_numerator !== null && transaction.base_denominator !== null && (
+                  <span className="text-[11px] text-ink-muted">
+                    ≈{" "}
+                    {formatMoney(
+                      {
+                        numerator: transaction.base_numerator,
+                        denominator: transaction.base_denominator,
+                      },
+                      currency,
+                      { signed: true },
+                    )}
+                  </span>
+                )}
               </div>
             </li>
           ))}

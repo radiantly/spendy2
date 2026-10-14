@@ -8,7 +8,7 @@ import {
 } from "react";
 import { useTable } from "@tanstack/react-table";
 import { defaultRangeExtractor, useWindowVirtualizer, type Range } from "@tanstack/react-virtual";
-import type { TransactionRow } from "../../db/queries/transactions.ts";
+import type { TransactionPatch, TransactionRow } from "../../db/queries/transactions.ts";
 import { columns, features, type CellEditor } from "./columns.ts";
 import { selectBetween, selectionAnchor, textOffsetAtPoint, wordAt } from "./caret.ts";
 import EditableCell, { type FinishHow, type SubmitResult } from "./EditableCell.tsx";
@@ -30,6 +30,7 @@ import {
   type GridSelection,
   type Motion,
 } from "./grid.ts";
+import { hasPatch } from "./patch.ts";
 import { useMouseDrag, type Point } from "./useMouseDrag.ts";
 
 /** Rows have a fixed height, so the virtualizer never has to measure them. */
@@ -81,11 +82,14 @@ type Drag = {
   ranging: boolean;
 };
 
-/** A field to set on a transaction: `rowIndex` is its position in `rows`. */
+/**
+ * A field to set on a transaction, as the columns it sets: `rowIndex` is
+ * the transaction's position in `rows`.
+ */
 export type TransactionChange = {
   rowIndex: number;
   field: CellEditor["field"];
-  value: string | number | null;
+  patch: TransactionPatch;
 };
 
 const editorOf = (column: number): CellEditor | undefined => columns[column]!.meta!.editor;
@@ -232,8 +236,8 @@ function TransactionsTable({
     const result = editor.parse(text, { categories, accounts, create });
     if (!result.ok) return result;
     // Typed differently but the same value, like `1234.5` for `1234.50`.
-    if (result.value === row[editor.field]) return { ok: true };
-    onCommit([{ rowIndex, field: editor.field, value: result.value }]);
+    if (hasPatch(row, result.value)) return { ok: true };
+    onCommit([{ rowIndex, field: editor.field, patch: result.value }]);
     return { ok: true };
   }
 
@@ -251,8 +255,8 @@ function TransactionsTable({
       if (!editor || !cleared?.ok) continue;
       for (let index = area.top; index <= area.bottom; index++) {
         const row = tableRows[index]!;
-        if (row.original[editor.field] !== cleared.value)
-          changes.push({ rowIndex: row.index, field: editor.field, value: cleared.value });
+        if (!hasPatch(row.original, cleared.value))
+          changes.push({ rowIndex: row.index, field: editor.field, patch: cleared.value });
       }
     }
     if (changes.length > 0) onCommit(changes);

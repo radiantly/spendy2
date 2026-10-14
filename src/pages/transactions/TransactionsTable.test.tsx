@@ -4,12 +4,20 @@ import { page, userEvent, type Locator } from "vitest/browser";
 import { render } from "vitest-browser-react";
 import toast, { Toaster } from "react-hot-toast";
 import type { TransactionRow } from "../../db/queries/transactions.ts";
+import { reduce } from "../../lib/rational.ts";
 import { mouse, pointIn } from "../../test/mouse.ts";
 import TransactionsTable, { ROW_HEIGHT } from "./TransactionsTable.tsx";
 
 const ROW_COUNT = 100_000;
 const CATEGORIES = ["Dining out", "Groceries"];
 const ACCOUNTS = ["Everyday Checking", "Rewards Credit Card", "Savings"];
+
+/** -1,234.50 first, then a third, then minus cents. */
+function amountOf(i: number) {
+  if (i === 0) return { numerator: -2469, denominator: 2 };
+  if (i === 1) return { numerator: 1, denominator: 3 };
+  return reduce(-i, 100)!;
+}
 
 function makeRows(count: number): TransactionRow[] {
   return Array.from({ length: count }, (_, i) => ({
@@ -18,7 +26,8 @@ function makeRows(count: number): TransactionRow[] {
     account_name: "Everyday Checking",
     counterparty: i === 0 ? "Corner Market" : `Shop ${i}`,
     category: i % 2 === 0 ? "Groceries" : null,
-    amount: i === 0 ? -12_345_000 : -(i * 100),
+    amount_numerator: amountOf(i).numerator,
+    amount_denominator: amountOf(i).denominator,
     currency: "USD",
     remarks: null,
   }));
@@ -191,7 +200,7 @@ describe("TransactionsTable", () => {
       await userEvent.keyboard("{Enter}");
 
       expect(onCommit).toHaveBeenCalledWith([
-        { rowIndex: 0, field: "counterparty", value: "Corner Shop" },
+        { rowIndex: 0, field: "counterparty", patch: { counterparty: "Corner Shop" } },
       ]);
       await expect.element(input()).not.toBeInTheDocument();
     });
@@ -203,7 +212,13 @@ describe("TransactionsTable", () => {
       await input().fill("-2,000.5");
       await userEvent.keyboard("{Enter}");
 
-      expect(onCommit).toHaveBeenCalledWith([{ rowIndex: 0, field: "amount", value: -20_005_000 }]);
+      expect(onCommit).toHaveBeenCalledWith([
+        {
+          rowIndex: 0,
+          field: "amount",
+          patch: { amount_numerator: -4001, amount_denominator: 2 },
+        },
+      ]);
     });
 
     it("commits when the input loses focus", async () => {
@@ -214,7 +229,7 @@ describe("TransactionsTable", () => {
       input().element().blur();
 
       expect(onCommit).toHaveBeenCalledWith([
-        { rowIndex: 0, field: "counterparty", value: "Corner Shop" },
+        { rowIndex: 0, field: "counterparty", patch: { counterparty: "Corner Shop" } },
       ]);
     });
 
@@ -237,6 +252,38 @@ describe("TransactionsTable", () => {
       await userEvent.keyboard("{Enter}");
 
       expect(onCommit).not.toHaveBeenCalled();
+    });
+
+    it("shows an amount with more decimals than its currency rounded", async () => {
+      await renderTable();
+
+      await expect.element(page.getByText("0.33", { exact: true })).toBeVisible();
+    });
+
+    it("doesn't change an amount with more decimals than its currency when left as it is", async () => {
+      await renderTable();
+      await pressAtCharacter(page.getByText("0.33", { exact: true }), 0);
+
+      expect(input().element()).toHaveProperty("value", "0.33");
+      await userEvent.keyboard("{Enter}");
+
+      expect(onCommit).not.toHaveBeenCalled();
+    });
+
+    it("rounds an amount with more decimals than its currency once it's edited", async () => {
+      await renderTable();
+      await pressAtCharacter(page.getByText("0.33", { exact: true }), 0);
+
+      await input().fill("0.330");
+      await userEvent.keyboard("{Enter}");
+
+      expect(onCommit).toHaveBeenCalledWith([
+        {
+          rowIndex: 1,
+          field: "amount",
+          patch: { amount_numerator: 33, amount_denominator: 100 },
+        },
+      ]);
     });
 
     it.each(["-1234.5", " -1234.50 ", "-1,234.50"])(
@@ -298,7 +345,7 @@ describe("TransactionsTable", () => {
       await pressAtCharacter(page.getByText("Shop 1", { exact: true }), 0);
 
       expect(onCommit).toHaveBeenCalledWith([
-        { rowIndex: 0, field: "counterparty", value: "Corner Shop" },
+        { rowIndex: 0, field: "counterparty", patch: { counterparty: "Corner Shop" } },
       ]);
       expect(input().element()).toHaveProperty("value", "Shop 1");
     });
@@ -400,7 +447,9 @@ describe("TransactionsTable", () => {
       expect(input().element()).toHaveProperty("value", "Z");
       expect((input().element() as HTMLInputElement).selectionStart).toBe(1);
       await userEvent.keyboard("oo{Enter}");
-      expect(onCommit).toHaveBeenCalledWith([{ rowIndex: 0, field: "counterparty", value: "Zoo" }]);
+      expect(onCommit).toHaveBeenCalledWith([
+        { rowIndex: 0, field: "counterparty", patch: { counterparty: "Zoo" } },
+      ]);
     });
 
     it("filters a combobox's menu by what's typed", async () => {
@@ -462,7 +511,7 @@ describe("TransactionsTable", () => {
       await userEvent.keyboard("{Tab}");
 
       expect(onCommit).toHaveBeenCalledWith([
-        { rowIndex: 0, field: "counterparty", value: "Corner Shop" },
+        { rowIndex: 0, field: "counterparty", patch: { counterparty: "Corner Shop" } },
       ]);
       await expect.element(input()).not.toBeInTheDocument();
       await expect.element(grid()).toHaveFocus();
@@ -477,7 +526,7 @@ describe("TransactionsTable", () => {
       await userEvent.keyboard("{Shift>}{Tab}{/Shift}");
 
       expect(onCommit).toHaveBeenCalledWith([
-        { rowIndex: 0, field: "counterparty", value: "Corner Shop" },
+        { rowIndex: 0, field: "counterparty", patch: { counterparty: "Corner Shop" } },
       ]);
       expect(activeCell()).toBe(cellOf("Corner Market", ACCOUNT).element());
     });
@@ -522,7 +571,7 @@ describe("TransactionsTable", () => {
       await userEvent.keyboard("{Tab}");
 
       expect(onCommit).toHaveBeenCalledWith([
-        { rowIndex: 0, field: "remarks", value: "Weekly shop" },
+        { rowIndex: 0, field: "remarks", patch: { remarks: "Weekly shop" } },
       ]);
       expect(activeCell()).toBe(cellOf("Shop 1", DATE).element());
     });
@@ -704,7 +753,9 @@ describe("TransactionsTable", () => {
 
       await userEvent.keyboard("{Delete}");
 
-      expect(onCommit).toHaveBeenCalledWith([{ rowIndex: 0, field: "category", value: null }]);
+      expect(onCommit).toHaveBeenCalledWith([
+        { rowIndex: 0, field: "category", patch: { category: null } },
+      ]);
       await expect.element(combobox()).not.toBeInTheDocument();
       await expect.element(grid()).toHaveFocus();
       expect(activeCell()).toBe(cellOf("Corner Market", CATEGORY).element());
@@ -732,8 +783,8 @@ describe("TransactionsTable", () => {
         // counterparties and amounts can't be empty.
         expect(onCommit).toHaveBeenCalledTimes(1);
         expect(onCommit).toHaveBeenCalledWith([
-          { rowIndex: 0, field: "category", value: null },
-          { rowIndex: 2, field: "category", value: null },
+          { rowIndex: 0, field: "category", patch: { category: null } },
+          { rowIndex: 2, field: "category", patch: { category: null } },
         ]);
         await expect.element(input()).not.toBeInTheDocument();
         expect(selectedCells()).toHaveLength(9);
@@ -832,7 +883,7 @@ describe("TransactionsTable", () => {
       await mouse.up(pointIn(cellOf("Shop 1", COUNTERPARTY).element()));
 
       expect(onCommit).toHaveBeenCalledWith([
-        { rowIndex: 0, field: "counterparty", value: "Corner Shop" },
+        { rowIndex: 0, field: "counterparty", patch: { counterparty: "Corner Shop" } },
       ]);
       expect(selectedCells()).toHaveLength(2);
       await expect.element(input()).not.toBeInTheDocument();
@@ -1090,7 +1141,7 @@ describe("TransactionsTable", () => {
       await userEvent.keyboard("{Enter}");
 
       expect(onCommit).toHaveBeenCalledWith([
-        { rowIndex: 0, field: "account_name", value: "Savings" },
+        { rowIndex: 0, field: "account_name", patch: { account_name: "Savings" } },
       ]);
       await expect.element(combobox()).not.toBeInTheDocument();
     });
@@ -1104,7 +1155,7 @@ describe("TransactionsTable", () => {
       await expect.element(highlighted()).toHaveTextContent("Rewards Credit Card");
       await userEvent.keyboard("{Enter}");
       expect(onCommit).toHaveBeenCalledWith([
-        { rowIndex: 0, field: "account_name", value: "Rewards Credit Card" },
+        { rowIndex: 0, field: "account_name", patch: { account_name: "Rewards Credit Card" } },
       ]);
     });
 
@@ -1115,7 +1166,7 @@ describe("TransactionsTable", () => {
       await userEvent.click(page.getByRole("option", { name: "Savings" }));
 
       expect(onCommit).toHaveBeenCalledWith([
-        { rowIndex: 0, field: "account_name", value: "Savings" },
+        { rowIndex: 0, field: "account_name", patch: { account_name: "Savings" } },
       ]);
       await expect.element(combobox()).not.toBeInTheDocument();
     });
@@ -1141,7 +1192,7 @@ describe("TransactionsTable", () => {
       combobox().element().blur();
 
       expect(onCommit).toHaveBeenCalledWith([
-        { rowIndex: 0, field: "account_name", value: "Savings" },
+        { rowIndex: 0, field: "account_name", patch: { account_name: "Savings" } },
       ]);
     });
 
@@ -1153,7 +1204,7 @@ describe("TransactionsTable", () => {
       combobox().element().blur();
 
       expect(onCommit).toHaveBeenCalledWith([
-        { rowIndex: 0, field: "account_name", value: "Savings" },
+        { rowIndex: 0, field: "account_name", patch: { account_name: "Savings" } },
       ]);
     });
 
@@ -1165,7 +1216,7 @@ describe("TransactionsTable", () => {
       combobox().element().blur();
 
       expect(onCommit).toHaveBeenCalledWith([
-        { rowIndex: 0, field: "account_name", value: "Rewards Credit Card" },
+        { rowIndex: 0, field: "account_name", patch: { account_name: "Rewards Credit Card" } },
       ]);
     });
 
@@ -1190,7 +1241,7 @@ describe("TransactionsTable", () => {
       combobox().element().blur();
 
       expect(onCommit).toHaveBeenCalledWith([
-        { rowIndex: 1, field: "category", value: "Groceries" },
+        { rowIndex: 1, field: "category", patch: { category: "Groceries" } },
       ]);
     });
 
@@ -1217,7 +1268,9 @@ describe("TransactionsTable", () => {
 
       expect(options()).toEqual(["Create category “Pets”"]);
       await userEvent.keyboard("{Enter}");
-      expect(onCommit).toHaveBeenCalledWith([{ rowIndex: 0, field: "category", value: "Pets" }]);
+      expect(onCommit).toHaveBeenCalledWith([
+        { rowIndex: 0, field: "category", patch: { category: "Pets" } },
+      ]);
     });
 
     it("picks the first matching category over creating one", async () => {
@@ -1229,7 +1282,7 @@ describe("TransactionsTable", () => {
       expect(options()).toEqual(["Groceries", "Create category “gro”"]);
       await userEvent.keyboard("{Enter}");
       expect(onCommit).toHaveBeenCalledWith([
-        { rowIndex: 1, field: "category", value: "Groceries" },
+        { rowIndex: 1, field: "category", patch: { category: "Groceries" } },
       ]);
     });
 
@@ -1240,7 +1293,9 @@ describe("TransactionsTable", () => {
       await combobox().fill("gro");
       await userEvent.click(page.getByRole("option", { name: "Create category “gro”" }));
 
-      expect(onCommit).toHaveBeenCalledWith([{ rowIndex: 1, field: "category", value: "gro" }]);
+      expect(onCommit).toHaveBeenCalledWith([
+        { rowIndex: 1, field: "category", patch: { category: "gro" } },
+      ]);
     });
 
     it("doesn't create a category when leaving the cell", async () => {
@@ -1264,7 +1319,9 @@ describe("TransactionsTable", () => {
       await expect.element(highlighted()).not.toBeInTheDocument();
       await userEvent.keyboard("{Enter}");
 
-      expect(onCommit).toHaveBeenCalledWith([{ rowIndex: 0, field: "category", value: null }]);
+      expect(onCommit).toHaveBeenCalledWith([
+        { rowIndex: 0, field: "category", patch: { category: null } },
+      ]);
     });
 
     it("shows an empty account's error instead of the menu", async () => {

@@ -3,7 +3,7 @@
  * over ten years. Deterministic apart from the transaction ids.
  */
 import type { Database } from "@sqlite.org/sqlite-wasm";
-import { AMOUNT_SCALE } from "../src/db/queries/transactions.ts";
+import { reduce } from "../src/lib/rational.ts";
 
 const ACCOUNTS = [
   { name: "Everyday Checking", currency: "USD" },
@@ -89,7 +89,11 @@ export function generateTestData(db: Database, count: number) {
   const rand = random(42);
   const pick = <T>(items: readonly T[]) => items[Math.floor(rand() * items.length)]!;
   const between = (min: number, max: number) => min + rand() * (max - min);
-  const amount = (value: number) => Math.round(value * AMOUNT_SCALE);
+  /** To the cent, as the fraction the schema stores. */
+  const amount = (value: number) => {
+    const { numerator, denominator } = reduce(Math.round(value * 100), 100)!;
+    return [numerator, denominator];
+  };
 
   db.transaction(() => {
     for (const account of ACCOUNTS)
@@ -110,9 +114,13 @@ export function generateTestData(db: Database, count: number) {
       });
 
     const insert = db.prepare(`
-      INSERT INTO transactions (seq, id, source, account_name, transfer_account, amount, currency,
-        converted_amount, converted_currency, counterparty, category, naive_date, remarks)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO transactions (seq, id, source, account_name, transfer_account, amount_numerator,
+        amount_denominator, currency, counterparty, category, naive_date, remarks)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    const insertConversion = db.prepare(`
+      INSERT INTO conversions (transaction_id, currency, amount_numerator, amount_denominator)
+      VALUES (?, ?, ?, ?)
     `);
     const insertSource = db.prepare("INSERT OR IGNORE INTO sources (hash, remarks) VALUES (?, ?)");
 
@@ -174,27 +182,28 @@ export function generateTestData(db: Database, count: number) {
           };
         }
 
-        const converted = row.account.currency === "EUR" ? amount(row.value * 1.09) : null;
+        const id = crypto.randomUUID();
         insert
           .bind([
             seq,
-            crypto.randomUUID(),
+            id,
             source,
             row.account.name,
             row.transfer ?? null,
-            amount(row.value),
+            ...amount(row.value),
             row.account.currency,
-            converted,
-            converted === null ? null : "USD",
             row.counterparty,
             row.category,
             date,
             rand() < 0.05 ? pick(REMARKS) : null,
           ])
           .stepReset();
+        if (row.account.currency === "EUR")
+          insertConversion.bind([id, "USD", ...amount(row.value * 1.09)]).stepReset();
       }
     } finally {
       insert.finalize();
+      insertConversion.finalize();
       insertSource.finalize();
     }
   });

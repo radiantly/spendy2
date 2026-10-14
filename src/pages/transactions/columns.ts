@@ -1,8 +1,14 @@
 import { createColumnHelper, tableFeatures } from "@tanstack/react-table";
-import type { EditableTransactionField, TransactionRow } from "../../db/queries/transactions.ts";
+import type {
+  EditableTransactionField,
+  TransactionPatch,
+  TransactionRow,
+} from "../../db/queries/transactions.ts";
+import type { Rational } from "../../lib/rational.ts";
 import {
   amountEditText,
   formatAmountValue,
+  mapResult,
   parseAccount,
   parseAmount,
   parseCategory,
@@ -24,13 +30,13 @@ export type CellEditor = {
   /** The text the input starts with. */
   editText: (row: TransactionRow) => string;
   /**
-   * The value to store for the text, or why it can't be. `create` is set when
-   * the user picked the menu's create item.
+   * The columns to store for the text, or why it can't be. `create` is set
+   * when the user picked the menu's create item.
    */
   parse: (
     text: string,
     context: EditContext & { create: boolean },
-  ) => ParseResult<string | number | null>;
+  ) => ParseResult<TransactionPatch>;
   /** Makes the cell a combobox: an input with a menu of options. */
   menu?: (context: EditContext) => MenuConfig;
 };
@@ -53,6 +59,11 @@ export const features = tableFeatures({ columnMeta: {} as TransactionColumnMeta 
 
 const helper = createColumnHelper<typeof features, TransactionRow>();
 
+const amountOf = (row: TransactionRow): Rational => ({
+  numerator: row.amount_numerator,
+  denominator: row.amount_denominator,
+});
+
 export const columns = helper.columns([
   helper.accessor("naive_date", {
     header: "Date",
@@ -63,7 +74,7 @@ export const columns = helper.columns([
       editor: {
         field: "naive_date",
         editText: (row) => row.naive_date,
-        parse: (text) => parseNaiveDate(text),
+        parse: (text) => mapResult(parseNaiveDate(text), (naive_date) => ({ naive_date })),
       },
     },
   }),
@@ -75,7 +86,8 @@ export const columns = helper.columns([
       editor: {
         field: "account_name",
         editText: (row) => row.account_name,
-        parse: (text, { accounts }) => parseAccount(text, accounts),
+        parse: (text, { accounts }) =>
+          mapResult(parseAccount(text, accounts), (account_name) => ({ account_name })),
         menu: ({ accounts }) => ({ options: accounts, noMatch: "No account found" }),
       },
     },
@@ -88,7 +100,7 @@ export const columns = helper.columns([
       editor: {
         field: "counterparty",
         editText: (row) => row.counterparty,
-        parse: (text) => parseCounterparty(text),
+        parse: (text) => mapResult(parseCounterparty(text), (counterparty) => ({ counterparty })),
       },
     },
   }),
@@ -100,7 +112,8 @@ export const columns = helper.columns([
       editor: {
         field: "category",
         editText: (row) => row.category ?? "",
-        parse: (text, { categories, create }) => parseCategory(text, categories, create),
+        parse: (text, { categories, create }) =>
+          mapResult(parseCategory(text, categories, create), (category) => ({ category })),
         menu: ({ categories }) => ({
           options: categories,
           createLabel: (name) => `Create category “${name}”`,
@@ -109,7 +122,8 @@ export const columns = helper.columns([
       },
     },
   }),
-  helper.accessor("amount", {
+  helper.display({
+    id: "amount",
     header: "Amount",
     meta: {
       track: "minmax(8rem, 1fr)",
@@ -117,13 +131,17 @@ export const columns = helper.columns([
       mono: true,
       display: (row) => ({
         prefix: `${row.currency} `,
-        text: formatAmountValue(row.amount, row.currency),
+        text: formatAmountValue(amountOf(row), row.currency),
       }),
       editor: {
         field: "amount",
         // Without the currency, so only the number is edited.
-        editText: (row) => amountEditText(row.amount, row.currency),
-        parse: (text) => parseAmount(text),
+        editText: (row) => amountEditText(amountOf(row), row.currency),
+        parse: (text) =>
+          mapResult(parseAmount(text), ({ numerator, denominator }) => ({
+            amount_numerator: numerator,
+            amount_denominator: denominator,
+          })),
       },
     },
   }),
@@ -135,7 +153,7 @@ export const columns = helper.columns([
       editor: {
         field: "remarks",
         editText: (row) => row.remarks ?? "",
-        parse: (text) => parseRemarks(text),
+        parse: (text) => mapResult(parseRemarks(text), (remarks) => ({ remarks })),
       },
     },
   }),
