@@ -1,5 +1,5 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
-import toast from "react-hot-toast";
+import { toast } from "sonner";
 import { ClosedError } from "../../db/rpc.ts";
 import { useHoldUpdates, useOpenDatabase } from "../../db/useDatabase.ts";
 import {

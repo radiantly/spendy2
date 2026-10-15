@@ -14,7 +14,8 @@ const shellPages: ShellPage[] = [
 export const routes: RouteObject[] = [
   {
     element: <AppShell pages={shellPages} />,
-    children: shellPages.map(({ path }) => ({ path })),
+    // The shell renders the pages itself, so these routes render nothing.
+    children: shellPages.map(({ path }) => ({ path, element: null })),
   },
   { path: "/login", element: <AuthPage mode="login" /> },
   { path: "/register", element: <AuthPage mode="register" /> },

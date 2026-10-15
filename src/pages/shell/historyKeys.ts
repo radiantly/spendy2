@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import toast from "react-hot-toast";
+import { toast } from "sonner";
 import { matchPath, useLocation } from "react-router";
 import type { DatabaseHistory, Edit } from "../../db/databaseContext.ts";
 import { ClosedError } from "../../db/rpc.ts";
@@ -7,9 +7,6 @@ import { historyKey, type HistoryDirection } from "../../lib/historyKey.ts";
 
 /** The page each kind of edit shows on: undoing it there, it can be seen. */
 const SHOWN_ON: Record<Edit["kind"], string> = { transaction: "/transactions" };
-
-/** One toast for undo and redo, replaced by the next rather than piling up. */
-const TOAST_ID = "undo-redo";
 
 /**
  * Undoes or redoes the latest edit. Says what it did when that can't be seen
@@ -24,11 +21,9 @@ async function travel(history: DatabaseHistory, direction: HistoryDirection, pat
         `Couldn't ${direction} that: ${
           moved.error instanceof Error ? moved.error.message : String(moved.error)
         }`,
-        { id: TOAST_ID },
       );
     else if (!matchPath(SHOWN_ON[moved.step.about.kind], pathname))
       toast(`${direction === "undo" ? "Undid" : "Redid"} ${moved.step.about.description}`, {
-        id: TOAST_ID,
         duration: 3000,
       });
   } catch (error) {

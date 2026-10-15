@@ -8,7 +8,7 @@ import {
   type MouseEvent,
   type RefObject,
 } from "react";
-import toast from "react-hot-toast";
+import { toast } from "sonner";
 import type { CellDisplay } from "./columns.ts";
 import { mapOffset, textOffsetAtPoint } from "./caret.ts";
 import type { Edges } from "./grid.ts";
@@ -19,10 +19,11 @@ import { defaultHighlight, menuItems, type MenuConfig, type MenuItem } from "./m
 export type SubmitResult = { ok: true } | { ok: false; error: string };
 
 /**
- * How an edit ended: with the cell kept active (Enter, Escape), moving to the
- * next or previous cell (Tab, Shift+Tab), or by focus going elsewhere.
+ * How an edit ended: with the cell kept active (Escape), moving to the cell
+ * below or above (Enter, Shift+Enter), moving to the next or previous cell
+ * (Tab, Shift+Tab), or by focus going elsewhere.
  */
-export type FinishHow = "stay" | "next" | "previous" | "away";
+export type FinishHow = "stay" | "down" | "up" | "next" | "previous" | "away";
 
 export type CellEditing = {
   /** The text the input starts with. */
@@ -151,7 +152,8 @@ function stopPress(event: MouseEvent) {
 type CellInputProps = CellEditing & { align?: "end" };
 
 /**
- * The input a cell turns into. Enter submits and Escape cancels, both
+ * The input a cell turns into. Enter submits and moves down (Shift+Enter, up);
+ * Escape cancels,
  * keeping the cell active; Tab submits and moves on. Undo and redo (Ctrl+Z,
  * Ctrl+Y) are the input's own in an edit started by typing, or once its text
  * has changed; otherwise they finish the edit and undo or redo the table's
@@ -239,7 +241,7 @@ function CellInput({
       done("stay");
     } else if (event.key === "Enter") {
       event.preventDefault();
-      commit("stay");
+      commit(event.shiftKey ? "up" : "down");
     } else if (event.key === "Tab") {
       event.preventDefault();
       commit(event.shiftKey ? "previous" : "next");

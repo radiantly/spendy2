@@ -230,13 +230,34 @@ function TransactionsTable({
     setEditing({ cell, caret, text });
   }
 
+  /** Whether `cell` can be edited and has nothing in it. */
+  function isEmpty(cell: CellPosition) {
+    return editorOf(cell.column)?.editText(tableRows[cell.row]!.original) === "";
+  }
+
+  /**
+   * What Enter does from `cell`, edited or not: makes the cell below (or
+   * above) active, editing it straight away if it's empty, as pressing it
+   * would. At the grid's edge, `cell` stays active.
+   */
+  function enter(cell: CellPosition, up: boolean) {
+    const next = move(collapsed(cell), { kind: "step", direction: up ? "up" : "down" }, size);
+    reveal(next.active);
+    if (!samePosition(next.active, cell) && isEmpty(next.active)) startEditing(next.active, 0);
+    else setSelection(next);
+  }
+
   function finishEditing(cell: CellPosition, how: FinishHow) {
     // Only if still editing this cell: pressing another cell finishes this
     // one after the other has started.
     setEditing((current) => (current && samePosition(current.cell, cell) ? null : current));
     if (how === "away") return;
-    const next = how === "stay" ? collapsed(cell) : tab(collapsed(cell), how === "previous", size);
-    select(next, next.active);
+    if (how === "down" || how === "up") enter(cell, how === "up");
+    else {
+      const next =
+        how === "stay" ? collapsed(cell) : tab(collapsed(cell), how === "previous", size);
+      select(next, next.active);
+    }
     focusGrid();
   }
 
@@ -332,7 +353,10 @@ function TransactionsTable({
         reveal(active);
         startEditing(active, 0, "");
       }
-    } else if (editor && (event.key === "Enter" || event.key === "F2")) {
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      enter(active, event.shiftKey);
+    } else if (editor && event.key === "F2") {
       event.preventDefault();
       reveal(active);
       startEditing(active, editor.editText(tableRows[active.row]!.original).length);
@@ -412,7 +436,7 @@ function TransactionsTable({
       // are edited by pressing again once active (so a double-click edits).
       const edits =
         offset !== null &&
-        (editorOf(cell.column)!.editText(tableRows[cell.row]!.original) === "" ||
+        (isEmpty(cell) ||
           (selection !== null && !isRange(selection) && samePosition(selection.active, cell)));
       // Moving focus here first ends any other edit, submitting it.
       focusGrid();

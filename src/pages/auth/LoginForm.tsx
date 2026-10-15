@@ -1,6 +1,6 @@
 import { useState, type SubmitEvent, type TransitionStartFunction } from "react";
 import { FaInfoCircle } from "react-icons/fa";
-import toast from "react-hot-toast";
+import { toast } from "sonner";
 import Checkbox from "../../components/Checkbox.tsx";
 import TextField from "../../components/TextField.tsx";
 import PasswordVisibilityToggle from "../../components/PasswordVisibilityToggle.tsx";

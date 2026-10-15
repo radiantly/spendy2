@@ -1,6 +1,6 @@
 import { createMemoryRouter } from "react-router";
 import { RouterProvider } from "react-router/dom";
-import { Toaster } from "react-hot-toast";
+import { Toaster } from "sonner";
 import { IconContext } from "react-icons";
 import { render } from "vitest-browser-react";
 import { page, type Locator } from "vitest/browser";

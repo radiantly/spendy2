@@ -2,7 +2,7 @@ import type { ComponentProps } from "react";
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { page, userEvent, type Locator } from "vitest/browser";
 import { render } from "vitest-browser-react";
-import toast, { Toaster } from "react-hot-toast";
+import { Toaster } from "sonner";
 import type { Edit } from "../../db/databaseContext.ts";
 import type { Moved } from "../../db/editHistory.ts";
 import type { EditedCell, TransactionRow } from "../../db/queries/transactions.ts";
@@ -42,8 +42,6 @@ let onUndoOrRedo: Mock<ComponentProps<typeof TransactionsTable>["onUndoOrRedo"]>
 beforeEach(async () => {
   onCommit = vi.fn();
   onUndoOrRedo = vi.fn();
-  // Toasts live in a global store; one left from an earlier test would cover the cells.
-  toast.remove();
   await page.viewport(1280, 800);
   window.scrollTo(0, 0);
 });
@@ -409,7 +407,7 @@ describe("TransactionsTable", () => {
       expect(input().element()).toHaveProperty("value", "Corner Shop");
     });
 
-    it("keeps the cell active after Enter, with the grid focused", async () => {
+    it("moves to the cell below after Enter, with the grid focused", async () => {
       await renderTable();
       await editAtCharacter(page.getByText("Corner Market"), 0);
       await input().fill("Corner Shop");
@@ -418,7 +416,71 @@ describe("TransactionsTable", () => {
 
       await expect.element(input()).not.toBeInTheDocument();
       await expect.element(grid()).toHaveFocus();
-      expect(activeCell()).toBe(cellOf("Corner Market", COUNTERPARTY).element());
+      expect(activeCell()).toBe(cellOf("Shop 1", COUNTERPARTY).element());
+    });
+
+    it("moves to the cell above after Shift+Enter", async () => {
+      await renderTable();
+      await editAtCharacter(page.getByText("Shop 2"), 0);
+      await input().fill("Shop Two");
+
+      await userEvent.keyboard("{Shift>}{Enter}{/Shift}");
+
+      expect(onCommit).toHaveBeenCalledWith([
+        { rowIndex: 2, field: "counterparty", patch: { counterparty: "Shop Two" } },
+      ]);
+      await expect.element(input()).not.toBeInTheDocument();
+      expect(activeCell()).toBe(cellOf("Shop 1", COUNTERPARTY).element());
+    });
+
+    it("edits an empty cell below straight away after Enter", async () => {
+      await renderTable();
+      await userEvent.click(cellOf("Corner Market", REMARKS));
+      await input().fill("Weekly shop");
+
+      await userEvent.keyboard("{Enter}");
+
+      await expect.element(input()).toHaveFocus();
+      expect(input().element()).toHaveProperty("value", "");
+      expect(activeCell()).toBe(cellOf("Shop 1", REMARKS).element());
+      await userEvent.keyboard("Rent{Enter}");
+      expect(onCommit).toHaveBeenLastCalledWith([
+        { rowIndex: 1, field: "remarks", patch: { remarks: "Rent" } },
+      ]);
+      expect(activeCell()).toBe(cellOf("Shop 2", REMARKS).element());
+    });
+
+    it("moves to the cell below after Enter on an unchanged value", async () => {
+      await renderTable();
+      await editAtCharacter(page.getByText("Corner Market"), 0);
+
+      await userEvent.keyboard("{Enter}");
+
+      await expect.element(input()).not.toBeInTheDocument();
+      expect(activeCell()).toBe(cellOf("Shop 1", COUNTERPARTY).element());
+    });
+
+    it("stays on an invalid value after Enter", async () => {
+      await renderTable();
+      await editAtCharacter(page.getByText("-1,234.50"), 0);
+      await input().fill("twelve");
+
+      await userEvent.keyboard("{Enter}");
+
+      await expect.element(input()).toHaveAttribute("aria-invalid", "true");
+      expect(activeCell()).toBe(cellOf("Corner Market", AMOUNT).element());
+    });
+
+    it("keeps the last row's cell active after Enter", async () => {
+      await activate("Corner Market", COUNTERPARTY);
+      await userEvent.keyboard("{Control>}{ArrowDown}{/Control}");
+      await expect.element(page.getByText(`Shop ${ROW_COUNT - 1}`)).toBeInTheDocument();
+      await userEvent.keyboard("{F2}");
+
+      await userEvent.keyboard("{Enter}");
+
+      await expect.element(input()).not.toBeInTheDocument();
+      expect(activeCell()).toBe(cellOf(`Shop ${ROW_COUNT - 1}`, COUNTERPARTY).element());
     });
 
     it("keeps the cell active after Escape", async () => {
@@ -468,22 +530,71 @@ describe("TransactionsTable", () => {
       expect(activeCell()).toBe(cellOf("Corner Market", DATE).element());
     });
 
-    it("starts editing with Enter, caret at the end", async () => {
+    it("starts editing with F2, caret at the end", async () => {
       await activate("Corner Market", COUNTERPARTY);
 
-      await userEvent.keyboard("{Enter}");
+      await userEvent.keyboard("{F2}");
 
       await expect.element(input()).toHaveFocus();
       expect(input().element()).toHaveProperty("value", "Corner Market");
       expect((input().element() as HTMLInputElement).selectionStart).toBe("Corner Market".length);
     });
 
-    it("starts editing with F2", async () => {
+    it("moves down with Enter, only making a cell with something in it active", async () => {
       await activate("Corner Market", COUNTERPARTY);
 
-      await userEvent.keyboard("{F2}");
+      await userEvent.keyboard("{Enter}");
 
-      await expect.element(input()).toHaveFocus();
+      expect(activeCell()).toBe(cellOf("Shop 1", COUNTERPARTY).element());
+      expect(input().query()).toBeNull();
+      await expect.element(grid()).toHaveFocus();
+    });
+
+    it("moves up with Shift+Enter", async () => {
+      await activate("Shop 2", COUNTERPARTY);
+
+      await userEvent.keyboard("{Shift>}{Enter}{/Shift}");
+
+      expect(activeCell()).toBe(cellOf("Shop 1", COUNTERPARTY).element());
+      expect(input().query()).toBeNull();
+    });
+
+    it("edits an empty cell moved onto with Enter", async () => {
+      await activate("Corner Market", CATEGORY);
+
+      await userEvent.keyboard("{Enter}");
+
+      await expect.element(combobox()).toHaveFocus();
+      expect(combobox().element()).toHaveProperty("value", "");
+      expect(activeCell()).toBe(cellOf("Shop 1", CATEGORY).element());
+    });
+
+    it("edits an empty cell moved onto with Shift+Enter", async () => {
+      await activate("Shop 2", CATEGORY);
+
+      await userEvent.keyboard("{Shift>}{Enter}{/Shift}");
+
+      await expect.element(combobox()).toHaveFocus();
+      expect(activeCell()).toBe(cellOf("Shop 1", CATEGORY).element());
+    });
+
+    it("stays on the first row with Shift+Enter, without editing", async () => {
+      await activate("Corner Market", REMARKS);
+
+      await userEvent.keyboard("{Shift>}{Enter}{/Shift}");
+
+      expect(activeCell()).toBe(cellOf("Corner Market", REMARKS).element());
+      expect(input().query()).toBeNull();
+    });
+
+    it("moves down from the active cell with Enter, dropping the range", async () => {
+      await activate("Corner Market", DATE);
+      await userEvent.keyboard("{Shift>}{ArrowRight}{ArrowDown}{/Shift}");
+
+      await userEvent.keyboard("{Enter}");
+
+      expect(activeCell()).toBe(cellOf("Shop 1", DATE).element());
+      expect(selectedCells()).toEqual([cellOf("Shop 1", DATE).element()]);
     });
 
     it("replaces the content with what's typed", async () => {
@@ -1332,6 +1443,17 @@ describe("TransactionsTable", () => {
         { rowIndex: 0, field: "account_name", patch: { account_name: "Savings" } },
       ]);
       await expect.element(combobox()).not.toBeInTheDocument();
+      expect(activeCell()).toBe(cellOf("Shop 1", ACCOUNT).element());
+    });
+
+    it("keeps the cell active when an option is picked with the mouse", async () => {
+      await renderTable();
+      await userEvent.dblClick(cellOf("Corner Market", ACCOUNT));
+
+      await userEvent.click(page.getByRole("option", { name: "Savings" }));
+
+      await expect.element(combobox()).not.toBeInTheDocument();
+      expect(activeCell()).toBe(cellOf("Corner Market", ACCOUNT).element());
     });
 
     it("moves the highlight with the arrow keys", async () => {

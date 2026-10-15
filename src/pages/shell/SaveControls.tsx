@@ -1,4 +1,4 @@
-import toast from "react-hot-toast";
+import { toast } from "sonner";
 import { FiSave } from "react-icons/fi";
 import type { UploadErrorCode } from "../../api/database.ts";
 import { useDatabase } from "../../db/useDatabase.ts";

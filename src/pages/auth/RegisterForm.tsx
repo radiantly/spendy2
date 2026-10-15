@@ -1,6 +1,6 @@
 import { useState, type SubmitEvent, type TransitionStartFunction } from "react";
 import { useNavigate } from "react-router";
-import toast from "react-hot-toast";
+import { toast } from "sonner";
 import TextField from "../../components/TextField.tsx";
 import PasswordStrengthMeter from "../../components/PasswordStrengthMeter.tsx";
 import PasswordVisibilityToggle from "../../components/PasswordVisibilityToggle.tsx";

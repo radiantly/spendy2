@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
-import toast from "react-hot-toast";
+import { toast } from "sonner";
 import { downloadDatabase, downloadDatabaseIfChanged, uploadDatabase } from "../../api/database.ts";
 import { Database, openDatabase } from "../../db/database.ts";
 import { LIST_CATEGORY_NAMES, LIST_TRANSACTIONS } from "../../db/queries/transactions.ts";
@@ -1145,7 +1145,7 @@ describe("undo and redo on the transactions page", () => {
       expect(activeCell()).toBe((await cellOf("Corner Market", COUNTERPARTY)).element());
     });
 
-    it("says what it undid and redid where the change can't be seen", async () => {
+    it("says what it undid and redid where the change can't be seen, in a toast each", async () => {
       await opened();
       await editCounterparty("Corner Market", "Corner Shop");
       await showOverview();
@@ -1159,8 +1159,8 @@ describe("undo and redo on the transactions page", () => {
       await expect
         .element(page.getByText("Redid counterparty of Corner Market: Corner Market → Corner Shop"))
         .toBeVisible();
-      // One toast, replaced rather than piled up.
-      expect(page.getByText(/^(Undid|Redid) /).all()).toHaveLength(1);
+      // Each gets its own toast, stacked rather than replaced.
+      expect(page.getByText(/^(Undid|Redid) /).all()).toHaveLength(2);
     });
 
     it("doesn't say what it undid where the change can be seen", async () => {

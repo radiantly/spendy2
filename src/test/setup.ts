@@ -1,5 +1,6 @@
 import { afterEach, vi } from "vitest";
 import { clear, createStore } from "idb-keyval";
+import { toast } from "sonner";
 import "@fontsource/gloria-hallelujah";
 import "@fontsource-variable/bricolage-grotesque";
 import "@fontsource-variable/geist";
@@ -12,5 +13,8 @@ const sessionStore = createStore("spendy", "session");
 
 afterEach(async () => {
   vi.restoreAllMocks();
+  // Toasts live in a global store, which shows the open ones to the next
+  // test's Toaster.
+  toast.dismiss();
   await clear(sessionStore);
 });

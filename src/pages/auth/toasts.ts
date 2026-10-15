@@ -1,4 +1,4 @@
-import toast from "react-hot-toast";
+import { toast } from "sonner";
 
 /** After a login whose session couldn't be saved to this device. */
 export function warnSessionNotSaved() {
