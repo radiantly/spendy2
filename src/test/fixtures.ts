@@ -19,3 +19,13 @@ export function strengthResult(
     feedback: { warning: null, suggestions: [], ...feedback },
   } as ZxcvbnResult;
 }
+
+/** A valid transaction id (a lowercase UUIDv4) that reads as test row `n`. */
+export const transactionId = (n: number) =>
+  `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+
+/** A source's hash: 32 bytes, as SHA-256 gives. */
+export const SOURCE_HASH = new Uint8Array(32);
+
+/** `SOURCE_HASH` as an SQL literal. */
+export const SOURCE_HASH_SQL = `X'${"00".repeat(32)}'`;

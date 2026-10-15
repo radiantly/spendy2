@@ -408,11 +408,17 @@ function TransactionsTable({
       }
       dragRef.current = { origin: cell, textAnchor, ranging: false };
     } else {
+      // An empty cell has nothing to select, so pressing it edits it. Others
+      // are edited by pressing again once active (so a double-click edits).
+      const edits =
+        offset !== null &&
+        (editorOf(cell.column)!.editText(tableRows[cell.row]!.original) === "" ||
+          (selection !== null && !isRange(selection) && samePosition(selection.active, cell)));
       // Moving focus here first ends any other edit, submitting it.
       focusGrid();
-      if (offset === null) setSelection(collapsed(cell));
-      else startEditing(cell, offset);
-      dragRef.current = { origin: cell, textAnchor: offset, ranging: false };
+      if (edits) startEditing(cell, offset);
+      else setSelection(collapsed(cell));
+      dragRef.current = { origin: cell, textAnchor: edits ? offset : null, ranging: false };
     }
     drag(point);
   }

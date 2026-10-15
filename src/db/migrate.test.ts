@@ -3,8 +3,10 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { configureConnection } from "./connection.ts";
 import { DatabaseTooNewError, migrate, migrationsFromFiles, type Migration } from "./migrate.ts";
 import { MIGRATIONS } from "./migrations.ts";
+import { SOURCE_HASH, SOURCE_HASH_SQL, transactionId } from "../test/fixtures.ts";
 
 const sqlite3 = await sqlite3InitModule();
+const [T1, T2, T9] = [1, 2, 9].map(transactionId);
 
 let db: Database;
 beforeEach(() => {
@@ -144,7 +146,7 @@ describe("schema", () => {
     migrate(db, MIGRATIONS);
     db.exec(`
       INSERT INTO accounts VALUES ('checking', 'SGD'), ('savings', 'SGD');
-      INSERT INTO sources (hash, remarks) VALUES ('h1', 'statement.csv');
+      INSERT INTO sources (hash, remarks) VALUES (${SOURCE_HASH_SQL}, 'statement.csv');
     `);
   });
 
@@ -152,8 +154,8 @@ describe("schema", () => {
   function insertTransaction(overrides: Record<string, unknown> = {}) {
     const row: Record<string, unknown> = {
       seq: 1,
-      id: "t1",
-      source: "h1",
+      id: T1,
+      source: SOURCE_HASH,
       account_name: "checking",
       amount_numerator: -5,
       amount_denominator: 4,
@@ -202,6 +204,63 @@ describe("schema", () => {
     },
   );
 
+  it.each([
+    "00000000-0000-4000-8000-00000000000A",
+    "00000000-0000-1000-8000-000000000001",
+    "00000000-0000-4000-c000-000000000001",
+    "00000000000040008000000000000001",
+    "t1",
+  ])("rejects the transaction id %s, which isn't a lowercase UUIDv4", (id) => {
+    expect(() => insertTransaction({ id })).toThrow("CHECK constraint");
+  });
+
+  it.each(["currency", "counterparty", "remarks"])("rejects an empty %s", (column) => {
+    expect(() => insertTransaction({ [column]: "" })).toThrow("CHECK constraint");
+  });
+
+  it.each([
+    ["an account's name", "INSERT INTO accounts VALUES ('', 'SGD')"],
+    ["an account's default currency", "INSERT INTO accounts VALUES ('cash', '')"],
+    ["a category's name", "INSERT INTO categories VALUES ('', NULL)"],
+    ["a source's remarks", `INSERT INTO sources VALUES (X'${"01".repeat(32)}', '', 0)`],
+  ])("rejects an empty value for %s", (_, sql) => {
+    expect(() => db.exec(sql)).toThrow("CHECK constraint");
+  });
+
+  it("rejects a conversion to an empty currency", () => {
+    insertTransaction();
+
+    expect(() => db.exec(`INSERT INTO conversions VALUES ('${T1}', '', 1, 1)`)).toThrow(
+      "CHECK constraint",
+    );
+  });
+
+  it("allows an account without a default currency", () => {
+    db.exec("INSERT INTO accounts VALUES ('cash', NULL)");
+
+    expect(db.selectValue("SELECT default_currency FROM accounts WHERE name = 'cash'")).toBeNull();
+  });
+
+  it.each([31, 33])("rejects a source hash of %i bytes", (length) => {
+    expect(() =>
+      db.exec(
+        `INSERT INTO sources (hash, remarks) VALUES (X'${"01".repeat(length)}', 'other.csv')`,
+      ),
+    ).toThrow("CHECK constraint");
+  });
+
+  it("rejects a source hash given as text", () => {
+    expect(() =>
+      db.exec(`INSERT INTO sources (hash, remarks) VALUES ('${"01".repeat(32)}', 'other.csv')`),
+    ).toThrow("SQLITE_CONSTRAINT_DATATYPE");
+  });
+
+  it("rejects a transaction's source given as text", () => {
+    expect(() => insertTransaction({ source: "00".repeat(32) })).toThrow(
+      "SQLITE_CONSTRAINT_DATATYPE",
+    );
+  });
+
   it("rejects a category that is its own parent", () => {
     expect(() => db.exec("INSERT INTO categories VALUES ('food', 'food')")).toThrow(
       "no_self_parent",
@@ -240,11 +299,13 @@ describe("schema", () => {
     it("keeps a category still used by a transaction spelling it in another case", () => {
       db.exec("INSERT INTO categories VALUES ('Groceries', NULL)");
       insertTransaction({ category: "Groceries" });
-      insertTransaction({ seq: 2, id: "t2", category: "groceries" });
+      insertTransaction({ seq: 2, id: T2, category: "groceries" });
 
-      db.exec("UPDATE transactions SET category = NULL WHERE id = 't1'");
+      db.exec(`UPDATE transactions SET category = NULL WHERE id = '${T1}'`);
 
-      expect(db.selectValue("SELECT category FROM transactions WHERE id = 't2'")).toBe("groceries");
+      expect(db.selectValue(`SELECT category FROM transactions WHERE id = '${T2}'`)).toBe(
+        "groceries",
+      );
       expect(db.selectValues("SELECT name FROM categories")).toEqual(["Groceries"]);
     });
 
@@ -317,13 +378,13 @@ describe("schema", () => {
   });
 
   it("rejects a transaction that duplicates itself", () => {
-    expect(() => insertTransaction({ duplicate_of: "t1" })).toThrow("no_self_duplicate");
+    expect(() => insertTransaction({ duplicate_of: T1 })).toThrow("no_self_duplicate");
   });
 
   describe("conversions", () => {
     const OWN_CURRENCY = "A transaction can't be converted to its own currency";
 
-    function insertConversion(currency: string, transactionId = "t1") {
+    function insertConversion(currency: string, transactionId = T1) {
       db.exec({
         sql: "INSERT INTO conversions VALUES (?, ?, -9, 10)",
         bind: [transactionId, currency],
@@ -340,8 +401,8 @@ describe("schema", () => {
       insertConversion("EUR");
 
       expect(conversions()).toEqual([
-        ["t1", "EUR"],
-        ["t1", "USD"],
+        [T1, "EUR"],
+        [T1, "USD"],
       ]);
     });
 
@@ -356,7 +417,7 @@ describe("schema", () => {
     });
 
     it("rejects a zero denominator", () => {
-      expect(() => db.exec("INSERT INTO conversions VALUES ('t1', 'USD', 1, 0)")).toThrow(
+      expect(() => db.exec(`INSERT INTO conversions VALUES ('${T1}', 'USD', 1, 0)`)).toThrow(
         "CHECK constraint",
       );
     });
@@ -372,10 +433,12 @@ describe("schema", () => {
     });
 
     it("rejects moving a conversion to a transaction in its currency", () => {
-      insertTransaction({ seq: 2, id: "t2", currency: "USD" });
+      insertTransaction({ seq: 2, id: T2, currency: "USD" });
       insertConversion("USD");
 
-      expect(() => db.exec("UPDATE conversions SET transaction_id = 't2'")).toThrow(OWN_CURRENCY);
+      expect(() => db.exec(`UPDATE conversions SET transaction_id = '${T2}'`)).toThrow(
+        OWN_CURRENCY,
+      );
     });
 
     it("rejects changing a transaction's currency to one it has a conversion to", () => {
@@ -395,9 +458,9 @@ describe("schema", () => {
     it("keeps a transaction's conversions when its id changes", () => {
       insertConversion("USD");
 
-      db.exec("UPDATE transactions SET id = 't9'");
+      db.exec(`UPDATE transactions SET id = '${T9}'`);
 
-      expect(conversions()).toEqual([["t9", "USD"]]);
+      expect(conversions()).toEqual([[T9, "USD"]]);
     });
   });
 
@@ -444,9 +507,9 @@ describe("schema", () => {
 
     it("keeps a category another transaction still uses", () => {
       insertTransaction({ category: "Groceries" });
-      insertTransaction({ seq: 2, id: "t2", category: "Groceries" });
+      insertTransaction({ seq: 2, id: T2, category: "Groceries" });
 
-      db.exec("UPDATE transactions SET category = 'Dining out' WHERE id = 't1'");
+      db.exec(`UPDATE transactions SET category = 'Dining out' WHERE id = '${T1}'`);
 
       expect(categories()).toContain("Groceries");
     });
@@ -477,9 +540,9 @@ describe("schema", () => {
 
     it("keeps a category that has subcategories", () => {
       insertTransaction({ category: "Utilities" });
-      insertTransaction({ seq: 2, id: "t2", category: "Power" });
+      insertTransaction({ seq: 2, id: T2, category: "Power" });
 
-      db.exec("UPDATE transactions SET category = NULL WHERE id = 't1'");
+      db.exec(`UPDATE transactions SET category = NULL WHERE id = '${T1}'`);
 
       expect(categories()).toContain("Utilities");
     });
@@ -497,9 +560,9 @@ describe("schema", () => {
     it("keeps a parent that has transactions of its own", () => {
       insertTransaction({ category: "Utilities" });
       db.exec("DELETE FROM categories WHERE name = 'Power'");
-      insertTransaction({ seq: 2, id: "t2", category: "Housing" });
+      insertTransaction({ seq: 2, id: T2, category: "Housing" });
 
-      db.exec("UPDATE transactions SET category = NULL WHERE id = 't1'");
+      db.exec(`UPDATE transactions SET category = NULL WHERE id = '${T1}'`);
 
       expect(categories()).not.toContain("Utilities");
       expect(categories()).toContain("Housing");

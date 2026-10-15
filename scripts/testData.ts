@@ -2,6 +2,7 @@
  * Generated test data: a few accounts and categories, and transactions spread
  * over ten years. Deterministic apart from the transaction ids.
  */
+import { createHash } from "node:crypto";
 import type { Database } from "@sqlite.org/sqlite-wasm";
 import { reduce } from "../src/lib/rational.ts";
 
@@ -130,8 +131,10 @@ export function generateTestData(db: Database, count: number) {
     try {
       for (let seq = 1; seq <= count; seq++) {
         const date = new Date(start + ((end - start) * seq) / count).toISOString().slice(0, 10);
-        const source = `import-${date.slice(0, 7)}`;
-        insertSource.bind([source, `statement ${date.slice(0, 7)}.csv`]).stepReset();
+        // As if each month were imported from its own statement.
+        const statement = `statement ${date.slice(0, 7)}.csv`;
+        const source = createHash("sha256").update(statement).digest();
+        insertSource.bind([source, statement]).stepReset();
 
         const kind = rand();
         let row: {

@@ -78,11 +78,11 @@ function characterPoint(locator: Locator, index: number) {
   return { x: char.left + 1, y: char.top + char.height / 2 };
 }
 
-/** Presses the mouse on the left half of character `index` of an element's text. */
-async function pressAtCharacter(locator: Locator, index: number) {
+/** Double-clicks the left half of character `index` of an element's text, to edit it there. */
+async function editAtCharacter(locator: Locator, index: number) {
   const point = characterPoint(locator, index);
   const box = locator.element().getBoundingClientRect();
-  await userEvent.click(locator, { position: { x: point.x - box.left, y: box.height / 2 } });
+  await userEvent.dblClick(locator, { position: { x: point.x - box.left, y: box.height / 2 } });
 }
 
 const input = () => page.getByRole("textbox");
@@ -178,21 +178,62 @@ describe("TransactionsTable", () => {
   });
 
   describe("editing", () => {
-    it("turns a cell into an input on mouse down, with the caret where it was pressed", async () => {
+    it("turns a cell into an input on double-click, with the caret where it was pressed", async () => {
       await renderTable();
 
-      await pressAtCharacter(page.getByText("Corner Market"), 3);
+      await editAtCharacter(page.getByText("Corner Market"), 3);
 
       await expect.element(input()).toHaveFocus();
       expect(input().element()).toHaveProperty("value", "Corner Market");
-      expect((input().element() as HTMLInputElement).selectionStart).toBe(3);
+      expect(textSelection()).toEqual([3, 3]);
+    });
+
+    it("only makes a cell with something in it active on a click", async () => {
+      await renderTable();
+
+      await userEvent.click(cellOf("Corner Market", COUNTERPARTY));
+
+      expect(activeCell()).toBe(cellOf("Corner Market", COUNTERPARTY).element());
+      await expect.element(grid()).toHaveFocus();
+      await expect.element(input()).not.toBeInTheDocument();
+    });
+
+    it("edits an empty cell straight away on a click", async () => {
+      await renderTable();
+
+      await userEvent.click(cellOf("Corner Market", REMARKS));
+
+      await expect.element(input()).toHaveFocus();
+      expect(input().element()).toHaveProperty("value", "");
+    });
+
+    it("edits the active cell on a click, with the caret where it was pressed", async () => {
+      await activate("Corner Market", COUNTERPARTY);
+      const text = page.getByText("Corner Market");
+      const point = characterPoint(text, 3);
+      const box = text.element().getBoundingClientRect();
+
+      await userEvent.click(text, { position: { x: point.x - box.left, y: box.height / 2 } });
+
+      await expect.element(input()).toHaveFocus();
+      expect(textSelection()).toEqual([3, 3]);
+    });
+
+    it("makes a cell in a range active on a click, without editing it", async () => {
+      await activate("Corner Market", COUNTERPARTY);
+      await userEvent.keyboard("{Shift>}{ArrowDown}{/Shift}");
+
+      await userEvent.click(cellOf("Corner Market", COUNTERPARTY));
+
+      expect(selectedCells()).toHaveLength(1);
+      await expect.element(input()).not.toBeInTheDocument();
     });
 
     it("edits an amount without its currency or grouping", async () => {
       await renderTable();
 
       // Before the "2" in "-1,234.50".
-      await pressAtCharacter(page.getByText("-1,234.50"), 3);
+      await editAtCharacter(page.getByText("-1,234.50"), 3);
 
       expect(input().element()).toHaveProperty("value", "-1234.50");
       expect((input().element() as HTMLInputElement).selectionStart).toBe(2);
@@ -200,7 +241,7 @@ describe("TransactionsTable", () => {
 
     it("commits on Enter", async () => {
       await renderTable();
-      await pressAtCharacter(page.getByText("Corner Market"), 0);
+      await editAtCharacter(page.getByText("Corner Market"), 0);
 
       await input().fill("Corner Shop");
       await userEvent.keyboard("{Enter}");
@@ -213,7 +254,7 @@ describe("TransactionsTable", () => {
 
     it("parses the value before committing", async () => {
       await renderTable();
-      await pressAtCharacter(page.getByText("-1,234.50"), 0);
+      await editAtCharacter(page.getByText("-1,234.50"), 0);
 
       await input().fill("-2,000.5");
       await userEvent.keyboard("{Enter}");
@@ -229,7 +270,7 @@ describe("TransactionsTable", () => {
 
     it("commits when the input loses focus", async () => {
       await renderTable();
-      await pressAtCharacter(page.getByText("Corner Market"), 0);
+      await editAtCharacter(page.getByText("Corner Market"), 0);
 
       await input().fill("Corner Shop");
       input().element().blur();
@@ -241,7 +282,7 @@ describe("TransactionsTable", () => {
 
     it("reverts on Escape", async () => {
       await renderTable();
-      await pressAtCharacter(page.getByText("Corner Market"), 0);
+      await editAtCharacter(page.getByText("Corner Market"), 0);
 
       await input().fill("Corner Shop");
       await userEvent.keyboard("{Escape}");
@@ -253,7 +294,7 @@ describe("TransactionsTable", () => {
 
     it("doesn't commit an unchanged value", async () => {
       await renderTable();
-      await pressAtCharacter(page.getByText("Corner Market"), 0);
+      await editAtCharacter(page.getByText("Corner Market"), 0);
 
       await userEvent.keyboard("{Enter}");
 
@@ -268,7 +309,7 @@ describe("TransactionsTable", () => {
 
     it("doesn't change an amount with more decimals than its currency when left as it is", async () => {
       await renderTable();
-      await pressAtCharacter(page.getByText("0.33", { exact: true }), 0);
+      await editAtCharacter(page.getByText("0.33", { exact: true }), 0);
 
       expect(input().element()).toHaveProperty("value", "0.33");
       await userEvent.keyboard("{Enter}");
@@ -278,7 +319,7 @@ describe("TransactionsTable", () => {
 
     it("rounds an amount with more decimals than its currency once it's edited", async () => {
       await renderTable();
-      await pressAtCharacter(page.getByText("0.33", { exact: true }), 0);
+      await editAtCharacter(page.getByText("0.33", { exact: true }), 0);
 
       await input().fill("0.330");
       await userEvent.keyboard("{Enter}");
@@ -296,7 +337,7 @@ describe("TransactionsTable", () => {
       "doesn't commit the same amount written as %j",
       async (text) => {
         await renderTable();
-        await pressAtCharacter(page.getByText("-1,234.50"), 0);
+        await editAtCharacter(page.getByText("-1,234.50"), 0);
 
         await input().fill(text);
         await userEvent.keyboard("{Enter}");
@@ -307,7 +348,7 @@ describe("TransactionsTable", () => {
 
     it("doesn't commit a counterparty that only gained spaces", async () => {
       await renderTable();
-      await pressAtCharacter(page.getByText("Corner Market"), 0);
+      await editAtCharacter(page.getByText("Corner Market"), 0);
 
       await input().fill("Corner Market ");
       await userEvent.keyboard("{Enter}");
@@ -317,7 +358,7 @@ describe("TransactionsTable", () => {
 
     it("keeps an invalid value open with the error on Enter", async () => {
       await renderTable();
-      await pressAtCharacter(page.getByText("-1,234.50"), 0);
+      await editAtCharacter(page.getByText("-1,234.50"), 0);
 
       await input().fill("twelve");
       await userEvent.keyboard("{Enter}");
@@ -331,7 +372,7 @@ describe("TransactionsTable", () => {
 
     it("undoes an invalid value on blur and says why", async () => {
       await renderTable();
-      await pressAtCharacter(page.getByText("Corner Market"), 0);
+      await editAtCharacter(page.getByText("Corner Market"), 0);
 
       await input().fill("");
       input().element().blur();
@@ -345,20 +386,21 @@ describe("TransactionsTable", () => {
 
     it("commits the open edit when another cell is pressed", async () => {
       await renderTable();
-      await pressAtCharacter(page.getByText("Corner Market"), 0);
+      await editAtCharacter(page.getByText("Corner Market"), 0);
       await input().fill("Corner Shop");
 
-      await pressAtCharacter(page.getByText("Shop 1", { exact: true }), 0);
+      await userEvent.click(cellOf("Shop 1", COUNTERPARTY));
 
       expect(onCommit).toHaveBeenCalledWith([
         { rowIndex: 0, field: "counterparty", patch: { counterparty: "Corner Shop" } },
       ]);
-      expect(input().element()).toHaveProperty("value", "Shop 1");
+      expect(activeCell()).toBe(cellOf("Shop 1", COUNTERPARTY).element());
+      await expect.element(input()).not.toBeInTheDocument();
     });
 
     it("keeps the edited row when it scrolls out of view", async () => {
       await renderTable();
-      await pressAtCharacter(page.getByText("Corner Market"), 0);
+      await editAtCharacter(page.getByText("Corner Market"), 0);
       await input().fill("Corner Shop");
 
       window.scrollTo(0, document.documentElement.scrollHeight);
@@ -369,7 +411,7 @@ describe("TransactionsTable", () => {
 
     it("keeps the cell active after Enter, with the grid focused", async () => {
       await renderTable();
-      await pressAtCharacter(page.getByText("Corner Market"), 0);
+      await editAtCharacter(page.getByText("Corner Market"), 0);
       await input().fill("Corner Shop");
 
       await userEvent.keyboard("{Enter}");
@@ -381,7 +423,7 @@ describe("TransactionsTable", () => {
 
     it("keeps the cell active after Escape", async () => {
       await renderTable();
-      await pressAtCharacter(page.getByText("Corner Market"), 0);
+      await editAtCharacter(page.getByText("Corner Market"), 0);
 
       await userEvent.keyboard("{Escape}");
 
@@ -511,7 +553,7 @@ describe("TransactionsTable", () => {
 
     it("saves with Tab and moves to the next cell", async () => {
       await renderTable();
-      await pressAtCharacter(page.getByText("Corner Market"), 0);
+      await editAtCharacter(page.getByText("Corner Market"), 0);
       await input().fill("Corner Shop");
 
       await userEvent.keyboard("{Tab}");
@@ -526,7 +568,7 @@ describe("TransactionsTable", () => {
 
     it("saves with Shift+Tab and moves to the previous cell", async () => {
       await renderTable();
-      await pressAtCharacter(page.getByText("Corner Market"), 0);
+      await editAtCharacter(page.getByText("Corner Market"), 0);
       await input().fill("Corner Shop");
 
       await userEvent.keyboard("{Shift>}{Tab}{/Shift}");
@@ -539,7 +581,7 @@ describe("TransactionsTable", () => {
 
     it("keeps an invalid value open with the error on Tab", async () => {
       await renderTable();
-      await pressAtCharacter(page.getByText("-1,234.50"), 0);
+      await editAtCharacter(page.getByText("-1,234.50"), 0);
 
       await input().fill("twelve");
       await userEvent.keyboard("{Tab}");
@@ -571,7 +613,7 @@ describe("TransactionsTable", () => {
 
     it("wraps Tab after an edit in the last column", async () => {
       await renderTable();
-      await userEvent.click(cellOf("Corner Market", REMARKS));
+      await userEvent.dblClick(cellOf("Corner Market", REMARKS));
 
       await input().fill("Weekly shop");
       await userEvent.keyboard("{Tab}");
@@ -652,7 +694,7 @@ describe("TransactionsTable", () => {
     it("leaves the arrow keys to the input while editing", async () => {
       await renderTable();
       const cell = cellOf("Corner Market", COUNTERPARTY).element();
-      await pressAtCharacter(page.getByText("Corner Market"), 0);
+      await editAtCharacter(page.getByText("Corner Market"), 0);
 
       await userEvent.keyboard("{ArrowRight}{ArrowDown}");
 
@@ -893,7 +935,7 @@ describe("TransactionsTable", () => {
       "takes %s in a cell being edited as %s while its text is unchanged, finishing the edit",
       async (keys, direction) => {
         await renderTable();
-        await userEvent.click(cellOf("Corner Market", COUNTERPARTY));
+        await userEvent.dblClick(cellOf("Corner Market", COUNTERPARTY));
 
         await userEvent.keyboard(keys);
 
@@ -906,7 +948,7 @@ describe("TransactionsTable", () => {
 
     it("leaves Ctrl+Z to the input once its text has changed", async () => {
       await renderTable();
-      await userEvent.click(cellOf("Corner Market", COUNTERPARTY));
+      await userEvent.dblClick(cellOf("Corner Market", COUNTERPARTY));
       await userEvent.keyboard("{End}s");
 
       await userEvent.keyboard("{Control>}z{/Control}");
@@ -972,25 +1014,33 @@ describe("TransactionsTable", () => {
         />,
       );
 
-      await userEvent.click(cellOf("Corner Market", COUNTERPARTY));
+      await userEvent.dblClick(cellOf("Corner Market", COUNTERPARTY));
       expect(onEditingChange.mock.calls).toEqual([[true]]);
       await userEvent.keyboard("{Escape}");
       expect(onEditingChange.mock.calls).toEqual([[true], [false]]);
-      await userEvent.click(cellOf("Shop 1", COUNTERPARTY));
+      await userEvent.dblClick(cellOf("Shop 1", COUNTERPARTY));
       screen.unmount();
       expect(onEditingChange.mock.calls).toEqual([[true], [false], [true], [false]]);
     });
   });
 
   describe("cursor", () => {
-    it("shows the text cursor only over the active cell", async () => {
+    it("shows the default cursor over idle and active cells", async () => {
       await activate("Corner Market", COUNTERPARTY);
 
-      expect(getComputedStyle(page.getByText("Corner Market").element()).cursor).toBe("text");
+      expect(getComputedStyle(page.getByText("Corner Market").element()).cursor).toBe("default");
       expect(getComputedStyle(page.getByText("Shop 1", { exact: true }).element()).cursor).toBe(
         "default",
       );
       expect(getComputedStyle(cellOf("Corner Market", ACCOUNT).element()).cursor).toBe("default");
+    });
+
+    it("shows the text cursor over the edited cell", async () => {
+      await renderTable();
+
+      await userEvent.dblClick(cellOf("Corner Market", COUNTERPARTY));
+
+      expect(getComputedStyle(input().element()).cursor).toBe("text");
     });
   });
 
@@ -1012,7 +1062,7 @@ describe("TransactionsTable", () => {
 
     it("saves what was typed when a drag from the edited cell selects a range", async () => {
       await renderTable();
-      await pressAtCharacter(page.getByText("Corner Market"), 0);
+      await editAtCharacter(page.getByText("Corner Market"), 0);
       await input().fill("Corner Shop");
 
       await mouse.down(pointIn(input().element()));
@@ -1027,7 +1077,7 @@ describe("TransactionsTable", () => {
     });
 
     it("selects text while the drag stays in the cell", async () => {
-      await renderTable();
+      await activate("Corner Market", COUNTERPARTY);
       const text = page.getByText("Corner Market");
       const from = characterPoint(text, 0);
       const to = characterPoint(text, 6);
@@ -1042,7 +1092,7 @@ describe("TransactionsTable", () => {
     });
 
     it("selects text backwards", async () => {
-      await renderTable();
+      await activate("Corner Market", COUNTERPARTY);
       const text = page.getByText("Corner Market");
       const from = characterPoint(text, 6);
       const to = characterPoint(text, 2);
@@ -1056,7 +1106,7 @@ describe("TransactionsTable", () => {
     });
 
     it("goes back to selecting text from where it started when the drag comes back", async () => {
-      await renderTable();
+      await activate("Corner Market", COUNTERPARTY);
       const text = page.getByText("Corner Market");
       const from = characterPoint(text, 2);
       const back = characterPoint(text, 8);
@@ -1088,7 +1138,7 @@ describe("TransactionsTable", () => {
     });
 
     it("hides the menu while the drag selects other cells, and shows it again when it comes back", async () => {
-      await renderTable();
+      await activate("Corner Market", ACCOUNT);
       const account = cellOf("Corner Market", ACCOUNT).element();
 
       await mouse.down(pointIn(account));
@@ -1103,7 +1153,7 @@ describe("TransactionsTable", () => {
     });
 
     it("doesn't change the highlighted option when the drag passes over the menu", async () => {
-      await renderTable();
+      await activate("Corner Market", CATEGORY);
       const category = cellOf("Corner Market", CATEGORY).element();
 
       await mouse.down(pointIn(category));
@@ -1118,7 +1168,7 @@ describe("TransactionsTable", () => {
     });
 
     it("doesn't change the category when the drag passes over the menu on its way to other cells", async () => {
-      await renderTable();
+      await activate("Corner Market", CATEGORY);
       const category = cellOf("Corner Market", CATEGORY).element();
       const end = pointIn(cellOf("Shop 5", CATEGORY).element());
 
@@ -1177,7 +1227,7 @@ describe("TransactionsTable", () => {
     });
 
     it("extends the text selection with Shift+click in the edited cell", async () => {
-      await renderTable();
+      await activate("Corner Market", COUNTERPARTY);
       const text = page.getByText("Corner Market");
       const from = characterPoint(text, 2);
       const to = characterPoint(text, 9);
@@ -1193,13 +1243,14 @@ describe("TransactionsTable", () => {
       expect(selectedCells()).toHaveLength(1);
     });
 
-    it("selects a word on double-click", async () => {
-      await renderTable();
-      const text = page.getByText("Corner Market");
-      const box = text.element().getBoundingClientRect();
-      const point = characterPoint(text, 9);
+    it("selects a word on double-click in the edited cell", async () => {
+      await activate("Corner Market", COUNTERPARTY);
+      // Where the text is, before the input takes its place.
+      const point = characterPoint(page.getByText("Corner Market"), 9);
+      await userEvent.keyboard("{F2}");
+      const box = input().element().getBoundingClientRect();
 
-      await userEvent.dblClick(text, {
+      await userEvent.dblClick(input(), {
         position: { x: point.x - box.left, y: point.y - box.top },
       });
 
@@ -1249,7 +1300,7 @@ describe("TransactionsTable", () => {
     it("opens a menu of every option, with the current one highlighted", async () => {
       await renderTable();
 
-      await userEvent.click(cellOf("Corner Market", ACCOUNT));
+      await userEvent.dblClick(cellOf("Corner Market", ACCOUNT));
 
       await expect.element(combobox()).toHaveFocus();
       await expect.element(combobox()).toHaveAttribute("aria-expanded", "true");
@@ -1262,7 +1313,7 @@ describe("TransactionsTable", () => {
 
     it("filters the options as the user types, ignoring case", async () => {
       await renderTable();
-      await userEvent.click(cellOf("Corner Market", ACCOUNT));
+      await userEvent.dblClick(cellOf("Corner Market", ACCOUNT));
 
       await combobox().fill("CARD");
 
@@ -1272,7 +1323,7 @@ describe("TransactionsTable", () => {
 
     it("picks the highlighted option on Enter", async () => {
       await renderTable();
-      await userEvent.click(cellOf("Corner Market", ACCOUNT));
+      await userEvent.dblClick(cellOf("Corner Market", ACCOUNT));
 
       await combobox().fill("sav");
       await userEvent.keyboard("{Enter}");
@@ -1285,7 +1336,7 @@ describe("TransactionsTable", () => {
 
     it("moves the highlight with the arrow keys", async () => {
       await renderTable();
-      await userEvent.click(cellOf("Corner Market", ACCOUNT));
+      await userEvent.dblClick(cellOf("Corner Market", ACCOUNT));
 
       await userEvent.keyboard("{ArrowDown}{ArrowDown}{ArrowDown}{ArrowUp}");
 
@@ -1298,7 +1349,7 @@ describe("TransactionsTable", () => {
 
     it("picks an option with the mouse", async () => {
       await renderTable();
-      await userEvent.click(cellOf("Corner Market", ACCOUNT));
+      await userEvent.dblClick(cellOf("Corner Market", ACCOUNT));
 
       await userEvent.click(page.getByRole("option", { name: "Savings" }));
 
@@ -1310,7 +1361,7 @@ describe("TransactionsTable", () => {
 
     it("says when no account matches, and doesn't save on Enter", async () => {
       await renderTable();
-      await userEvent.click(cellOf("Corner Market", ACCOUNT));
+      await userEvent.dblClick(cellOf("Corner Market", ACCOUNT));
 
       await combobox().fill("fdsafjsdoif");
       await userEvent.keyboard("{Enter}");
@@ -1323,7 +1374,7 @@ describe("TransactionsTable", () => {
 
     it("saves an exact match when leaving the cell, in the option's own case", async () => {
       await renderTable();
-      await userEvent.click(cellOf("Corner Market", ACCOUNT));
+      await userEvent.dblClick(cellOf("Corner Market", ACCOUNT));
 
       await combobox().fill("savings");
       combobox().element().blur();
@@ -1335,7 +1386,7 @@ describe("TransactionsTable", () => {
 
     it("saves the highlighted account when leaving the cell", async () => {
       await renderTable();
-      await userEvent.click(cellOf("Corner Market", ACCOUNT));
+      await userEvent.dblClick(cellOf("Corner Market", ACCOUNT));
 
       await combobox().fill("Sav");
       combobox().element().blur();
@@ -1347,7 +1398,7 @@ describe("TransactionsTable", () => {
 
     it("saves an option picked with the arrow keys when leaving the cell", async () => {
       await renderTable();
-      await userEvent.click(cellOf("Corner Market", ACCOUNT));
+      await userEvent.dblClick(cellOf("Corner Market", ACCOUNT));
 
       await userEvent.keyboard("{ArrowDown}");
       combobox().element().blur();
@@ -1359,7 +1410,7 @@ describe("TransactionsTable", () => {
 
     it("undoes an account that names no option when leaving the cell", async () => {
       await renderTable();
-      await userEvent.click(cellOf("Corner Market", ACCOUNT));
+      await userEvent.dblClick(cellOf("Corner Market", ACCOUNT));
 
       await combobox().fill("fdsafjsdoif");
       combobox().element().blur();
@@ -1372,7 +1423,7 @@ describe("TransactionsTable", () => {
 
     it("saves the highlighted existing category when leaving the cell", async () => {
       await renderTable();
-      await userEvent.click(cellOf("Shop 1", CATEGORY));
+      await userEvent.dblClick(cellOf("Shop 1", CATEGORY));
 
       await combobox().fill("gro");
       combobox().element().blur();
@@ -1384,7 +1435,7 @@ describe("TransactionsTable", () => {
 
     it("doesn't create a category highlighted with the arrow keys when leaving the cell", async () => {
       await renderTable();
-      await userEvent.click(cellOf("Shop 1", CATEGORY));
+      await userEvent.dblClick(cellOf("Shop 1", CATEGORY));
 
       await combobox().fill("gro");
       await userEvent.keyboard("{ArrowDown}");
@@ -1399,7 +1450,7 @@ describe("TransactionsTable", () => {
 
     it("offers to create a category that doesn't exist", async () => {
       await renderTable();
-      await userEvent.click(cellOf("Corner Market", CATEGORY));
+      await userEvent.dblClick(cellOf("Corner Market", CATEGORY));
 
       await combobox().fill("Pets");
 
@@ -1412,7 +1463,7 @@ describe("TransactionsTable", () => {
 
     it("picks the first matching category over creating one", async () => {
       await renderTable();
-      await userEvent.click(cellOf("Shop 1", CATEGORY));
+      await userEvent.dblClick(cellOf("Shop 1", CATEGORY));
 
       await combobox().fill("gro");
 
@@ -1425,7 +1476,7 @@ describe("TransactionsTable", () => {
 
     it("creates the category when its item is picked with the mouse", async () => {
       await renderTable();
-      await userEvent.click(cellOf("Shop 1", CATEGORY));
+      await userEvent.dblClick(cellOf("Shop 1", CATEGORY));
 
       await combobox().fill("gro");
       await userEvent.click(page.getByRole("option", { name: "Create category “gro”" }));
@@ -1437,7 +1488,7 @@ describe("TransactionsTable", () => {
 
     it("doesn't create a category when leaving the cell", async () => {
       await renderTable();
-      await userEvent.click(cellOf("Shop 1", CATEGORY));
+      await userEvent.dblClick(cellOf("Shop 1", CATEGORY));
 
       await combobox().fill("Pets");
       combobox().element().blur();
@@ -1450,7 +1501,7 @@ describe("TransactionsTable", () => {
 
     it("clears the category with empty text and Enter", async () => {
       await renderTable();
-      await userEvent.click(cellOf("Corner Market", CATEGORY));
+      await userEvent.dblClick(cellOf("Corner Market", CATEGORY));
 
       await combobox().fill("");
       await expect.element(highlighted()).not.toBeInTheDocument();
@@ -1463,7 +1514,7 @@ describe("TransactionsTable", () => {
 
     it("shows an empty account's error instead of the menu", async () => {
       await renderTable();
-      await userEvent.click(cellOf("Corner Market", ACCOUNT));
+      await userEvent.dblClick(cellOf("Corner Market", ACCOUNT));
 
       await combobox().fill("");
       await userEvent.keyboard("{Enter}");
@@ -1477,7 +1528,7 @@ describe("TransactionsTable", () => {
     describe("when the options change while the menu is open", () => {
       it("keeps the same option highlighted when one is added above it", async () => {
         const screen = await renderTable();
-        await userEvent.click(cellOf("Corner Market", CATEGORY));
+        await userEvent.dblClick(cellOf("Corner Market", CATEGORY));
 
         await screen.rerender(table(["Coffee", ...CATEGORIES]));
 
@@ -1488,7 +1539,7 @@ describe("TransactionsTable", () => {
 
       it("keeps the same option highlighted when one above it is removed", async () => {
         const screen = await renderTable();
-        await userEvent.click(cellOf("Corner Market", CATEGORY));
+        await userEvent.dblClick(cellOf("Corner Market", CATEGORY));
 
         await screen.rerender(table(["Groceries"]));
 
@@ -1499,7 +1550,7 @@ describe("TransactionsTable", () => {
 
       it("falls back to the default highlight when the highlighted option is removed", async () => {
         const screen = await renderTable();
-        await userEvent.click(cellOf("Shop 1", CATEGORY));
+        await userEvent.dblClick(cellOf("Shop 1", CATEGORY));
         await combobox().fill("i");
         await userEvent.keyboard("{ArrowDown}");
         await expect.element(highlighted()).toHaveTextContent("Groceries");
@@ -1518,7 +1569,7 @@ describe("TransactionsTable", () => {
         .at(-1)!;
       const cell = page.elementLocator(lastVisible.children[ACCOUNT]!);
 
-      await userEvent.click(cell);
+      await userEvent.dblClick(cell);
 
       const menu = page.getByRole("listbox").element().parentElement!.getBoundingClientRect();
       expect(menu.bottom).toBeLessThanOrEqual(cell.element().getBoundingClientRect().top);
@@ -1536,7 +1587,7 @@ describe("TransactionsTable", () => {
           onUndoOrRedo={onUndoOrRedo}
         />,
       );
-      await userEvent.click(cellOf("Shop 1", CATEGORY));
+      await userEvent.dblClick(cellOf("Shop 1", CATEGORY));
       await userEvent.keyboard("{ArrowDown}".repeat(20));
 
       const list = page.getByRole("listbox").element().getBoundingClientRect();

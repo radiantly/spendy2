@@ -6,7 +6,7 @@ import { Database, openDatabase } from "../../db/database.ts";
 import { LIST_CATEGORY_NAMES, LIST_TRANSACTIONS } from "../../db/queries/transactions.ts";
 import { ClosedError } from "../../db/rpc.ts";
 import { loadSession } from "../../lib/session.ts";
-import { TOKEN } from "../../test/fixtures.ts";
+import { SOURCE_HASH_SQL, TOKEN, transactionId } from "../../test/fixtures.ts";
 import { renderApp } from "../../test/renderAuthPage.tsx";
 import { loggedIn, SHA_A, SHA_B, session, storedDatabase } from "../../test/storedDatabase.ts";
 
@@ -27,15 +27,16 @@ async function queryUploaded(blob: Uint8Array<ArrayBuffer>, sql: string) {
   }
 }
 
+const [OLDER, NEWER] = [1, 2].map(transactionId);
 const TWO_TRANSACTIONS = `
   INSERT INTO accounts VALUES ('Everyday Checking', 'USD');
   INSERT INTO accounts VALUES ('Savings', 'USD');
-  INSERT INTO sources (hash, remarks) VALUES ('h1', 'statement.csv');
+  INSERT INTO sources (hash, remarks) VALUES (${SOURCE_HASH_SQL}, 'statement.csv');
   INSERT INTO categories VALUES ('Groceries', NULL);
   INSERT INTO transactions (seq, id, source, account_name, amount_numerator, amount_denominator, currency, counterparty, category, naive_date)
-    VALUES (1, 'older', 'h1', 'Everyday Checking', -5, 1, 'USD', 'Café Lumen', NULL, '2026-10-01');
+    VALUES (1, '${OLDER}', ${SOURCE_HASH_SQL}, 'Everyday Checking', -5, 1, 'USD', 'Café Lumen', NULL, '2026-10-01');
   INSERT INTO transactions (seq, id, source, account_name, amount_numerator, amount_denominator, currency, counterparty, category, naive_date)
-    VALUES (2, 'newer', 'h1', 'Everyday Checking', -231, 5, 'USD', 'Corner Market', 'Groceries', '2026-10-09')
+    VALUES (2, '${NEWER}', ${SOURCE_HASH_SQL}, 'Everyday Checking', -231, 5, 'USD', 'Corner Market', 'Groceries', '2026-10-09')
 `;
 
 beforeEach(async () => {
@@ -128,7 +129,7 @@ async function cellOf(text: string, column: number) {
 }
 
 async function editCounterparty(from: string, to: string) {
-  await userEvent.click(page.getByText(from));
+  await userEvent.dblClick(page.getByText(from));
   await page.getByRole("textbox").fill(to);
   await userEvent.keyboard("{Enter}");
 }
@@ -224,7 +225,7 @@ describe("TransactionsPage", () => {
     const [, blob, precondition] = vi.mocked(uploadDatabase).mock.calls[0]!;
     expect(precondition).toEqual({ ifMatch: SHA_A });
     expect(
-      await queryUploaded(blob, "SELECT counterparty FROM transactions WHERE id = 'newer'"),
+      await queryUploaded(blob, `SELECT counterparty FROM transactions WHERE id = '${NEWER}'`),
     ).toEqual([{ counterparty: "Corner Shop" }]);
   });
 
@@ -300,7 +301,7 @@ describe("TransactionsPage", () => {
     await renderApp("/transactions");
     const category = await cellOf("Café Lumen", CATEGORY);
 
-    await userEvent.click(category);
+    await userEvent.dblClick(category);
     await page.getByRole("combobox").fill("groc");
     await userEvent.keyboard("{Enter}");
 
@@ -313,12 +314,12 @@ describe("TransactionsPage", () => {
     await renderApp("/transactions");
     const cafe = await cellOf("Café Lumen", CATEGORY);
 
-    await userEvent.click(cafe);
+    await userEvent.dblClick(cafe);
     await page.getByRole("combobox").fill("Coffee");
     await userEvent.click(page.getByRole("option", { name: "Create category “Coffee”" }));
 
     await expect.element(cafe).toHaveTextContent("Coffee");
-    await userEvent.click(await cellOf("Corner Market", CATEGORY));
+    await userEvent.dblClick(await cellOf("Corner Market", CATEGORY));
     await page.getByRole("combobox").fill("cof");
     await expect.element(page.getByRole("option", { name: "Coffee", exact: true })).toBeVisible();
     await userEvent.keyboard("{Escape}");
@@ -332,7 +333,7 @@ describe("TransactionsPage", () => {
         `SELECT c.name, c.parent, t.id FROM categories c
          LEFT JOIN transactions t ON t.category = c.name WHERE c.name = 'Coffee'`,
       ),
-    ).toEqual([{ name: "Coffee", parent: null, id: "older" }]);
+    ).toEqual([{ name: "Coffee", parent: null, id: OLDER }]);
   });
 
   it("stops offering a category once no transaction uses it", async () => {
@@ -340,12 +341,12 @@ describe("TransactionsPage", () => {
     await renderApp("/transactions");
     const market = await cellOf("Corner Market", CATEGORY);
 
-    await userEvent.click(market);
+    await userEvent.dblClick(market);
     await page.getByRole("combobox").fill("");
     await userEvent.keyboard("{Enter}");
     await expect.poll(() => market.element().textContent).toBe("");
 
-    await userEvent.click(await cellOf("Café Lumen", CATEGORY));
+    await userEvent.dblClick(await cellOf("Café Lumen", CATEGORY));
     await page.getByRole("combobox").fill("Groc");
     await expect
       .element(page.getByRole("option", { name: "Create category “Groc”" }))
@@ -368,10 +369,10 @@ describe("TransactionsPage", () => {
     const refresh = holdNextQuery((sql) => sql === LIST_CATEGORY_NAMES);
     const showError = vi.spyOn(toast, "error");
 
-    await userEvent.click(market);
+    await userEvent.dblClick(market);
     await page.getByRole("combobox").fill("");
     await userEvent.keyboard("{Enter}");
-    await userEvent.click(cafe);
+    await userEvent.dblClick(cafe);
     await userEvent.click(page.getByRole("option", { name: "Groceries" }));
     await refresh.release();
 
@@ -380,9 +381,11 @@ describe("TransactionsPage", () => {
     await expect.element(saveButton()).not.toBeInTheDocument();
     expect(showError).not.toHaveBeenCalled();
     const [, blob] = vi.mocked(uploadDatabase).mock.calls[0]!;
-    expect(await queryUploaded(blob, "SELECT id, category FROM transactions ORDER BY id")).toEqual([
-      { id: "newer", category: null },
-      { id: "older", category: "Groceries" },
+    expect(
+      await queryUploaded(blob, "SELECT id, category FROM transactions ORDER BY seq DESC"),
+    ).toEqual([
+      { id: NEWER, category: null },
+      { id: OLDER, category: "Groceries" },
     ]);
   });
 
@@ -392,7 +395,7 @@ describe("TransactionsPage", () => {
     vi.spyOn(Database.prototype, "batch").mockRejectedValueOnce(new Error("disk on fire"));
     const cafe = await cellOf("Café Lumen", CATEGORY);
 
-    await userEvent.click(cafe);
+    await userEvent.dblClick(cafe);
     await page.getByRole("combobox").fill("Coffee");
     await userEvent.keyboard("{Enter}");
 
@@ -400,7 +403,7 @@ describe("TransactionsPage", () => {
       .element(page.getByText("Couldn't change that transaction: disk on fire"))
       .toBeVisible();
     await expect.poll(() => cafe.element().textContent).toBe("");
-    await userEvent.click(cafe);
+    await userEvent.dblClick(cafe);
     await page.getByRole("combobox").fill("Coffee");
     await expect
       .element(page.getByRole("option", { name: "Create category “Coffee”" }))
@@ -411,7 +414,7 @@ describe("TransactionsPage", () => {
     await loggedIn(await storedDatabase(TWO_TRANSACTIONS));
     await renderApp("/transactions");
 
-    await userEvent.click(await cellOf("Corner Market", ACCOUNT));
+    await userEvent.dblClick(await cellOf("Corner Market", ACCOUNT));
     await page.getByRole("combobox").fill("sav");
     await userEvent.keyboard("{Enter}");
     await userEvent.click(saveButton());
@@ -419,7 +422,7 @@ describe("TransactionsPage", () => {
     await expect.element(saveButton()).not.toBeInTheDocument();
     const [, blob] = vi.mocked(uploadDatabase).mock.calls[0]!;
     expect(
-      await queryUploaded(blob, "SELECT account_name FROM transactions WHERE id = 'newer'"),
+      await queryUploaded(blob, `SELECT account_name FROM transactions WHERE id = '${NEWER}'`),
     ).toEqual([{ account_name: "Savings" }]);
   });
 
@@ -449,11 +452,11 @@ describe("TransactionsPage", () => {
       expect(
         await queryUploaded(
           blob,
-          "SELECT id, counterparty, category, remarks FROM transactions ORDER BY id",
+          "SELECT id, counterparty, category, remarks FROM transactions ORDER BY seq DESC",
         ),
       ).toEqual([
-        { id: "newer", counterparty: "Corner Market", category: null, remarks: null },
-        { id: "older", counterparty: "Café Lumen", category: null, remarks: null },
+        { id: NEWER, counterparty: "Corner Market", category: null, remarks: null },
+        { id: OLDER, counterparty: "Café Lumen", category: null, remarks: null },
       ]);
     });
 
@@ -519,7 +522,7 @@ describe("TransactionsPage", () => {
     await expect.element(saveButton()).not.toBeInTheDocument();
     const [, blob] = vi.mocked(uploadDatabase).mock.calls[0]!;
     expect(
-      await queryUploaded(blob, "SELECT counterparty FROM transactions WHERE id = 'newer'"),
+      await queryUploaded(blob, `SELECT counterparty FROM transactions WHERE id = '${NEWER}'`),
     ).toEqual([{ counterparty: "Corner Store" }]);
   });
 
@@ -542,7 +545,7 @@ describe("TransactionsPage", () => {
 
   describe("amounts", () => {
     async function editAmount(from: string, to: string) {
-      await userEvent.click(page.getByText(from, { exact: true }));
+      await userEvent.dblClick(page.getByText(from, { exact: true }));
       await page.getByRole("textbox").fill(to);
       await userEvent.keyboard("{Enter}");
     }
@@ -553,7 +556,7 @@ describe("TransactionsPage", () => {
       const [, blob] = vi.mocked(uploadDatabase).mock.calls[0]!;
       return queryUploaded(
         blob,
-        "SELECT amount_numerator, amount_denominator FROM transactions WHERE id = 'newer'",
+        `SELECT amount_numerator, amount_denominator FROM transactions WHERE id = '${NEWER}'`,
       );
     };
 
@@ -640,7 +643,7 @@ describe("switching pages", () => {
     await expect.element(recent).toMatchTextContent(/Corner Market/);
 
     await userEvent.click(tab("Transactions"));
-    await userEvent.click(inTable("Corner Market"));
+    await userEvent.dblClick(inTable("Corner Market"));
     await page.getByRole("textbox").fill("Corner Shop");
     await userEvent.keyboard("{Enter}");
     await expect.element(saveButton()).toHaveAccessibleName("Save");
@@ -651,7 +654,7 @@ describe("switching pages", () => {
 
   it("finishes an edit left open by going back", async () => {
     const { router } = await opened();
-    await userEvent.click(inTable("Corner Market"));
+    await userEvent.dblClick(inTable("Corner Market"));
     await page.getByRole("textbox").fill("Corner Shop");
 
     // As the browser's back button would, without leaving the cell first.
@@ -668,7 +671,7 @@ describe("switching pages", () => {
 describe("a version saved elsewhere", () => {
   const SHA_C = "c".repeat(64);
   /** Corner Market renamed, as if on another device. */
-  const RENAMED = `${TWO_TRANSACTIONS}; UPDATE transactions SET counterparty = 'Corner Shop' WHERE id = 'newer'`;
+  const RENAMED = `${TWO_TRANSACTIONS}; UPDATE transactions SET counterparty = 'Corner Shop' WHERE id = '${NEWER}'`;
 
   async function savedElsewhere(sql: string) {
     const blob = await storedDatabase(sql);
@@ -698,10 +701,9 @@ describe("a version saved elsewhere", () => {
     await expect.element(saveButton()).not.toBeInTheDocument();
     const [, blob, precondition] = vi.mocked(uploadDatabase).mock.calls[0]!;
     expect(precondition).toEqual({ ifMatch: SHA_C });
-    expect(await queryUploaded(blob, "SELECT counterparty FROM transactions ORDER BY id")).toEqual([
-      { counterparty: "Corner Shop" },
-      { counterparty: "Café Sol" },
-    ]);
+    expect(
+      await queryUploaded(blob, "SELECT counterparty FROM transactions ORDER BY seq DESC"),
+    ).toEqual([{ counterparty: "Corner Shop" }, { counterparty: "Café Sol" }]);
   });
 
   it("is checked for against the version just saved", async () => {
@@ -730,7 +732,7 @@ describe("a version saved elsewhere", () => {
   it("isn't checked for while a cell is being edited, but is once it isn't", async () => {
     await opened();
     await savedElsewhere(RENAMED);
-    await userEvent.click(page.getByText("Café Lumen"));
+    await userEvent.dblClick(page.getByText("Café Lumen"));
     await expect.element(page.getByRole("textbox")).toHaveFocus();
 
     checkForUpdates();
@@ -782,7 +784,7 @@ describe("a version saved elsewhere", () => {
     await opened();
     await userEvent.click(await cellOf("Café Lumen", COUNTERPARTY));
     await userEvent.keyboard("{Escape}");
-    await savedElsewhere(`${TWO_TRANSACTIONS}; DELETE FROM transactions WHERE id = 'older'`);
+    await savedElsewhere(`${TWO_TRANSACTIONS}; DELETE FROM transactions WHERE id = '${OLDER}'`);
 
     checkForUpdates();
 
@@ -868,7 +870,7 @@ describe("undo and redo on the transactions page", () => {
   }
 
   async function editAmount(from: string, to: string) {
-    await userEvent.click(page.getByText(from, { exact: true }));
+    await userEvent.dblClick(page.getByText(from, { exact: true }));
     await page.getByRole("textbox").fill(to);
     await userEvent.keyboard("{Enter}");
   }
@@ -882,7 +884,7 @@ describe("undo and redo on the transactions page", () => {
     await redo();
 
     await expect.element(inTable("Corner Shop")).toBeVisible();
-    expect(await uploaded("SELECT counterparty FROM transactions WHERE id = 'newer'")).toEqual([
+    expect(await uploaded(`SELECT counterparty FROM transactions WHERE id = '${NEWER}'`)).toEqual([
       { counterparty: "Corner Shop" },
     ]);
   });
@@ -910,7 +912,7 @@ describe("undo and redo on the transactions page", () => {
     await undo();
 
     await expect.element(inTable("Café Lumen")).toBeVisible();
-    expect(await uploaded("SELECT counterparty FROM transactions ORDER BY id")).toEqual([
+    expect(await uploaded("SELECT counterparty FROM transactions ORDER BY seq DESC")).toEqual([
       { counterparty: "Corner Shop" },
       { counterparty: "Café Lumen" },
     ]);
@@ -939,7 +941,7 @@ describe("undo and redo on the transactions page", () => {
     await expect.element(inTable("-46.20")).toBeVisible();
     expect(
       await uploaded(
-        "SELECT counterparty, amount_numerator, amount_denominator FROM transactions WHERE id = 'newer'",
+        `SELECT counterparty, amount_numerator, amount_denominator FROM transactions WHERE id = '${NEWER}'`,
       ),
     ).toEqual([{ counterparty: "Corner Shop", amount_numerator: -231, amount_denominator: 5 }]);
   });
@@ -974,7 +976,7 @@ describe("undo and redo on the transactions page", () => {
     await loggedIn(await storedDatabase(WITH_PARENT));
     await renderApp("/transactions");
     const market = await cellOf("Corner Market", CATEGORY);
-    await userEvent.click(market);
+    await userEvent.dblClick(market);
     await page.getByRole("combobox").fill("");
     await userEvent.keyboard("{Enter}");
     await expect.poll(() => market.element().textContent).toBe("");
@@ -995,12 +997,12 @@ describe("undo and redo on the transactions page", () => {
     await loggedIn(await storedDatabase(WITH_PARENT));
     await renderApp("/transactions");
     const market = await cellOf("Corner Market", CATEGORY);
-    await userEvent.click(market);
+    await userEvent.dblClick(market);
     await page.getByRole("combobox").fill("");
     await userEvent.keyboard("{Enter}");
     await expect.poll(() => market.element().textContent).toBe("");
 
-    await userEvent.click(market);
+    await userEvent.dblClick(market);
     await page.getByRole("combobox").fill("Groceries");
     await userEvent.click(page.getByRole("option", { name: "Create category “Groceries”" }));
     await expect.element(market).toHaveTextContent("Groceries");
@@ -1046,7 +1048,7 @@ describe("undo and redo on the transactions page", () => {
     await undo();
 
     await expect.element(saveButton()).toBeEnabled();
-    expect(await uploaded("SELECT counterparty FROM transactions WHERE id = 'newer'")).toEqual([
+    expect(await uploaded(`SELECT counterparty FROM transactions WHERE id = '${NEWER}'`)).toEqual([
       { counterparty: "Corner Market" },
     ]);
   });
@@ -1068,14 +1070,14 @@ describe("undo and redo on the transactions page", () => {
   it("forgets a new category when its edit is undone, and makes it again on redo", async () => {
     await opened();
     const cafe = await cellOf("Café Lumen", CATEGORY);
-    await userEvent.click(cafe);
+    await userEvent.dblClick(cafe);
     await page.getByRole("combobox").fill("Coffee");
     await userEvent.click(page.getByRole("option", { name: "Create category “Coffee”" }));
     await expect.element(cafe).toHaveTextContent("Coffee");
 
     await undo();
     await expect.poll(() => cafe.element().textContent).toBe("");
-    await userEvent.click(await cellOf("Corner Market", CATEGORY));
+    await userEvent.dblClick(await cellOf("Corner Market", CATEGORY));
     await page.getByRole("combobox").fill("Coffee");
     await expect
       .element(page.getByRole("option", { name: "Create category “Coffee”" }))
@@ -1192,14 +1194,14 @@ describe("undo and redo on the transactions page", () => {
     it("undoes and redoes when nothing was typed, finishing the edit", async () => {
       await opened();
       await editCounterparty("Corner Market", "Corner Shop");
-      await userEvent.click(inTable("Café Lumen"));
+      await userEvent.dblClick(inTable("Café Lumen"));
       await expect.element(page.getByRole("textbox")).toHaveFocus();
 
       await undo();
 
       await expect.element(inTable("Corner Market")).toBeVisible();
       expect(page.getByRole("textbox").query()).toBeNull();
-      await userEvent.click(inTable("Café Lumen"));
+      await userEvent.dblClick(inTable("Café Lumen"));
       await redo();
       await expect.element(inTable("Corner Shop")).toBeVisible();
     });
@@ -1207,7 +1209,7 @@ describe("undo and redo on the transactions page", () => {
     it("leaves undo to the text once something was typed", async () => {
       await opened();
       await editCounterparty("Corner Market", "Corner Shop");
-      await userEvent.click(inTable("Café Lumen"));
+      await userEvent.dblClick(inTable("Café Lumen"));
       await userEvent.keyboard("{End} Sol");
 
       await undo();
@@ -1239,7 +1241,7 @@ describe("undo and redo on the transactions page", () => {
     vi.mocked(downloadDatabaseIfChanged).mockResolvedValue({
       success: true,
       blob: await storedDatabase(
-        `${TWO_TRANSACTIONS}; UPDATE transactions SET counterparty = 'Corner Shop' WHERE id = 'newer'`,
+        `${TWO_TRANSACTIONS}; UPDATE transactions SET counterparty = 'Corner Shop' WHERE id = '${NEWER}'`,
       ),
       sha256: "c".repeat(64),
     });

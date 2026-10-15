@@ -133,8 +133,8 @@ export type AccountActivity = {
 };
 
 /**
- * Every account, busiest first. The amounts are in the account's own
- * currency; its transactions in other currencies are only counted in
+ * Every account with a default currency, busiest first. The amounts are in
+ * that currency; its transactions in other currencies are only counted in
  * `transactions`. Bind `{ $from, $to }`.
  */
 export const LIST_ACCOUNT_ACTIVITY = `
@@ -151,6 +151,7 @@ export const LIST_ACCOUNT_ACTIVITY = `
   FROM accounts AS account
   LEFT JOIN (SELECT *, ${amountOf("transactions")} AS amount FROM transactions) AS t
     ON t.account_name = account.name AND t.naive_date BETWEEN $from AND $to
+  WHERE account.default_currency IS NOT NULL
   GROUP BY account.name
   ORDER BY count(t.id) DESC, account.name
 `;

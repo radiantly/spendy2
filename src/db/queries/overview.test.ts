@@ -4,6 +4,7 @@ import { configureConnection } from "../connection.ts";
 import { migrate } from "../migrate.ts";
 import { MIGRATIONS } from "../migrations.ts";
 import { reduce, type Rational } from "../../lib/rational.ts";
+import { SOURCE_HASH_SQL, transactionId } from "../../test/fixtures.ts";
 import {
   GET_OVERVIEW_META,
   GET_PERIOD_SUMMARY,
@@ -26,14 +27,13 @@ beforeEach(() => {
   seq = 0;
   db.exec(`
     INSERT INTO accounts VALUES ('Checking', 'USD'), ('Savings', 'USD'), ('Travel', 'EUR'), ('India', 'INR');
-    INSERT INTO sources (hash, remarks) VALUES ('s', 'statement.csv');
+    INSERT INTO sources (hash, remarks) VALUES (${SOURCE_HASH_SQL}, 'statement.csv');
     INSERT INTO categories VALUES ('Food', NULL), ('Groceries', 'Food'), ('Income', NULL), ('Salary', 'Income');
   `);
 });
 afterEach(() => db.close());
 
 type Transaction = {
-  id?: string;
   date?: string;
   account?: string;
   amount: number | Rational;
@@ -52,7 +52,6 @@ const stored = (amount: number | Rational) =>
 
 /** Inserts a transaction; amounts are in whole units. Returns its id. */
 function add({
-  id = `t${seq + 1}`,
   date = "2026-10-05",
   account = "Checking",
   amount,
@@ -64,11 +63,12 @@ function add({
   counterparty = "Somewhere",
 }: Transaction) {
   seq++;
+  const id = transactionId(seq);
   const { numerator, denominator } = stored(amount);
   db.exec({
     sql: `INSERT INTO transactions (seq, id, source, account_name, transfer_account, amount_numerator,
       amount_denominator, currency, counterparty, category, duplicate_of, naive_date)
-      VALUES (?, ?, 's', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      VALUES (?, ?, ${SOURCE_HASH_SQL}, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     bind: [
       seq,
       id,
@@ -325,6 +325,13 @@ describe("LIST_ACCOUNT_ACTIVITY", () => {
     });
   });
 
+  it("leaves out accounts without a default currency, for now", () => {
+    db.exec("INSERT INTO accounts VALUES ('Cash', NULL)");
+    add({ amount: -5, account: "Cash" });
+
+    expect(rows(LIST_ACCOUNT_ACTIVITY, bind).map(({ name }) => name)).not.toContain("Cash");
+  });
+
   it("leaves transactions marked as duplicates out of the amounts", () => {
     const original = add({ amount: -12 });
     add({ amount: -12, duplicateOf: original });
@@ -337,12 +344,12 @@ describe("LIST_RECENT_TRANSACTIONS", () => {
   const bind = { ...OCTOBER, $limit: 2 };
 
   it("lists the latest in the period, newest first, later imports first on a day", () => {
-    add({ id: "old", amount: -1, date: "2026-10-01" });
-    add({ id: "first", amount: -1, date: "2026-10-05" });
-    add({ id: "second", amount: -1, date: "2026-10-05" });
-    add({ id: "later", amount: -1, date: "2026-11-01" });
+    add({ amount: -1, date: "2026-10-01" });
+    const first = add({ amount: -1, date: "2026-10-05" });
+    const second = add({ amount: -1, date: "2026-10-05" });
+    add({ amount: -1, date: "2026-11-01" });
 
-    expect(rows(LIST_RECENT_TRANSACTIONS, bind).map(({ id }) => id)).toEqual(["second", "first"]);
+    expect(rows(LIST_RECENT_TRANSACTIONS, bind).map(({ id }) => id)).toEqual([second, first]);
   });
 
   it("includes the category's parent and whether it's marked as a duplicate", () => {

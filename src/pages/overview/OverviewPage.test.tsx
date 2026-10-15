@@ -3,6 +3,7 @@ import { page, userEvent } from "vitest/browser";
 import { downloadDatabase, downloadDatabaseIfChanged, uploadDatabase } from "../../api/database.ts";
 import { renderApp } from "../../test/renderAuthPage.tsx";
 import { rect } from "../../test/renderAuthPage.tsx";
+import { SOURCE_HASH_SQL, transactionId } from "../../test/fixtures.ts";
 import { loggedIn, storedDatabase } from "../../test/storedDatabase.ts";
 
 vi.mock("../../api/database.ts", () => ({
@@ -27,14 +28,14 @@ const insert = (
 ) => `
   INSERT INTO transactions (seq, id, source, account_name, transfer_account, amount_numerator,
     amount_denominator, currency, counterparty, category, duplicate_of, naive_date)
-  VALUES (${seq}, 't${seq}', 's', '${account}', ${extra.transfer ? `'${extra.transfer}'` : "NULL"},
+  VALUES (${seq}, '${transactionId(seq)}', ${SOURCE_HASH_SQL}, '${account}', ${extra.transfer ? `'${extra.transfer}'` : "NULL"},
     ${Math.round(amount * 100)}, 100, '${extra.currency ?? "USD"}',
     '${counterparty}', ${category === null ? "NULL" : `'${category}'`},
     ${extra.duplicateOf ? `'${extra.duplicateOf}'` : "NULL"}, '${date}')
   ${
     extra.converted === undefined
       ? ""
-      : `; INSERT INTO conversions VALUES ('t${seq}', 'USD', ${Math.round(extra.converted * 100)}, 100)`
+      : `; INSERT INTO conversions VALUES ('${transactionId(seq)}', 'USD', ${Math.round(extra.converted * 100)}, 100)`
   }
 `;
 
@@ -42,7 +43,7 @@ const insert = (
 const DATA = [
   `INSERT INTO accounts VALUES ('Everyday Checking', 'USD'), ('Rewards Card', 'USD'),
     ('Travel Card', 'EUR'), ('Savings', 'USD'), ('India Savings', 'INR')`,
-  `INSERT INTO sources (hash, remarks, import_timestamp) VALUES ('s', 'statement.csv', 1791374400)`,
+  `INSERT INTO sources (hash, remarks, import_timestamp) VALUES (${SOURCE_HASH_SQL}, 'statement.csv', 1791374400)`,
   `INSERT INTO categories VALUES ('Food', NULL), ('Groceries', 'Food'), ('Dining out', 'Food'),
     ('Housing', NULL), ('Rent', 'Housing'), ('Health', NULL), ('Income', NULL), ('Salary', 'Income')`,
   insert(1, "2026-08-03", "Everyday Checking", 2560, "Acme Corp Payroll", "Salary"),
@@ -63,7 +64,7 @@ const DATA = [
     transfer: "Savings",
   }),
   insert(12, "2026-10-08", "Rewards Card", -18.4, "Café Lumen", "Dining out", {
-    duplicateOf: "t10",
+    duplicateOf: transactionId(10),
   }),
   insert(13, "2026-10-09", "India Savings", -5000, "Apollo Pharmacy", "Health", {
     currency: "INR",

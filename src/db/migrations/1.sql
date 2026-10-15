@@ -1,18 +1,19 @@
 -- Account and category names ignore case: "Groceries" and "groceries" are the
 -- same name. Columns referring to them do too, so comparisons agree.
 CREATE TABLE accounts (
-  name              TEXT NOT NULL COLLATE NOCASE PRIMARY KEY,
-  default_currency  TEXT NOT NULL
+  name              TEXT NOT NULL COLLATE NOCASE PRIMARY KEY CHECK (name <> ''),
+  default_currency  TEXT CHECK (default_currency <> '')
 ) STRICT;
 
 CREATE TABLE sources (
-  hash              TEXT NOT NULL PRIMARY KEY,
-  remarks           TEXT NOT NULL,
+  -- SHA-256
+  hash              BLOB NOT NULL PRIMARY KEY CHECK (length(hash) = 32),
+  remarks           TEXT NOT NULL CHECK (remarks <> ''),
   import_timestamp  INTEGER NOT NULL DEFAULT (unixepoch())
 ) STRICT;
 
 CREATE TABLE categories (
-  name              TEXT NOT NULL COLLATE NOCASE PRIMARY KEY,
+  name              TEXT NOT NULL COLLATE NOCASE PRIMARY KEY CHECK (name <> ''),
   parent            TEXT COLLATE NOCASE REFERENCES categories(name) ON UPDATE CASCADE ON DELETE SET NULL,
   CONSTRAINT no_self_parent CHECK (name <> parent)
 ) STRICT;
@@ -20,8 +21,9 @@ CREATE TABLE categories (
 -- if timestamp is NULL, transactions will be ordered by (naive_date, seq).
 CREATE TABLE transactions (
   seq               INTEGER NOT NULL UNIQUE,
-  id                TEXT NOT NULL PRIMARY KEY,
-  source            TEXT NOT NULL REFERENCES sources(hash) ON UPDATE CASCADE ON DELETE CASCADE,
+  -- a lowercase UUIDv4
+  id                TEXT NOT NULL PRIMARY KEY CHECK (id GLOB '[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-4[0-9a-f][0-9a-f][0-9a-f]-[89ab][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]'),
+  source            BLOB NOT NULL REFERENCES sources(hash) ON UPDATE CASCADE ON DELETE CASCADE,
   account_name      TEXT NOT NULL COLLATE NOCASE REFERENCES accounts(name) ON UPDATE CASCADE ON DELETE CASCADE,
 
   -- if the counterparty is an existing account
@@ -30,14 +32,14 @@ CREATE TABLE transactions (
   -- amount is a rational number, both parts of the fraction stored
   amount_numerator  INTEGER NOT NULL,
   amount_denominator INTEGER NOT NULL CHECK (amount_denominator > 0),
-  currency          TEXT NOT NULL,
-  counterparty      TEXT NOT NULL,
+  currency          TEXT NOT NULL CHECK (currency <> ''),
+  counterparty      TEXT NOT NULL CHECK (counterparty <> ''),
   category          TEXT COLLATE NOCASE REFERENCES categories(name) ON UPDATE CASCADE ON DELETE SET NULL,
   duplicate_of      TEXT REFERENCES transactions(id) ON UPDATE CASCADE ON DELETE SET NULL,
   -- local date, not utc, not timezone aware
   naive_date        TEXT NOT NULL CHECK (naive_date IS date(naive_date)),
   timestamp         INTEGER,
-  remarks           TEXT,
+  remarks           TEXT CHECK (remarks <> ''),
   CONSTRAINT no_self_duplicate CHECK (id <> duplicate_of),
   CONSTRAINT no_self_transfer CHECK (account_name <> transfer_account)
 ) STRICT;
@@ -45,7 +47,7 @@ CREATE TABLE transactions (
 -- A transaction's amount in other currencies, at most one per currency.
 CREATE TABLE conversions (
   transaction_id    TEXT NOT NULL REFERENCES transactions(id) ON UPDATE CASCADE ON DELETE CASCADE,
-  currency          TEXT NOT NULL,
+  currency          TEXT NOT NULL CHECK (currency <> ''),
   amount_numerator  INTEGER NOT NULL,
   amount_denominator INTEGER NOT NULL CHECK (amount_denominator > 0),
   PRIMARY KEY (transaction_id, currency)

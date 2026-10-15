@@ -79,9 +79,9 @@ function rangeOutline(sides: Edges): CSSProperties {
 }
 
 /**
- * A spreadsheet-style cell: plain text that turns into an input as soon as
- * the mouse goes down on it, with the caret where it was pressed. What the
- * press does beyond that (selecting, dragging) is up to the grid.
+ * A spreadsheet-style cell: plain text that turns into an input when edited,
+ * with the caret where it was pressed. Whether a press edits it, and what
+ * else the press does (selecting, dragging), is up to the grid.
  */
 function EditableCell({
   id,
@@ -123,9 +123,7 @@ function EditableCell({
       style={rangeEdges && rangeOutline(rangeEdges)}
       className={`relative min-w-0 border-r border-b border-line px-2 last:border-r-0 ${
         rangeEdges && !active ? "bg-focus/15" : ""
-      } ${active ? "outline-2 -outline-offset-2 outline-focus" : ""} ${
-        active && editText !== undefined ? "cursor-text" : ""
-      } ${align === "end" ? "text-right" : ""} ${mono ? "font-mono" : ""}`}
+      } ${active ? "outline-2 -outline-offset-2 outline-focus" : ""} ${align === "end" ? "text-right" : ""} ${mono ? "font-mono" : ""}`}
     >
       {editing ? (
         <CellInput {...editing} align={align} />

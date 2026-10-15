@@ -4,8 +4,10 @@ import { applyChanges, invert, Session } from "./changes.ts";
 import { configureConnection } from "./connection.ts";
 import { migrate } from "./migrate.ts";
 import { MIGRATIONS } from "./migrations.ts";
+import { SOURCE_HASH_SQL, transactionId } from "../test/fixtures.ts";
 
 const sqlite3 = await sqlite3InitModule();
+const [T1, T2, T9] = [1, 2, 9].map(transactionId);
 
 let db: Database;
 beforeEach(() => {
@@ -14,13 +16,13 @@ beforeEach(() => {
   migrate(db, MIGRATIONS);
   db.exec(`
     INSERT INTO accounts VALUES ('Checking', 'USD'), ('Savings', 'USD');
-    INSERT INTO sources (hash, remarks) VALUES ('s', 'statement.csv');
+    INSERT INTO sources (hash, remarks) VALUES (${SOURCE_HASH_SQL}, 'statement.csv');
     INSERT INTO categories VALUES ('Food', NULL), ('Groceries', 'Food'), ('Bills', NULL);
     INSERT INTO transactions (seq, id, source, account_name, amount_numerator, amount_denominator,
       currency, counterparty, category, naive_date, remarks)
-    VALUES (1, 't1', 's', 'Checking', -1, 1, 'USD', 'Corner Market', 'Groceries', '2026-10-01', 'weekly'),
-           (2, 't2', 's', 'Checking', -2, 1, 'USD', 'City Power', 'Bills', '2026-10-02', NULL);
-    INSERT INTO conversions VALUES ('t1', 'EUR', -9, 10);
+    VALUES (1, '${T1}', ${SOURCE_HASH_SQL}, 'Checking', -1, 1, 'USD', 'Corner Market', 'Groceries', '2026-10-01', 'weekly'),
+           (2, '${T2}', ${SOURCE_HASH_SQL}, 'Checking', -2, 1, 'USD', 'City Power', 'Bills', '2026-10-02', NULL);
+    INSERT INTO conversions VALUES ('${T1}', 'EUR', -9, 10);
   `);
 });
 afterEach(() => db.close());
@@ -47,23 +49,23 @@ const redo = (changes: Uint8Array) => applyChanges(sqlite3, db, changes);
 
 describe("undo and redo", () => {
   it.each([
-    ["an edit", "UPDATE transactions SET counterparty = 'Corner Shop' WHERE id = 't1'"],
+    ["an edit", `UPDATE transactions SET counterparty = 'Corner Shop' WHERE id = '${T1}'`],
     [
       "both parts of an amount",
-      "UPDATE transactions SET amount_numerator = -5, amount_denominator = 2 WHERE id = 't1'",
+      `UPDATE transactions SET amount_numerator = -5, amount_denominator = 2 WHERE id = '${T1}'`,
     ],
     // The triggers delete Groceries, then Food.
-    ["clearing a category", "UPDATE transactions SET category = NULL WHERE id = 't1'"],
+    ["clearing a category", `UPDATE transactions SET category = NULL WHERE id = '${T1}'`],
     [
       "moving to a new category",
       `INSERT INTO categories (name) VALUES ('Coffee') ON CONFLICT DO NOTHING;
-       UPDATE transactions SET category = 'Coffee' WHERE id = 't1'`,
+       UPDATE transactions SET category = 'Coffee' WHERE id = '${T1}'`,
     ],
     ["clearing a range", "UPDATE transactions SET category = NULL, remarks = NULL"],
     // Cascades to the transaction.
     ["renaming a category", "UPDATE categories SET name = 'Shopping' WHERE name = 'Groceries'"],
     // Cascades to the conversion.
-    ["changing a transaction's id", "UPDATE transactions SET id = 't9' WHERE id = 't1'"],
+    ["changing a transaction's id", `UPDATE transactions SET id = '${T9}' WHERE id = '${T1}'`],
     // Cascades to every transaction, their conversions, and the categories left unused.
     ["deleting an account", "DELETE FROM accounts WHERE name = 'Checking'"],
   ])("restores exactly what %s changed, again and again", (_, sql) => {
@@ -81,7 +83,7 @@ describe("undo and redo", () => {
   });
 
   it("puts a category deleted for being unused back under its parent", () => {
-    const changes = record("UPDATE transactions SET category = NULL WHERE id = 't1'");
+    const changes = record(`UPDATE transactions SET category = NULL WHERE id = '${T1}'`);
     expect(db.selectValues("SELECT name FROM categories ORDER BY name")).toEqual(["Bills"]);
 
     undo(changes);
@@ -94,15 +96,17 @@ describe("undo and redo", () => {
   });
 
   it("leaves triggers on afterwards", () => {
-    undo(record("UPDATE transactions SET category = NULL WHERE id = 't1'"));
+    undo(record(`UPDATE transactions SET category = NULL WHERE id = '${T1}'`));
 
-    db.exec("UPDATE transactions SET category = NULL WHERE id = 't2'");
+    db.exec(`UPDATE transactions SET category = NULL WHERE id = '${T2}'`);
 
     expect(db.selectValues("SELECT name FROM categories")).not.toContain("Bills");
   });
 
   it("refuses changes that don't match the database, changing nothing", () => {
-    const changes = record("UPDATE transactions SET counterparty = 'Corner Shop' WHERE id = 't1'");
+    const changes = record(
+      `UPDATE transactions SET counterparty = 'Corner Shop' WHERE id = '${T1}'`,
+    );
     undo(changes);
     const before = state();
 
@@ -125,29 +129,29 @@ describe("Session.hasChanges", () => {
   });
 
   it("has a change", () => {
-    db.exec("UPDATE transactions SET counterparty = 'Corner Shop' WHERE id = 't1'");
+    db.exec(`UPDATE transactions SET counterparty = 'Corner Shop' WHERE id = '${T1}'`);
 
     expect(session.hasChanges()).toBe(true);
   });
 
   it("has none once a change is changed back", () => {
-    db.exec("UPDATE transactions SET counterparty = 'Corner Shop' WHERE id = 't1'");
-    db.exec("UPDATE transactions SET counterparty = 'Corner Market' WHERE id = 't1'");
+    db.exec(`UPDATE transactions SET counterparty = 'Corner Shop' WHERE id = '${T1}'`);
+    db.exec(`UPDATE transactions SET counterparty = 'Corner Market' WHERE id = '${T1}'`);
 
     expect(session.hasChanges()).toBe(false);
   });
 
   it("has none once a change with side effects is undone", () => {
-    undo(record("UPDATE transactions SET category = NULL WHERE id = 't1'"));
+    undo(record(`UPDATE transactions SET category = NULL WHERE id = '${T1}'`));
 
     expect(session.hasChanges()).toBe(false);
   });
 
   it("has some when a category is set back by hand but lost its parent", () => {
-    db.exec("UPDATE transactions SET category = NULL WHERE id = 't1'");
+    db.exec(`UPDATE transactions SET category = NULL WHERE id = '${T1}'`);
     db.exec(`
       INSERT INTO categories (name) VALUES ('Groceries') ON CONFLICT DO NOTHING;
-      UPDATE transactions SET category = 'Groceries' WHERE id = 't1';
+      UPDATE transactions SET category = 'Groceries' WHERE id = '${T1}';
     `);
 
     expect(session.hasChanges()).toBe(true);
@@ -156,7 +160,7 @@ describe("Session.hasChanges", () => {
   it("has none after a transaction that was rolled back", () => {
     expect(() =>
       db.transaction(() => {
-        db.exec("UPDATE transactions SET counterparty = 'Corner Shop' WHERE id = 't1'");
+        db.exec(`UPDATE transactions SET counterparty = 'Corner Shop' WHERE id = '${T1}'`);
         db.exec("INSERT INTO categories VALUES ('Fees', 'Missing')");
       }),
     ).toThrow("FOREIGN KEY");
