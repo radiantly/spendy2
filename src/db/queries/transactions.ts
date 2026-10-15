@@ -53,6 +53,9 @@ type TransactionFieldColumns = {
 
 export type EditableTransactionField = keyof TransactionFieldColumns;
 
+/** A field of a transaction an edit changed. */
+export type EditedCell = { id: string; field: EditableTransactionField };
+
 /** New values for some of a transaction's columns, as an edit of one field sets them. */
 export type TransactionPatch = TransactionFieldColumns[EditableTransactionField];
 

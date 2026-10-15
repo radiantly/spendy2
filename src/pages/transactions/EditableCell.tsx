@@ -12,6 +12,7 @@ import toast from "react-hot-toast";
 import type { CellDisplay } from "./columns.ts";
 import { mapOffset, textOffsetAtPoint } from "./caret.ts";
 import type { Edges } from "./grid.ts";
+import { historyKey, type HistoryDirection } from "../../lib/historyKey.ts";
 import { defaultHighlight, menuItems, type MenuConfig, type MenuItem } from "./menu.ts";
 
 /** The outcome of submitting an edit: accepted, or why not. */
@@ -41,6 +42,8 @@ export type CellEditing = {
   /** `create` is set when the user picked the menu's create item. */
   submit: (text: string, create: boolean) => SubmitResult;
   finish: (how: FinishHow) => void;
+  /** Undoes or redoes the table's last change, once the edit has finished. */
+  history: (direction: HistoryDirection) => void;
 };
 
 type EditableCellProps = {
@@ -151,7 +154,10 @@ type CellInputProps = CellEditing & { align?: "end" };
 
 /**
  * The input a cell turns into. Enter submits and Escape cancels, both
- * keeping the cell active; Tab submits and moves on. Leaving the cell
+ * keeping the cell active; Tab submits and moves on. Undo and redo (Ctrl+Z,
+ * Ctrl+Y) are the input's own in an edit started by typing, or once its text
+ * has changed; otherwise they finish the edit and undo or redo the table's
+ * last change. Leaving the cell
  * submits too, but can't show an error there, so an invalid value is undone
  * instead. With a `menu`, it's a combobox: up and down move through the
  * options, and Enter, Tab or leaving picks the highlighted one.
@@ -165,6 +171,7 @@ function CellInput({
   inputRef,
   submit,
   finish,
+  history,
   align,
 }: CellInputProps) {
   const [text, setText] = useState(initialText);
@@ -224,7 +231,12 @@ function CellInput({
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLInputElement>) {
-    if (event.key === "Escape") {
+    const direction = historyKey(event);
+    if (direction && !typed && text === initialText) {
+      event.preventDefault();
+      done("stay");
+      history(direction);
+    } else if (event.key === "Escape") {
       event.preventDefault();
       done("stay");
     } else if (event.key === "Enter") {

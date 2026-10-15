@@ -4,6 +4,7 @@ import { useAuth } from "../../auth/useAuth.ts";
 import DatabaseProvider from "../../db/DatabaseProvider.tsx";
 import { useDatabase } from "../../db/useDatabase.ts";
 import Logo from "../../components/Logo.tsx";
+import { useHistoryKeys } from "./historyKeys.ts";
 import SaveControls from "./SaveControls.tsx";
 import { describeOpenError } from "./openError.ts";
 
@@ -82,6 +83,7 @@ function Tab({ to, children }: { to: string; children: string }) {
 function DatabaseGate({ pages }: { pages: readonly ShellPage[] }) {
   const { state, retry } = useDatabase();
   const { pathname } = useLocation();
+  useHistoryKeys(state.status === "ready" ? state.history : null);
 
   if (state.status === "loading")
     return (

@@ -9,9 +9,9 @@ export function useDatabase(): DatabaseContextValue {
 
 /** For pages that only render once the database is open (see AppShell). */
 export function useOpenDatabase() {
-  const { state, markDirty } = useDatabase();
+  const { state } = useDatabase();
   if (state.status !== "ready") throw new Error("useOpenDatabase needs an open database");
-  return { database: state.database, markDirty };
+  return { database: state.database, history: state.history };
 }
 
 /**

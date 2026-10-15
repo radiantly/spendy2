@@ -3,7 +3,9 @@ import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { page, userEvent, type Locator } from "vitest/browser";
 import { render } from "vitest-browser-react";
 import toast, { Toaster } from "react-hot-toast";
-import type { TransactionRow } from "../../db/queries/transactions.ts";
+import type { Edit } from "../../db/databaseContext.ts";
+import type { Moved } from "../../db/editHistory.ts";
+import type { EditedCell, TransactionRow } from "../../db/queries/transactions.ts";
 import { reduce } from "../../lib/rational.ts";
 import { mouse, pointIn } from "../../test/mouse.ts";
 import TransactionsTable, { ROW_HEIGHT } from "./TransactionsTable.tsx";
@@ -35,9 +37,11 @@ function makeRows(count: number): TransactionRow[] {
 
 const rows = makeRows(ROW_COUNT);
 let onCommit: Mock<ComponentProps<typeof TransactionsTable>["onCommit"]>;
+let onUndoOrRedo: Mock<ComponentProps<typeof TransactionsTable>["onUndoOrRedo"]>;
 
 beforeEach(async () => {
   onCommit = vi.fn();
+  onUndoOrRedo = vi.fn();
   // Toasts live in a global store; one left from an earlier test would cover the cells.
   toast.remove();
   await page.viewport(1280, 800);
@@ -52,6 +56,8 @@ function table(categories = CATEGORIES) {
         categories={categories}
         accounts={ACCOUNTS}
         onCommit={onCommit}
+        lastUndoOrRedo={null}
+        onUndoOrRedo={onUndoOrRedo}
       />
       <Toaster />
     </>
@@ -802,6 +808,133 @@ describe("TransactionsTable", () => {
     });
   });
 
+  describe("undo and redo", () => {
+    /** An undo of an edit to `cells` (row index and field), as the history reports it. */
+    const undone = (cells: [number, EditedCell["field"]][]): Moved<Edit> => ({
+      direction: "undo",
+      step: {
+        changes: Promise.resolve(new Uint8Array()),
+        about: {
+          kind: "transaction",
+          cells: cells.map(([row, field]) => ({ id: `t${row}`, field })),
+          description: "an edit",
+        },
+      },
+    });
+
+    const tableShowing = (moved: Moved<Edit> | null) => (
+      <TransactionsTable
+        rows={rows}
+        categories={CATEGORIES}
+        accounts={ACCOUNTS}
+        onCommit={onCommit}
+        lastUndoOrRedo={moved}
+        onUndoOrRedo={onUndoOrRedo}
+      />
+    );
+
+    it("selects the cells an undo or redo changed", async () => {
+      const screen = await render(tableShowing(null));
+      await makeActive("Shop 9", REMARKS);
+
+      await screen.rerender(
+        tableShowing(
+          undone([
+            [3, "category"],
+            [1, "counterparty"],
+          ]),
+        ),
+      );
+
+      expect(activeCell()).toBe(cellOf("Shop 1", COUNTERPARTY).element());
+      expect(selectedCells()).toEqual([
+        cellOf("Shop 1", COUNTERPARTY).element(),
+        cellOf("Shop 1", CATEGORY).element(),
+        cellOf("Shop 2", COUNTERPARTY).element(),
+        cellOf("Shop 2", CATEGORY).element(),
+        cellOf("Shop 3", COUNTERPARTY).element(),
+        cellOf("Shop 3", CATEGORY).element(),
+      ]);
+    });
+
+    it("scrolls the cells it changed into view", async () => {
+      const screen = await render(tableShowing(null));
+
+      await screen.rerender(tableShowing(undone([[500, "amount"]])));
+
+      await expect.element(cellOf("Shop 500", AMOUNT)).toBeInViewport();
+      expect(activeCell()).toBe(cellOf("Shop 500", AMOUNT).element());
+    });
+
+    it("selects them once, not again on later renders", async () => {
+      const moved = undone([[3, "counterparty"]]);
+      const screen = await render(tableShowing(moved));
+      await makeActive("Shop 1", DATE);
+
+      await screen.rerender(tableShowing(moved));
+
+      expect(activeCell()).toBe(cellOf("Shop 1", DATE).element());
+    });
+
+    it("selects them again for another undo or redo of the same edit", async () => {
+      const moved = undone([[3, "counterparty"]]);
+      const screen = await render(tableShowing(moved));
+      await makeActive("Shop 1", DATE);
+
+      await screen.rerender(tableShowing({ ...moved, direction: "redo" }));
+
+      expect(activeCell()).toBe(cellOf("Shop 3", COUNTERPARTY).element());
+    });
+
+    it.each([
+      ["{Control>}z{/Control}", "undo"],
+      ["{Control>}y{/Control}", "redo"],
+    ] as const)(
+      "takes %s in a cell being edited as %s while its text is unchanged, finishing the edit",
+      async (keys, direction) => {
+        await renderTable();
+        await userEvent.click(cellOf("Corner Market", COUNTERPARTY));
+
+        await userEvent.keyboard(keys);
+
+        expect(onUndoOrRedo.mock.calls).toEqual([[direction]]);
+        await expect.element(input()).not.toBeInTheDocument();
+        expect(onCommit).not.toHaveBeenCalled();
+        await expect.element(grid()).toHaveFocus();
+      },
+    );
+
+    it("leaves Ctrl+Z to the input once its text has changed", async () => {
+      await renderTable();
+      await userEvent.click(cellOf("Corner Market", COUNTERPARTY));
+      await userEvent.keyboard("{End}s");
+
+      await userEvent.keyboard("{Control>}z{/Control}");
+
+      expect(onUndoOrRedo).not.toHaveBeenCalled();
+      await expect.element(input()).toHaveFocus();
+    });
+
+    it.each([
+      ["typing", "x", "x"],
+      ["Backspace", "{Backspace}", ""],
+    ])(
+      "leaves Ctrl+Z to the input in an edit started by %s, keeping the edit",
+      async (_, keys, text) => {
+        await renderTable();
+        await makeActive("Corner Market", COUNTERPARTY);
+        await userEvent.keyboard(keys);
+        await expect.element(input()).toHaveValue(text);
+
+        await userEvent.keyboard("{Control>}z{/Control}");
+
+        expect(onUndoOrRedo).not.toHaveBeenCalled();
+        await expect.element(input()).toHaveFocus();
+        await expect.element(input()).toHaveValue(text);
+      },
+    );
+  });
+
   describe("when the rows change", () => {
     it("keeps the active cell on a row that's still there", async () => {
       const screen = await render(table());
@@ -813,6 +946,8 @@ describe("TransactionsTable", () => {
           categories={CATEGORIES}
           accounts={ACCOUNTS}
           onCommit={onCommit}
+          lastUndoOrRedo={null}
+          onUndoOrRedo={onUndoOrRedo}
         />,
       );
 
@@ -831,6 +966,8 @@ describe("TransactionsTable", () => {
           categories={CATEGORIES}
           accounts={ACCOUNTS}
           onCommit={onCommit}
+          lastUndoOrRedo={null}
+          onUndoOrRedo={onUndoOrRedo}
           onEditingChange={onEditingChange}
         />,
       );
@@ -1395,6 +1532,8 @@ describe("TransactionsTable", () => {
           categories={many}
           accounts={ACCOUNTS}
           onCommit={onCommit}
+          lastUndoOrRedo={null}
+          onUndoOrRedo={onUndoOrRedo}
         />,
       );
       await userEvent.click(cellOf("Shop 1", CATEGORY));

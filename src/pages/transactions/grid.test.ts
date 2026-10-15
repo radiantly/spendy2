@@ -5,6 +5,7 @@ import {
   clampSelection,
   collapsed,
   contains,
+  covering,
   edges,
   extend,
   isRange,
@@ -144,6 +145,29 @@ describe("bounds", () => {
     expect(edges(area, at(1, 0))).toEqual({ top: true, bottom: false, left: true, right: false });
     expect(edges(area, at(2, 1))).toEqual({ top: false, bottom: false, left: false, right: false });
     expect(edges(area, at(4, 2))).toEqual({ top: false, bottom: true, left: false, right: true });
+  });
+});
+
+describe("covering", () => {
+  it("is null for no cells", () => {
+    expect(covering([])).toBeNull();
+  });
+
+  it("is just the cell for one", () => {
+    expect(covering([at(3, 2)])).toEqual(collapsed(at(3, 2)));
+  });
+
+  it("spans the cells, active at the top left, in any order", () => {
+    expect(covering([at(4, 1), at(2, 3), at(5, 2)])).toEqual({
+      active: at(2, 1),
+      head: at(5, 3),
+    });
+  });
+
+  it("handles more cells than a function takes arguments", () => {
+    const cells = Array.from({ length: 500_000 }, (_, row) => at(row, row % 3));
+
+    expect(covering(cells)).toEqual({ active: at(0, 0), head: at(499_999, 2) });
   });
 });
 

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { ClosedError } from "../../db/rpc.ts";
 import { useOpenDatabase } from "../../db/useDatabase.ts";
 import AccountsCard from "./AccountsCard.tsx";
@@ -27,9 +27,11 @@ function OverviewPage() {
   const { database } = useOpenDatabase();
   const [choice, setChoice] = useState<PeriodChoice>({ kind: "this-month" });
   const [state, setState] = useState<OverviewState>({ status: "loading" });
+  // Changes while this page shows come from undo and redo.
+  const dataVersion = useSyncExternalStore(database.subscribe, () => database.version);
 
-  // Loaded again for a new period, and for a newer version of the database.
-  // The last overview stays up until the next is ready.
+  // Loaded again for a new period, a newer version of the database, and
+  // changes to the data. The last overview stays up until the next is ready.
   useEffect(() => {
     let cancelled = false;
     loadOverview(database, choice, today()).then(
@@ -44,7 +46,7 @@ function OverviewPage() {
     return () => {
       cancelled = true;
     };
-  }, [database, choice]);
+  }, [database, choice, dataVersion]);
 
   if (state.status === "error")
     return (

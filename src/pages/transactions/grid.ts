@@ -131,6 +131,24 @@ export function bounds({ active, head }: GridSelection): Bounds {
   };
 }
 
+/** The smallest selection covering every one of `cells`, active at its top left. */
+export function covering(cells: readonly CellPosition[]): GridSelection | null {
+  const [first] = cells;
+  if (first === undefined) return null;
+  const area = { top: first.row, bottom: first.row, left: first.column, right: first.column };
+  // Not Math.min(...): a whole column cleared is more cells than it takes arguments.
+  for (const { row, column } of cells) {
+    area.top = Math.min(area.top, row);
+    area.bottom = Math.max(area.bottom, row);
+    area.left = Math.min(area.left, column);
+    area.right = Math.max(area.right, column);
+  }
+  return {
+    active: { row: area.top, column: area.left },
+    head: { row: area.bottom, column: area.right },
+  };
+}
+
 export function contains(area: Bounds, cell: CellPosition) {
   return (
     cell.row >= area.top &&

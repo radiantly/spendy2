@@ -143,6 +143,22 @@ describe("Database.save", () => {
     await expect(save).rejects.toThrow(ClosedError);
   });
 
+  it("rejects a save with the upload's error, even if it closed during the upload", async () => {
+    const db = await openDatabase(await session());
+    const error = new TypeError("Failed to fetch");
+    let failUpload!: () => void;
+    vi.mocked(uploadDatabase).mockImplementation(
+      () => new Promise((_, reject) => (failUpload = () => reject(error))),
+    );
+    const save = db.save();
+    await vi.waitFor(() => expect(uploadDatabase).toHaveBeenCalled());
+
+    db.close();
+    failUpload();
+
+    await expect(save).rejects.toBe(error);
+  });
+
   it("rejects calls made after it is closed", async () => {
     const db = await openDatabase(await session());
 
@@ -264,4 +280,98 @@ describe("openNewerDatabase", () => {
       current.close();
     },
   );
+});
+
+describe("Database.unsaved", () => {
+  const INSERT = [{ sql: "INSERT INTO accounts VALUES ('checking', 'USD')" }];
+
+  it("is false when opened", async () => {
+    const db = await openDatabase(await session());
+
+    expect(db.unsaved).toBe(false);
+    db.close();
+  });
+
+  it("is true as soon as a write is asked for", async () => {
+    const db = await openDatabase(await session());
+    const listener = vi.fn();
+    db.subscribe(listener);
+
+    const written = db.batch(INSERT);
+
+    expect(db.unsaved).toBe(true);
+    expect(listener).toHaveBeenCalledOnce();
+    await written;
+    expect(db.unsaved).toBe(true);
+    db.close();
+  });
+
+  it("is false once a write is undone, and true when it's redone", async () => {
+    const db = await openDatabase(await session());
+    const changes = await db.batch(INSERT);
+
+    await db.undo(changes);
+    expect(db.unsaved).toBe(false);
+    await db.redo(changes);
+    expect(db.unsaved).toBe(true);
+    db.close();
+  });
+
+  it("isn't cleared by an earlier write's answer while a later one runs", async () => {
+    const db = await openDatabase(await session());
+    const changes = await db.batch(INSERT);
+
+    const undone = db.undo(changes);
+    const written = db.batch([{ sql: "INSERT INTO accounts VALUES ('savings', 'USD')" }]);
+    await undone;
+
+    expect(db.unsaved).toBe(true);
+    await written;
+    expect(db.unsaved).toBe(true);
+    db.close();
+  });
+
+  it("is false after a save, and true again for an edit made during it", async () => {
+    const db = await openDatabase(await session());
+    await db.batch(INSERT);
+
+    await db.save();
+    expect(db.unsaved).toBe(false);
+
+    let finishUpload!: () => void;
+    vi.mocked(uploadDatabase).mockImplementation(
+      () =>
+        new Promise((resolve) => (finishUpload = () => resolve({ success: true, sha256: SHA_B }))),
+    );
+    const saved = db.save();
+    await vi.waitFor(() => expect(uploadDatabase).toHaveBeenCalledTimes(2));
+    await db.batch([{ sql: "INSERT INTO accounts VALUES ('savings', 'USD')" }]);
+    finishUpload();
+    await saved;
+
+    expect(db.unsaved).toBe(true);
+    db.close();
+  });
+
+  it("stays true when a save fails or throws", async () => {
+    const db = await openDatabase(await session());
+    await db.batch(INSERT);
+    vi.mocked(uploadDatabase).mockResolvedValueOnce({ success: false, code: "CONFLICT" });
+    vi.mocked(uploadDatabase).mockRejectedValueOnce(new TypeError("Failed to fetch"));
+
+    await db.save();
+    expect(db.unsaved).toBe(true);
+    await db.save().catch(() => {});
+    expect(db.unsaved).toBe(true);
+    db.close();
+  });
+
+  it("goes back to what the database has when a write fails", async () => {
+    const db = await openDatabase(await session());
+
+    await db.batch([...INSERT, ...INSERT]).catch(() => {});
+
+    expect(db.unsaved).toBe(false);
+    db.close();
+  });
 });

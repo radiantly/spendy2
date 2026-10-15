@@ -1,4 +1,5 @@
 import {
+  useEffect,
   useId,
   useLayoutEffect,
   useRef,
@@ -8,7 +9,10 @@ import {
 } from "react";
 import { useTable } from "@tanstack/react-table";
 import { defaultRangeExtractor, useWindowVirtualizer, type Range } from "@tanstack/react-virtual";
+import type { Moved } from "../../db/editHistory.ts";
+import type { Edit } from "../../db/databaseContext.ts";
 import type { TransactionPatch, TransactionRow } from "../../db/queries/transactions.ts";
+import type { HistoryDirection } from "../../lib/historyKey.ts";
 import { columns, features, type CellEditor } from "./columns.ts";
 import { selectBetween, selectionAnchor, textOffsetAtPoint, wordAt } from "./caret.ts";
 import EditableCell, { type FinishHow, type SubmitResult } from "./EditableCell.tsx";
@@ -18,6 +22,7 @@ import {
   clampSelection,
   collapsed,
   contains,
+  covering,
   edges,
   extend,
   isRange,
@@ -94,6 +99,9 @@ export type TransactionChange = {
 
 const editorOf = (column: number): CellEditor | undefined => columns[column]!.meta!.editor;
 
+const columnOf = (field: CellEditor["field"]) =>
+  columns.findIndex((column) => column.meta!.editor?.field === field);
+
 type TransactionsTableProps = {
   rows: TransactionRow[];
   categories: readonly string[];
@@ -102,6 +110,13 @@ type TransactionsTableProps = {
   onCommit: (changes: TransactionChange[]) => void;
   /** Called when a cell starts being edited, and when it stops. */
   onEditingChange?: (editing: boolean) => void;
+  /**
+   * The latest undo or redo. Each new one selects the cells it changed, so
+   * it's clear what did (once the table is shown, if it's hidden).
+   */
+  lastUndoOrRedo: Moved<Edit> | null;
+  /** Undo or redo asked for from a cell being edited (see EditableCell). */
+  onUndoOrRedo: (direction: HistoryDirection) => void;
 };
 
 /**
@@ -116,6 +131,8 @@ function TransactionsTable({
   accounts,
   onCommit,
   onEditingChange,
+  lastUndoOrRedo,
+  onUndoOrRedo,
 }: TransactionsTableProps) {
   // The table and virtualizer are mutable objects that return new results
   // from the same instance, so the React Compiler would memoize reads of
@@ -261,6 +278,24 @@ function TransactionsTable({
     }
     if (changes.length > 0) onCommit(changes);
   }
+
+  // Which undo or redo has been shown; the effect runs again when the page
+  // is shown again, and mustn't select it again then.
+  const shownUndoOrRedoRef = useRef<typeof lastUndoOrRedo>(null);
+  useEffect(() => {
+    if (lastUndoOrRedo === null || lastUndoOrRedo === shownUndoOrRedoRef.current) return;
+    shownUndoOrRedoRef.current = lastUndoOrRedo;
+    const { about } = lastUndoOrRedo.step;
+    if (about.kind !== "transaction") return;
+    const indexOf = new Map(rows.map((row, index) => [row.id, index]));
+    const next = covering(
+      about.cells.flatMap(({ id, field }) => {
+        const row = indexOf.get(id);
+        return row === undefined ? [] : [{ row, column: columnOf(field) }];
+      }),
+    );
+    if (next) select(next, next.active);
+  });
 
   function handleKeyDown(event: KeyboardEvent) {
     // Keys typed into a cell's input are the input's.
@@ -484,6 +519,7 @@ function TransactionsTable({
                             submit: (text, create) =>
                               submit(row.original, row.index, editor, text, create),
                             finish: (how) => finishEditing(position, how),
+                            history: onUndoOrRedo,
                           }
                         : undefined
                     }

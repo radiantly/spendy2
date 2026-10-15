@@ -4,15 +4,25 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  useSyncExternalStore,
   type ReactNode,
 } from "react";
 import { pollWhileVisible } from "../lib/pollWhileVisible.ts";
 import type { Session } from "../lib/session.ts";
 import { DatabaseOpenError, openDatabase, openNewerDatabase, type Database } from "./database.ts";
 import { DatabaseContext, type DatabaseState } from "./databaseContext.ts";
+import { EditHistory } from "./editHistory.ts";
 
 /** How often to check for a version saved elsewhere (ms), while the page is visible. */
 const UPDATE_INTERVAL = 10_000;
+
+/** For `useSyncExternalStore` while there's no database: nothing ever changes. */
+const subscribeToNothing = () => () => {};
+
+/** `database`, open, with a history of its own: edits to another version don't apply to it. */
+function ready(database: Database): DatabaseState {
+  return { status: "ready", database, history: new EditHistory(database) };
+}
 
 /** Whether the server turned the session away. */
 function isSessionEnded(error: unknown) {
@@ -20,8 +30,8 @@ function isSessionEnded(error: unknown) {
 }
 
 /**
- * Opens the user's database for its children and tracks unsaved changes.
- * The database closes when the provider unmounts.
+ * Opens the user's database for its children, and saves it. The database
+ * closes when the provider unmounts.
  *
  * While there's nothing to lose, a version saved elsewhere (another tab or
  * device) replaces the open one. Nothing is lost when there are no unsaved
@@ -42,17 +52,18 @@ function DatabaseProvider({
 }) {
   const [state, setState] = useState<DatabaseState>({ status: "loading" });
   const [attempt, setAttempt] = useState(0);
-  // Counting edits rather than a flag keeps edits made during a save unsaved.
-  const [editCount, setEditCount] = useState(0);
-  const [savedEditCount, setSavedEditCount] = useState(0);
   const [saving, setSaving] = useState(false);
-  const dirty = editCount !== savedEditCount;
+  const database = state.status === "ready" ? state.database : null;
+  const dirty = useSyncExternalStore(
+    database?.subscribe ?? subscribeToNothing,
+    () => database?.unsaved ?? false,
+  );
 
-  // Whether there are unsaved changes or a save is running. Set as soon as
-  // either starts, so a check finishing before the next render sees it.
-  const busyRef = useRef(false);
+  // Whether a save is running. Set as soon as one starts, so a check
+  // finishing before the next render sees it.
+  const savingRef = useRef(false);
   useLayoutEffect(() => {
-    busyRef.current = dirty || saving;
+    savingRef.current = saving;
   });
   const holdsRef = useRef(0);
   const sessionEnded = useEffectEvent(() => onSessionEnded());
@@ -62,7 +73,8 @@ function DatabaseProvider({
     let opened: Database | undefined;
     let stopPolling: (() => void) | undefined;
     let checking = false;
-    const canReplace = () => !busyRef.current && holdsRef.current === 0;
+    // The database itself knows of unsaved changes as soon as they're made.
+    const canReplace = () => !opened!.unsaved && !savingRef.current && holdsRef.current === 0;
 
     async function checkForUpdate() {
       if (checking || !opened || !canReplace()) return;
@@ -73,7 +85,7 @@ function DatabaseProvider({
         // Something changed while it downloaded.
         if (cancelled || !canReplace()) return newer.close();
         opened = newer;
-        setState({ status: "ready", database: newer });
+        setState(ready(newer));
       } catch (error) {
         // Logging out now would lose what changed during the check.
         if (isSessionEnded(error) && !cancelled && canReplace()) sessionEnded();
@@ -87,7 +99,7 @@ function DatabaseProvider({
       (database) => {
         if (cancelled) return database.close();
         opened = database;
-        setState({ status: "ready", database });
+        setState(ready(database));
         stopPolling = pollWhileVisible(() => void checkForUpdate(), UPDATE_INTERVAL);
       },
       (error: unknown) => {
@@ -121,13 +133,10 @@ function DatabaseProvider({
 
   async function save() {
     if (state.status !== "ready") return null;
-    const savingEditCount = editCount;
-    busyRef.current = true;
+    savingRef.current = true;
     setSaving(true);
     try {
-      const result = await state.database.save();
-      if (result.success) setSavedEditCount(savingEditCount);
-      return result;
+      return await state.database.save();
     } finally {
       setSaving(false);
     }
@@ -149,10 +158,6 @@ function DatabaseProvider({
         state,
         dirty,
         saving,
-        markDirty: () => {
-          busyRef.current = true;
-          setEditCount((count) => count + 1);
-        },
         save,
         holdUpdates,
         retry: () => {

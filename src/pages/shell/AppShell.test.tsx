@@ -87,6 +87,27 @@ function holdNext<M extends "query" | "batch">(
 }
 
 const holdNextQuery = (match: (sql: string) => boolean) => holdNext("query", (sql) => match(sql));
+
+/**
+ * Holds back the next call of the database worker's `method` on its way to
+ * the worker, until it's released: below `Database`, which has already
+ * acted on the call by then.
+ */
+function holdNextWorkerCall(method: string) {
+  const original = Worker.prototype.postMessage;
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  const spy = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
+    this: Worker,
+    ...args: Parameters<Worker["postMessage"]>
+  ) {
+    if ((args[0] as { method?: string }).method !== method)
+      return original.apply(this, args as never);
+    spy.mockRestore();
+    void held.then(() => original.apply(this, args as never));
+  });
+  return { release };
+}
 /** Edits are written in a batch of statements. */
 const holdNextUpdate = () =>
   holdNext("batch", (statements) =>
@@ -96,6 +117,7 @@ const holdNextUpdate = () =>
 const ACCOUNT = 1;
 const COUNTERPARTY = 2;
 const CATEGORY = 3;
+const AMOUNT = 4;
 const REMARKS = 5;
 
 /** The cell in `column` (0-based) of the row showing `text`, once it's shown. */
@@ -454,13 +476,15 @@ describe("TransactionsPage", () => {
   it("marks an edit unsaved before it's written", async () => {
     await loggedIn(await storedDatabase(TWO_TRANSACTIONS));
     await renderApp("/transactions");
-    const update = holdNextUpdate();
+    const write = holdNextWorkerCall("batch");
 
     await editCounterparty("Corner Market", "Corner Shop");
 
     await expect.element(saveButton()).toBeEnabled();
-    // Let the write finish, so the database isn't closed with it still running.
-    await update.release();
+    write.release();
+    // Still unsaved once it's written.
+    await expect.element(page.getByText("Corner Shop")).toBeVisible();
+    await expect.element(saveButton()).toBeEnabled();
   });
 
   it("puts back the stored value when an edit can't be written", async () => {
@@ -817,5 +841,431 @@ describe("a session the server no longer accepts", () => {
     await expect
       .element(page.getByText("Your session has ended. Log in again to save."))
       .toBeVisible();
+  });
+});
+
+describe("undo and redo on the transactions page", () => {
+  const undo = () => userEvent.keyboard("{Control>}z{/Control}");
+  const redo = () => userEvent.keyboard("{Control>}y{/Control}");
+  const inTable = (text: string) => page.getByRole("grid").getByText(text, { exact: true });
+  /** Groceries inside Food, used only by Corner Market. */
+  const WITH_PARENT = `${TWO_TRANSACTIONS};
+    INSERT INTO categories VALUES ('Food', NULL);
+    UPDATE categories SET parent = 'Food' WHERE name = 'Groceries'`;
+
+  /** Gives the grid focus, as the keys need, from a cell in `column` of the row showing `text`. */
+  async function focusGrid(text: string, column = COUNTERPARTY) {
+    await userEvent.click(await cellOf(text, column));
+    await userEvent.keyboard("{Escape}");
+    await expect.element(page.getByRole("grid")).toHaveFocus();
+  }
+
+  async function uploaded(sql: string) {
+    await userEvent.click(saveButton());
+    await expect.element(saveButton()).not.toBeInTheDocument();
+    const [, blob] = vi.mocked(uploadDatabase).mock.calls.at(-1)!;
+    return queryUploaded(blob, sql);
+  }
+
+  async function editAmount(from: string, to: string) {
+    await userEvent.click(page.getByText(from, { exact: true }));
+    await page.getByRole("textbox").fill(to);
+    await userEvent.keyboard("{Enter}");
+  }
+
+  it("undoes an edit and redoes it", async () => {
+    await opened();
+    await editCounterparty("Corner Market", "Corner Shop");
+
+    await undo();
+    await expect.element(inTable("Corner Market")).toBeVisible();
+    await redo();
+
+    await expect.element(inTable("Corner Shop")).toBeVisible();
+    expect(await uploaded("SELECT counterparty FROM transactions WHERE id = 'newer'")).toEqual([
+      { counterparty: "Corner Shop" },
+    ]);
+  });
+
+  it("leaves nothing to save once every edit is undone, until one is redone", async () => {
+    await opened();
+    await editCounterparty("Corner Market", "Corner Shop");
+    await editCounterparty("Café Lumen", "Café Sol");
+
+    await undo();
+    await expect.element(saveButton()).toBeEnabled();
+    await undo();
+    await expect.element(inTable("Corner Market")).toBeVisible();
+    await expect.element(saveButton()).not.toBeInTheDocument();
+    await redo();
+
+    await expect.element(saveButton()).toBeEnabled();
+  });
+
+  it("writes an undo to the database", async () => {
+    await opened();
+    await editCounterparty("Corner Market", "Corner Shop");
+    await editCounterparty("Café Lumen", "Café Sol");
+
+    await undo();
+
+    await expect.element(inTable("Café Lumen")).toBeVisible();
+    expect(await uploaded("SELECT counterparty FROM transactions ORDER BY id")).toEqual([
+      { counterparty: "Corner Shop" },
+      { counterparty: "Café Lumen" },
+    ]);
+  });
+
+  it("undoes edits one at a time, latest first", async () => {
+    await opened();
+    await editCounterparty("Corner Market", "Corner Shop");
+    await editCounterparty("Café Lumen", "Café Sol");
+
+    await undo();
+
+    await expect.element(inTable("Café Lumen")).toBeVisible();
+    await expect.element(inTable("Corner Shop")).toBeVisible();
+    await undo();
+    await expect.element(inTable("Corner Market")).toBeVisible();
+  });
+
+  it("undoes both parts of an amount", async () => {
+    await opened();
+    await editCounterparty("Corner Market", "Corner Shop");
+    await editAmount("-46.20", "-12.5");
+
+    await undo();
+
+    await expect.element(inTable("-46.20")).toBeVisible();
+    expect(
+      await uploaded(
+        "SELECT counterparty, amount_numerator, amount_denominator FROM transactions WHERE id = 'newer'",
+      ),
+    ).toEqual([{ counterparty: "Corner Shop", amount_numerator: -231, amount_denominator: 5 }]);
+  });
+
+  it("undoes a cleared range in one step, and selects it", async () => {
+    await loggedIn(
+      await storedDatabase(`${TWO_TRANSACTIONS}; UPDATE transactions SET remarks = 'Weekly'`),
+    );
+    await renderApp("/transactions");
+    await focusGrid("Corner Market");
+    await userEvent.click(await cellOf("Café Lumen", REMARKS), { modifiers: ["Shift"] });
+    await userEvent.keyboard("{Delete}");
+    await expect.poll(() => page.getByText("Weekly").all()).toHaveLength(0);
+    await focusGrid("Café Lumen", 0);
+
+    await undo();
+
+    await expect.poll(() => page.getByText("Weekly").all()).toHaveLength(2);
+    await expect.element(inTable("Groceries")).toBeVisible();
+    // Groceries and both remarks changed (Café Lumen had no category to
+    // clear), so the selection spans those columns of both rows.
+    const selected = [...document.querySelectorAll('[role="gridcell"][aria-selected="true"]')];
+    const expected = [];
+    for (const row of ["Corner Market", "Café Lumen"])
+      for (const column of [CATEGORY, AMOUNT, REMARKS])
+        expected.push((await cellOf(row, column)).element());
+    expect(selected).toEqual(expected);
+    await expect.element(saveButton()).not.toBeInTheDocument();
+  });
+
+  it("puts a category deleted for being unused back inside its parent", async () => {
+    await loggedIn(await storedDatabase(WITH_PARENT));
+    await renderApp("/transactions");
+    const market = await cellOf("Corner Market", CATEGORY);
+    await userEvent.click(market);
+    await page.getByRole("combobox").fill("");
+    await userEvent.keyboard("{Enter}");
+    await expect.poll(() => market.element().textContent).toBe("");
+
+    await undo();
+
+    await expect.element(market).toHaveTextContent("Groceries");
+    // Exactly as saved, the category tree included.
+    await expect.element(saveButton()).not.toBeInTheDocument();
+    await editCounterparty("Café Lumen", "Café Sol");
+    expect(await uploaded("SELECT name, parent FROM categories ORDER BY name")).toEqual([
+      { name: "Food", parent: null },
+      { name: "Groceries", parent: "Food" },
+    ]);
+  });
+
+  it("still has something to save when a cleared category is set again by hand", async () => {
+    await loggedIn(await storedDatabase(WITH_PARENT));
+    await renderApp("/transactions");
+    const market = await cellOf("Corner Market", CATEGORY);
+    await userEvent.click(market);
+    await page.getByRole("combobox").fill("");
+    await userEvent.keyboard("{Enter}");
+    await expect.poll(() => market.element().textContent).toBe("");
+
+    await userEvent.click(market);
+    await page.getByRole("combobox").fill("Groceries");
+    await userEvent.click(page.getByRole("option", { name: "Create category “Groceries”" }));
+    await expect.element(market).toHaveTextContent("Groceries");
+
+    // It's back, but no longer inside Food, which is gone.
+    await expect.element(saveButton()).toBeEnabled();
+    expect(await uploaded("SELECT name, parent FROM categories ORDER BY name")).toEqual([
+      { name: "Groceries", parent: null },
+    ]);
+  });
+
+  it("leaves nothing to save once an edit is changed back by hand", async () => {
+    await opened();
+    await editCounterparty("Corner Market", "Corner Shop");
+    await expect.element(saveButton()).toBeEnabled();
+
+    await editCounterparty("Corner Shop", "Corner Market");
+
+    await expect.element(saveButton()).not.toBeInTheDocument();
+  });
+
+  it("forgets what could be redone once there's a new edit", async () => {
+    await opened();
+    await editCounterparty("Corner Market", "Corner Shop");
+    await undo();
+    await expect.element(inTable("Corner Market")).toBeVisible();
+
+    await editCounterparty("Café Lumen", "Café Sol");
+    await redo();
+
+    await expect.element(inTable("Corner Market")).toBeVisible();
+    await expect.element(inTable("Café Sol")).toBeVisible();
+  });
+
+  it("undoes past a save, leaving the undo unsaved", async () => {
+    await opened();
+    await editCounterparty("Corner Market", "Corner Shop");
+    await userEvent.click(saveButton());
+    await expect.element(saveButton()).not.toBeInTheDocument();
+    // Saving took focus to the button.
+    await focusGrid("Corner Shop");
+
+    await undo();
+
+    await expect.element(saveButton()).toBeEnabled();
+    expect(await uploaded("SELECT counterparty FROM transactions WHERE id = 'newer'")).toEqual([
+      { counterparty: "Corner Market" },
+    ]);
+  });
+
+  it("leaves nothing to save once undone back to what was saved", async () => {
+    await opened();
+    await editCounterparty("Corner Market", "Corner Shop");
+    await userEvent.click(saveButton());
+    await expect.element(saveButton()).not.toBeInTheDocument();
+    await editCounterparty("Café Lumen", "Café Sol");
+    await expect.element(saveButton()).toBeEnabled();
+
+    await undo();
+
+    await expect.element(inTable("Café Lumen")).toBeVisible();
+    await expect.element(saveButton()).not.toBeInTheDocument();
+  });
+
+  it("forgets a new category when its edit is undone, and makes it again on redo", async () => {
+    await opened();
+    const cafe = await cellOf("Café Lumen", CATEGORY);
+    await userEvent.click(cafe);
+    await page.getByRole("combobox").fill("Coffee");
+    await userEvent.click(page.getByRole("option", { name: "Create category “Coffee”" }));
+    await expect.element(cafe).toHaveTextContent("Coffee");
+
+    await undo();
+    await expect.poll(() => cafe.element().textContent).toBe("");
+    await userEvent.click(await cellOf("Corner Market", CATEGORY));
+    await page.getByRole("combobox").fill("Coffee");
+    await expect
+      .element(page.getByRole("option", { name: "Create category “Coffee”" }))
+      .toBeVisible();
+    await userEvent.keyboard("{Escape}");
+    await redo();
+
+    await expect.element(cafe).toHaveTextContent("Coffee");
+    expect(await uploaded("SELECT name FROM categories ORDER BY name")).toEqual([
+      { name: "Coffee" },
+      { name: "Groceries" },
+    ]);
+  });
+
+  describe("anywhere", () => {
+    const activeCell = () =>
+      document.getElementById(
+        page.getByRole("grid").element().getAttribute("aria-activedescendant") ?? "",
+      );
+    const recent = () => page.getByRole("region", { name: "Recent" });
+
+    async function showOverview() {
+      await userEvent.click(page.getByRole("link", { name: "Overview" }));
+      await userEvent.click(page.getByRole("button", { name: "All", exact: true }));
+      await expect.element(recent()).toBeVisible();
+    }
+
+    it("undoes without the grid having focus, e.g. just after saving, and selects what changed", async () => {
+      await opened();
+      await editCounterparty("Corner Market", "Corner Shop");
+      await userEvent.click(saveButton());
+      await expect.element(saveButton()).not.toBeInTheDocument();
+      expect(document.activeElement).not.toBe(page.getByRole("grid").element());
+
+      await undo();
+
+      await expect.element(inTable("Corner Market")).toBeVisible();
+      expect(activeCell()).toBe((await cellOf("Corner Market", COUNTERPARTY)).element());
+    });
+
+    it("undoes and redoes on the Overview, which shows it straight away", async () => {
+      await opened();
+      await editCounterparty("Corner Market", "Corner Shop");
+      await showOverview();
+      await expect.element(recent()).toMatchTextContent(/Corner Shop/);
+
+      await undo();
+      await expect.element(recent()).toMatchTextContent(/Corner Market/);
+      await redo();
+
+      await expect.element(recent()).toMatchTextContent(/Corner Shop/);
+    });
+
+    it("shows an undo made on the Overview on the transactions page, selected", async () => {
+      await opened();
+      await editCounterparty("Corner Market", "Corner Shop");
+      await focusGrid("Café Lumen", REMARKS);
+      await showOverview();
+
+      await undo();
+      await expect.element(recent()).toMatchTextContent(/Corner Market/);
+      await userEvent.click(page.getByRole("link", { name: "Transactions" }));
+
+      await expect.element(inTable("Corner Market")).toBeVisible();
+      expect(activeCell()).toBe((await cellOf("Corner Market", COUNTERPARTY)).element());
+    });
+
+    it("says what it undid and redid where the change can't be seen", async () => {
+      await opened();
+      await editCounterparty("Corner Market", "Corner Shop");
+      await showOverview();
+
+      await undo();
+      await expect
+        .element(page.getByText("Undid counterparty of Corner Market: Corner Market → Corner Shop"))
+        .toBeVisible();
+      await redo();
+
+      await expect
+        .element(page.getByText("Redid counterparty of Corner Market: Corner Market → Corner Shop"))
+        .toBeVisible();
+      // One toast, replaced rather than piled up.
+      expect(page.getByText(/^(Undid|Redid) /).all()).toHaveLength(1);
+    });
+
+    it("doesn't say what it undid where the change can be seen", async () => {
+      await opened();
+      await editCounterparty("Corner Market", "Corner Shop");
+
+      await undo();
+      await expect.element(inTable("Corner Market")).toBeVisible();
+      // Give it the chance to (wrongly) say so.
+      await new Promise((resolve) => setTimeout(resolve, 200));
+
+      expect(page.getByText(/^Undid /).query()).toBeNull();
+    });
+
+    it("leaves Ctrl+Z in a text field to the field", async () => {
+      await opened();
+      await editCounterparty("Corner Market", "Corner Shop");
+      await showOverview();
+      await userEvent.click(page.getByRole("button", { name: "Custom" }));
+      await userEvent.click(page.getByLabelText("From"));
+
+      await undo();
+      // Give it the chance to (wrongly) undo.
+      await new Promise((resolve) => setTimeout(resolve, 200));
+
+      await expect.element(saveButton()).toBeEnabled();
+    });
+  });
+
+  describe("in a cell being edited", () => {
+    it("undoes and redoes when nothing was typed, finishing the edit", async () => {
+      await opened();
+      await editCounterparty("Corner Market", "Corner Shop");
+      await userEvent.click(inTable("Café Lumen"));
+      await expect.element(page.getByRole("textbox")).toHaveFocus();
+
+      await undo();
+
+      await expect.element(inTable("Corner Market")).toBeVisible();
+      expect(page.getByRole("textbox").query()).toBeNull();
+      await userEvent.click(inTable("Café Lumen"));
+      await redo();
+      await expect.element(inTable("Corner Shop")).toBeVisible();
+    });
+
+    it("leaves undo to the text once something was typed", async () => {
+      await opened();
+      await editCounterparty("Corner Market", "Corner Shop");
+      await userEvent.click(inTable("Café Lumen"));
+      await userEvent.keyboard("{End} Sol");
+
+      await undo();
+
+      await expect.element(page.getByRole("textbox")).toHaveFocus();
+      await userEvent.keyboard("{Escape}");
+      await expect.element(inTable("Corner Shop")).toBeVisible();
+    });
+  });
+
+  it("keeps the history while another page is shown", async () => {
+    await opened();
+    await editCounterparty("Corner Market", "Corner Shop");
+    await userEvent.click(page.getByRole("link", { name: "Overview" }));
+    await expect.element(page.getByRole("region", { name: "Recent" })).toBeVisible();
+    await userEvent.click(page.getByRole("link", { name: "Transactions" }));
+    await focusGrid("Café Lumen");
+
+    await undo();
+
+    await expect.element(inTable("Corner Market")).toBeVisible();
+  });
+
+  it("forgets the history when a version saved elsewhere replaces the open one", async () => {
+    await opened();
+    await editCounterparty("Café Lumen", "Café Sol");
+    await userEvent.click(saveButton());
+    await expect.element(saveButton()).not.toBeInTheDocument();
+    vi.mocked(downloadDatabaseIfChanged).mockResolvedValue({
+      success: true,
+      blob: await storedDatabase(
+        `${TWO_TRANSACTIONS}; UPDATE transactions SET counterparty = 'Corner Shop' WHERE id = 'newer'`,
+      ),
+      sha256: "c".repeat(64),
+    });
+    checkForUpdates();
+    await expect.element(inTable("Corner Shop")).toBeVisible();
+    await focusGrid("Café Lumen");
+
+    await undo();
+
+    await expect.element(inTable("Café Lumen")).toBeVisible();
+    expect(saveButton().query()).toBeNull();
+  });
+
+  it("can still undo earlier edits after one can't be written", async () => {
+    await opened();
+    await editCounterparty("Corner Market", "Corner Shop");
+    vi.spyOn(Database.prototype, "batch").mockRejectedValueOnce(new Error("disk on fire"));
+    await editCounterparty("Café Lumen", "Café Sol");
+    await expect
+      .element(page.getByText("Couldn't change that transaction: disk on fire"))
+      .toBeVisible();
+    await focusGrid("Café Lumen");
+
+    await undo();
+
+    await expect.element(inTable("Corner Market")).toBeVisible();
+    await expect.element(saveButton()).not.toBeInTheDocument();
   });
 });

@@ -23,6 +23,9 @@ export class DatabaseOpenError extends Error {
 /**
  * The user's database, open in a web worker. Changes stay in memory until
  * `save()` uploads them.
+ *
+ * Writes go through `batch`, `undo` and `redo` (`query` is for reading), so
+ * `unsaved` knows when the database differs from the version last saved.
  */
 export class Database {
   readonly #worker: Worker;
@@ -31,6 +34,11 @@ export class Database {
   #sha256: string | null;
   /** Settles when the latest save has; saves run one at a time. */
   #saving: Promise<unknown> = Promise.resolve();
+  #unsaved = false;
+  #version = 0;
+  /** Counts writes and saves, so only the latest one's answer decides `unsaved`. */
+  #changeCount = 0;
+  readonly #listeners = new Set<() => void>();
 
   /** Use `openDatabase`. */
   constructor(
@@ -50,13 +58,100 @@ export class Database {
     return this.#sha256;
   }
 
+  /**
+   * Whether there are changes `save()` hasn't uploaded: the database differs
+   * from the version last saved. True from the moment a write is asked for,
+   * so a change is never shown without being unsaved; once the worker has
+   * run it, the worker says.
+   */
+  get unsaved() {
+    return this.#unsaved;
+  }
+
+  /**
+   * Goes up each time the data changes (a write, undo or redo), for showing
+   * what changed elsewhere. Not for the version saved: see `sha256`.
+   */
+  get version() {
+    return this.#version;
+  }
+
+  /**
+   * Calls `listener` when `unsaved` or `version` changes, until the returned
+   * function is called. The same function every time, as
+   * `useSyncExternalStore` wants.
+   */
+  readonly subscribe = (listener: () => void) => {
+    this.#listeners.add(listener);
+    return () => void this.#listeners.delete(listener);
+  };
+
+  #notify() {
+    for (const listener of this.#listeners) listener();
+  }
+
+  #setUnsaved(unsaved: boolean) {
+    if (unsaved === this.#unsaved) return;
+    this.#unsaved = unsaved;
+    this.#notify();
+  }
+
+  #changed() {
+    this.#version++;
+    this.#notify();
+  }
+
+  /**
+   * Runs `change` in the worker, taking its answer about unsaved changes
+   * unless a later write or save has started since: its answer will be newer.
+   */
+  async #change<T extends { unsaved: boolean }>(change: () => Promise<T>) {
+    const count = ++this.#changeCount;
+    let result: T;
+    try {
+      result = await change();
+    } catch (error) {
+      // It changed nothing, but `unsaved` may have been set for it.
+      if (count === this.#changeCount) {
+        const { unsaved } = await this.#connection.remote.status();
+        if (count === this.#changeCount) this.#setUnsaved(unsaved);
+      }
+      throw error;
+    }
+    if (count === this.#changeCount) this.#setUnsaved(result.unsaved);
+    return result;
+  }
+
   query(sql: string, bind?: BindingSpec) {
     return this.#connection.remote.query(sql, bind);
   }
 
-  /** Runs the statements in one transaction: all of them, or none if one fails. */
-  batch(statements: Statement[]) {
-    return this.#connection.remote.batch(statements);
+  /**
+   * Runs the statements in one transaction: all of them, or none if one
+   * fails. Resolves with the changes they made, for `undo` and `redo`.
+   */
+  async batch(statements: Statement[]) {
+    this.#setUnsaved(true);
+    const { changes } = await this.#change(() => this.#connection.remote.batch(statements));
+    this.#changed();
+    return changes;
+  }
+
+  /**
+   * Undoes the changes `batch` resolved with. Rejects, changing nothing, if
+   * the database no longer holds what they made.
+   */
+  async undo(changes: Uint8Array) {
+    this.#setUnsaved(true);
+    await this.#change(() => this.#connection.remote.undo(changes));
+    this.#changed();
+  }
+
+  /** Makes undone changes again. Rejects, changing nothing, if they no longer fit. */
+  async redo(changes: Uint8Array) {
+    this.#setUnsaved(true);
+    await this.#change(() => this.#connection.remote.redo(changes));
+    this.#changed();
   }
 
   /**
@@ -74,12 +169,20 @@ export class Database {
 
   async #upload() {
     const blob = await this.#connection.remote.export();
-    const result = await uploadDatabase(
-      this.#token,
-      blob,
-      this.#sha256 === null ? { ifNoneMatch: true } : { ifMatch: this.#sha256 },
-    );
+    let result: UploadResult;
+    try {
+      result = await uploadDatabase(
+        this.#token,
+        blob,
+        this.#sha256 === null ? { ifNoneMatch: true } : { ifMatch: this.#sha256 },
+      );
+    } catch (error) {
+      // The upload's error is what went wrong, whatever finishing says.
+      await this.#change(() => this.#connection.remote.finishSave(false)).catch(() => {});
+      throw error;
+    }
     if (result.success) this.#sha256 = result.sha256;
+    await this.#change(() => this.#connection.remote.finishSave(result.success));
     return result;
   }
 
