@@ -7,11 +7,11 @@ import type { Database } from "@sqlite.org/sqlite-wasm";
 import { reduce } from "../src/lib/rational.ts";
 
 const ACCOUNTS = [
-  { name: "Everyday Checking", currency: "USD" },
-  { name: "Rewards Credit Card", currency: "USD" },
-  { name: "High-Yield Savings", currency: "USD" },
-  { name: "Travel Card", currency: "EUR" },
-  { name: "India Savings", currency: "INR" },
+  { name: "Everyday Checking", currency: "USD", type: "Bank", identifier: "••4821" },
+  { name: "Rewards Credit Card", currency: "USD", type: "Card", identifier: "••3307" },
+  { name: "High-Yield Savings", currency: "USD", type: "Bank", identifier: "••1190" },
+  { name: "Travel Card", currency: "EUR", type: "Card", identifier: "••5512" },
+  { name: "India Savings", currency: "INR", type: "Bank", identifier: null },
 ];
 
 /** Spending categories, each with typical counterparties and amounts. */
@@ -99,8 +99,8 @@ export function generateTestData(db: Database, count: number) {
   db.transaction(() => {
     for (const account of ACCOUNTS)
       db.exec({
-        sql: "INSERT INTO accounts VALUES (?, ?)",
-        bind: [account.name, account.currency],
+        sql: "INSERT INTO accounts VALUES (?, ?, ?, ?)",
+        bind: [account.name, account.currency, account.type, account.identifier],
       });
 
     const parents = [...new Set([...SPENDING.map((c) => c.parent), "Income"])];

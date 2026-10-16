@@ -26,7 +26,8 @@ beforeEach(() => {
   migrate(db, MIGRATIONS);
   seq = 0;
   db.exec(`
-    INSERT INTO accounts VALUES ('Checking', 'USD'), ('Savings', 'USD'), ('Travel', 'EUR'), ('India', 'INR');
+    INSERT INTO accounts VALUES ('Checking', 'USD', 'Bank', '••4821'), ('Savings', 'USD', 'Bank', NULL),
+      ('Travel', 'EUR', 'Card', '••5512'), ('India', 'INR', 'Bank', NULL);
     INSERT INTO sources (hash, remarks) VALUES (${SOURCE_HASH_SQL}, 'statement.csv');
     INSERT INTO categories VALUES ('Food', NULL), ('Groceries', 'Food'), ('Income', NULL), ('Salary', 'Income');
   `);
@@ -283,17 +284,15 @@ describe("LIST_ACCOUNT_ACTIVITY", () => {
     add({ amount: -1, account: "Travel", currency: "EUR" });
     add({ amount: -1 });
 
-    expect(
-      rows(LIST_ACCOUNT_ACTIVITY, bind).map(({ name, transactions }) => [name, transactions]),
-    ).toEqual([
-      ["Travel", 2],
-      ["Checking", 1],
-      ["India", 0],
-      ["Savings", 0],
+    expect(rows(LIST_ACCOUNT_ACTIVITY, bind).map(({ name }) => name)).toEqual([
+      "Travel",
+      "Checking",
+      "India",
+      "Savings",
     ]);
   });
 
-  it("splits money in, out and transfers, in the account's currency", () => {
+  it("splits money in and out, leaving out transfers, in the account's currency", () => {
     add({ amount: 2560 });
     add({ amount: -40 });
     add({ amount: -300, transfer: "Savings" });
@@ -303,11 +302,11 @@ describe("LIST_ACCOUNT_ACTIVITY", () => {
     const accounts = rows(LIST_ACCOUNT_ACTIVITY, bind);
     expect(accounts.find(({ name }) => name === "Checking")).toEqual({
       name: "Checking",
+      type: "Bank",
+      identifier: "••4821",
       currency: "USD",
-      transactions: 4,
       money_in: 2560,
       money_out: 40,
-      transfers: -250,
     });
     expect(accounts.find(({ name }) => name === "Travel")).toMatchObject({
       currency: "EUR",
@@ -315,18 +314,21 @@ describe("LIST_ACCOUNT_ACTIVITY", () => {
     });
   });
 
-  it("counts, but doesn't add up, transactions in another currency", () => {
+  it("orders by, but doesn't add up, transactions in another currency", () => {
     add({ amount: -10, account: "Travel", currency: "USD" });
 
-    expect(rows(LIST_ACCOUNT_ACTIVITY, bind)[0]).toMatchObject({
-      name: "Travel",
-      transactions: 1,
-      money_out: 0,
+    expect(rows(LIST_ACCOUNT_ACTIVITY, bind)[0]).toMatchObject({ name: "Travel", money_out: 0 });
+  });
+
+  it("gives an account without an identifier as null", () => {
+    expect(rows(LIST_ACCOUNT_ACTIVITY, bind).find(({ name }) => name === "India")).toMatchObject({
+      type: "Bank",
+      identifier: null,
     });
   });
 
   it("leaves out accounts without a default currency, for now", () => {
-    db.exec("INSERT INTO accounts VALUES ('Cash', NULL)");
+    db.exec("INSERT INTO accounts VALUES ('Cash', NULL, 'Bank', NULL)");
     add({ amount: -5, account: "Cash" });
 
     expect(rows(LIST_ACCOUNT_ACTIVITY, bind).map(({ name }) => name)).not.toContain("Cash");

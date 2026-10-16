@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { page, userEvent } from "vitest/browser";
+import { page, userEvent, type Locator } from "vitest/browser";
 import { downloadDatabase, downloadDatabaseIfChanged, uploadDatabase } from "../../api/database.ts";
 import { renderApp } from "../../test/renderAuthPage.tsx";
 import { rect } from "../../test/renderAuthPage.tsx";
@@ -41,8 +41,9 @@ const insert = (
 
 /** Today is Oct 9, 2026 (see the mock of period.ts). */
 const DATA = [
-  `INSERT INTO accounts VALUES ('Everyday Checking', 'USD'), ('Rewards Card', 'USD'),
-    ('Travel Card', 'EUR'), ('Savings', 'USD'), ('India Savings', 'INR')`,
+  `INSERT INTO accounts VALUES ('Everyday Checking', 'USD', 'Bank', '••4821'),
+    ('Rewards Card', 'USD', 'Card', '••3307'), ('Travel Card', 'EUR', 'Card', '••5512'),
+    ('Savings', 'USD', 'Bank', '••1190'), ('India Savings', 'INR', 'Bank', NULL)`,
   `INSERT INTO sources (hash, remarks, import_timestamp) VALUES (${SOURCE_HASH_SQL}, 'statement.csv', 1791374400)`,
   `INSERT INTO categories VALUES ('Food', NULL), ('Groceries', 'Food'), ('Dining out', 'Food'),
     ('Housing', NULL), ('Rent', 'Housing'), ('Health', NULL), ('Income', NULL), ('Salary', 'Income')`,
@@ -87,6 +88,25 @@ async function opened(sql = DATA) {
 }
 
 const region = (name: string) => page.getByRole("region", { name });
+const colorOf = (locator: Locator) => getComputedStyle(locator.element()).color;
+/** What `color` (any CSS colour) computes to as a background. */
+function backgroundOf(color: string) {
+  const probe = document.createElement("span");
+  probe.style.backgroundColor = color;
+  document.body.append(probe);
+  const computed = getComputedStyle(probe).backgroundColor;
+  probe.remove();
+  return computed;
+}
+/** The colour a Tailwind text colour class gives. */
+function colorOfClass(className: string) {
+  const probe = document.createElement("span");
+  probe.className = className;
+  document.body.append(probe);
+  const color = getComputedStyle(probe).color;
+  probe.remove();
+  return color;
+}
 // Intl puts thin spaces around the dash in date ranges.
 const range = (text: string) => new RegExp(text.replaceAll(" – ", "\\s–\\s"));
 
@@ -190,14 +210,46 @@ describe("OverviewPage", () => {
     await opened();
 
     const accounts = region("Accounts").getByRole("listitem");
-    await expect.element(accounts.nth(0)).toMatchTextContent(/Rewards Card.*4 txns/);
-    await expect.element(accounts.nth(0)).toMatchTextContent(/Out\s*\$97/);
+    await expect.element(accounts.nth(0)).toHaveTextContent("Rewards Card[Card] ••3307In$0Out-$97");
+    // Transfers are left out.
     await expect
       .element(accounts.nth(1))
-      .toMatchTextContent(/Everyday Checking.*In\$2,560Out\$1,300Transfers-\$300/);
-    await expect.element(accounts.nth(2)).toMatchTextContent(/India Savings.*Out₹5,000/);
-    await expect.element(accounts.nth(3)).toMatchTextContent(/Travel Card.*Out€24/);
-    await expect.element(accounts.nth(4)).toMatchTextContent(/Savings.*0 txns/);
+      .toHaveTextContent("Everyday Checking[Bank] ••4821In+$2,560Out-$1,300");
+    await expect.element(accounts.nth(2)).toMatchTextContent(/^India Savings.*Out-₹5,000$/);
+    await expect.element(accounts.nth(3)).toMatchTextContent(/^Travel Card.*Out-€24$/);
+    await expect.element(accounts.nth(4)).toHaveTextContent("Savings[Bank] ••1190In$0Out$0");
+  });
+
+  it("shows each account's type and identifier, or just its type without one", async () => {
+    await opened();
+
+    const accounts = region("Accounts");
+    await expect.element(accounts.getByText("[Card] ••3307")).toBeVisible();
+    await expect.element(accounts.getByText("[Bank]", { exact: true })).toBeVisible();
+  });
+
+  it("marks every account with a bar in the field colour", async () => {
+    await opened();
+
+    const accounts = region("Accounts").getByRole("listitem");
+    await expect.element(accounts.nth(0)).toBeVisible();
+    const bars = accounts.all().map((account) => account.element().firstElementChild!);
+    expect(bars.map((bar) => getComputedStyle(bar).backgroundColor)).toEqual(
+      Array(5).fill(backgroundOf("var(--color-field)")),
+    );
+  });
+
+  it("shows money in green, money out in red, and none in grey", async () => {
+    await opened();
+
+    const checking = region("Accounts").getByRole("listitem").nth(1);
+    const savings = region("Accounts").getByRole("listitem").nth(4);
+    await expect.element(checking).toBeVisible();
+    expect(colorOf(checking.getByText("+$2,560"))).toBe(colorOfClass("text-gain"));
+    expect(colorOf(checking.getByText("-$1,300"))).toBe(colorOfClass("text-danger"));
+    const zeros = savings.getByText("$0").all();
+    expect(zeros).toHaveLength(2);
+    for (const zero of zeros) expect(colorOf(zero)).toBe(colorOfClass("text-ink-muted"));
   });
 
   describe("recent", () => {

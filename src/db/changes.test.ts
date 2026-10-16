@@ -15,7 +15,7 @@ beforeEach(() => {
   configureConnection(db);
   migrate(db, MIGRATIONS);
   db.exec(`
-    INSERT INTO accounts VALUES ('Checking', 'USD'), ('Savings', 'USD');
+    INSERT INTO accounts VALUES ('Checking', 'USD', 'Bank', NULL), ('Savings', 'USD', 'Bank', NULL);
     INSERT INTO sources (hash, remarks) VALUES (${SOURCE_HASH_SQL}, 'statement.csv');
     INSERT INTO categories VALUES ('Food', NULL), ('Groceries', 'Food'), ('Bills', NULL);
     INSERT INTO transactions (seq, id, source, account_name, amount_numerator, amount_denominator,

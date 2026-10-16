@@ -2,7 +2,9 @@
 -- same name. Columns referring to them do too, so comparisons agree.
 CREATE TABLE accounts (
   name              TEXT NOT NULL COLLATE NOCASE PRIMARY KEY CHECK (name <> ''),
-  default_currency  TEXT CHECK (default_currency <> '')
+  default_currency  TEXT CHECK (default_currency <> ''),
+  type              TEXT NOT NULL CHECK (type <> ''), -- e.g. "Bank" or "Card"
+  identifier        TEXT CHECK (identifier <> '') -- e.g. a masked account or card number, like ••4821
 ) STRICT;
 
 CREATE TABLE sources (

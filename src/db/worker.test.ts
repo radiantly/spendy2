@@ -38,14 +38,14 @@ describe("database worker", () => {
     const kek = await deriveKek(EXPORT_KEY);
     const first = startWorker();
     await first.open(null, kek);
-    await first.query("INSERT INTO accounts VALUES (?, ?)", ["checking", "SGD"]);
+    await first.query("INSERT INTO accounts VALUES (?, ?, 'Bank', NULL)", ["checking", "SGD"]);
 
     const blob = await first.export();
     const second = startWorker();
 
     expect(await second.open(blob, kek)).toEqual({ created: false });
     expect(await second.query("SELECT * FROM accounts")).toEqual([
-      { name: "checking", default_currency: "SGD" },
+      { name: "checking", default_currency: "SGD", type: "Bank", identifier: null },
     ]);
     expect(await second.query("PRAGMA foreign_keys")).toEqual([{ foreign_keys: 1 }]);
   });
@@ -55,7 +55,7 @@ describe("database worker", () => {
     await db.open(null, await deriveKek(EXPORT_KEY));
     await db.export();
 
-    await db.query("INSERT INTO accounts VALUES ('checking', 'SGD')");
+    await db.query("INSERT INTO accounts VALUES ('checking', 'SGD', 'Bank', NULL)");
 
     expect(await db.query("SELECT count(*) AS n FROM accounts")).toEqual([{ n: 1 }]);
   });
@@ -83,7 +83,7 @@ describe("database worker", () => {
     const kek = await deriveKek(EXPORT_KEY);
     const db = startWorker();
     await db.open(null, kek);
-    await db.query("INSERT INTO accounts VALUES ('checking', 'SGD')");
+    await db.query("INSERT INTO accounts VALUES ('checking', 'SGD', 'Bank', NULL)");
 
     await rejection(db.open(new Uint8Array([1, 2, 3]), kek));
 
@@ -104,8 +104,8 @@ describe("database worker", () => {
     await db.open(null, await deriveKek(EXPORT_KEY));
 
     await db.batch([
-      { sql: "INSERT INTO accounts VALUES (?, ?)", bind: ["checking", "USD"] },
-      { sql: "INSERT INTO accounts VALUES (?, ?)", bind: ["savings", "USD"] },
+      { sql: "INSERT INTO accounts VALUES (?, ?, 'Bank', NULL)", bind: ["checking", "USD"] },
+      { sql: "INSERT INTO accounts VALUES (?, ?, 'Bank', NULL)", bind: ["savings", "USD"] },
     ]);
 
     expect(await db.query("SELECT name FROM accounts ORDER BY name")).toEqual([
@@ -120,8 +120,8 @@ describe("database worker", () => {
 
     const error = await rejection(
       db.batch([
-        { sql: "INSERT INTO accounts VALUES (?, ?)", bind: ["checking", "USD"] },
-        { sql: "INSERT INTO accounts VALUES (?, ?)", bind: ["checking", "EUR"] },
+        { sql: "INSERT INTO accounts VALUES (?, ?, 'Bank', NULL)", bind: ["checking", "USD"] },
+        { sql: "INSERT INTO accounts VALUES (?, ?, 'Bank', NULL)", bind: ["checking", "EUR"] },
       ]),
     );
 
@@ -131,8 +131,8 @@ describe("database worker", () => {
 });
 
 describe("database worker changes", () => {
-  const INSERT_CHECKING = { sql: "INSERT INTO accounts VALUES ('checking', 'USD')" };
-  const INSERT_SAVINGS = { sql: "INSERT INTO accounts VALUES ('savings', 'USD')" };
+  const INSERT_CHECKING = { sql: "INSERT INTO accounts VALUES ('checking', 'USD', 'Bank', NULL)" };
+  const INSERT_SAVINGS = { sql: "INSERT INTO accounts VALUES ('savings', 'USD', 'Bank', NULL)" };
   const accounts = async (db: Remote<DatabaseApi>) =>
     (await db.query("SELECT name FROM accounts ORDER BY name")).map(({ name }) => name);
 

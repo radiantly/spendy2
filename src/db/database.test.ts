@@ -41,7 +41,7 @@ describe("openDatabase", () => {
   it("opens the stored database", async () => {
     // A stored database made by a previous session.
     const previous = await openDatabase(await session());
-    await previous.query("INSERT INTO accounts VALUES ('checking', 'SGD')");
+    await previous.query("INSERT INTO accounts VALUES ('checking', 'SGD', 'Bank', NULL)");
     await previous.save();
     const [, uploaded] = vi.mocked(uploadDatabase).mock.calls[0]!;
     previous.close();
@@ -192,7 +192,7 @@ describe("openNewerDatabase", () => {
   /** A stored database with one account, `name`. */
   async function storedWithAccount(name: string) {
     const db = await openDatabase(await session());
-    await db.query("INSERT INTO accounts VALUES (?, 'SGD')", [name]);
+    await db.query("INSERT INTO accounts VALUES (?, 'SGD', 'Bank', NULL)", [name]);
     await db.save();
     const blob = vi.mocked(uploadDatabase).mock.calls.at(-1)![1];
     db.close();
@@ -283,7 +283,7 @@ describe("openNewerDatabase", () => {
 });
 
 describe("Database.unsaved", () => {
-  const INSERT = [{ sql: "INSERT INTO accounts VALUES ('checking', 'USD')" }];
+  const INSERT = [{ sql: "INSERT INTO accounts VALUES ('checking', 'USD', 'Bank', NULL)" }];
 
   it("is false when opened", async () => {
     const db = await openDatabase(await session());
@@ -322,7 +322,9 @@ describe("Database.unsaved", () => {
     const changes = await db.batch(INSERT);
 
     const undone = db.undo(changes);
-    const written = db.batch([{ sql: "INSERT INTO accounts VALUES ('savings', 'USD')" }]);
+    const written = db.batch([
+      { sql: "INSERT INTO accounts VALUES ('savings', 'USD', 'Bank', NULL)" },
+    ]);
     await undone;
 
     expect(db.unsaved).toBe(true);
@@ -345,7 +347,7 @@ describe("Database.unsaved", () => {
     );
     const saved = db.save();
     await vi.waitFor(() => expect(uploadDatabase).toHaveBeenCalledTimes(2));
-    await db.batch([{ sql: "INSERT INTO accounts VALUES ('savings', 'USD')" }]);
+    await db.batch([{ sql: "INSERT INTO accounts VALUES ('savings', 'USD', 'Bank', NULL)" }]);
     finishUpload();
     await saved;
 

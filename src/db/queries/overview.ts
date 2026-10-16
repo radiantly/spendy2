@@ -123,31 +123,31 @@ export const LIST_MONTHLY_TOTALS = `${IN_PERIOD}
 
 export type AccountActivity = {
   name: string;
+  type: string;
+  identifier: string | null;
   currency: string;
-  transactions: number;
   money_in: number;
   /** Positive. */
   money_out: number;
-  /** Net of transfers to and from the user's other accounts. */
-  transfers: number;
 };
 
 /**
- * Every account with a default currency, busiest first. The amounts are in
- * that currency; its transactions in other currencies are only counted in
- * `transactions`. Bind `{ $from, $to }`.
+ * Every account with a default currency, the one with the most transactions
+ * in the period first. Money in and out leave out transfers to and from the
+ * user's other accounts, and are in the account's default currency: its
+ * transactions in other currencies only count towards its place in the
+ * order. Bind `{ $from, $to }`.
  */
 export const LIST_ACCOUNT_ACTIVITY = `
   SELECT
     account.name,
+    account.type,
+    account.identifier,
     account.default_currency AS currency,
-    count(t.id) AS transactions,
     coalesce(sum(CASE WHEN t.transfer_account IS NULL AND t.duplicate_of IS NULL
       AND t.currency = account.default_currency AND t.amount > 0 THEN t.amount END), 0) AS money_in,
     coalesce(sum(CASE WHEN t.transfer_account IS NULL AND t.duplicate_of IS NULL
-      AND t.currency = account.default_currency AND t.amount < 0 THEN -t.amount END), 0) AS money_out,
-    coalesce(sum(CASE WHEN t.transfer_account IS NOT NULL AND t.duplicate_of IS NULL
-      AND t.currency = account.default_currency THEN t.amount END), 0) AS transfers
+      AND t.currency = account.default_currency AND t.amount < 0 THEN -t.amount END), 0) AS money_out
   FROM accounts AS account
   LEFT JOIN (SELECT *, ${amountOf("transactions")} AS amount FROM transactions) AS t
     ON t.account_name = account.name AND t.naive_date BETWEEN $from AND $to

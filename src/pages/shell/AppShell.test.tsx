@@ -29,8 +29,8 @@ async function queryUploaded(blob: Uint8Array<ArrayBuffer>, sql: string) {
 
 const [OLDER, NEWER] = [1, 2].map(transactionId);
 const TWO_TRANSACTIONS = `
-  INSERT INTO accounts VALUES ('Everyday Checking', 'USD');
-  INSERT INTO accounts VALUES ('Savings', 'USD');
+  INSERT INTO accounts VALUES ('Everyday Checking', 'USD', 'Bank', NULL);
+  INSERT INTO accounts VALUES ('Savings', 'USD', 'Bank', NULL);
   INSERT INTO sources (hash, remarks) VALUES (${SOURCE_HASH_SQL}, 'statement.csv');
   INSERT INTO categories VALUES ('Groceries', NULL);
   INSERT INTO transactions (seq, id, source, account_name, amount_numerator, amount_denominator, currency, counterparty, category, naive_date)

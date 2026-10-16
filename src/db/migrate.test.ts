@@ -145,7 +145,7 @@ describe("schema", () => {
   beforeEach(() => {
     migrate(db, MIGRATIONS);
     db.exec(`
-      INSERT INTO accounts VALUES ('checking', 'SGD'), ('savings', 'SGD');
+      INSERT INTO accounts VALUES ('checking', 'SGD', 'Bank', NULL), ('savings', 'SGD', 'Bank', NULL);
       INSERT INTO sources (hash, remarks) VALUES (${SOURCE_HASH_SQL}, 'statement.csv');
     `);
   });
@@ -219,8 +219,10 @@ describe("schema", () => {
   });
 
   it.each([
-    ["an account's name", "INSERT INTO accounts VALUES ('', 'SGD')"],
-    ["an account's default currency", "INSERT INTO accounts VALUES ('cash', '')"],
+    ["an account's name", "INSERT INTO accounts VALUES ('', 'SGD', 'Bank', NULL)"],
+    ["an account's default currency", "INSERT INTO accounts VALUES ('cash', '', 'Bank', NULL)"],
+    ["an account's type", "INSERT INTO accounts VALUES ('cash', 'SGD', '', NULL)"],
+    ["an account's identifier", "INSERT INTO accounts VALUES ('cash', 'SGD', 'Bank', '')"],
     ["a category's name", "INSERT INTO categories VALUES ('', NULL)"],
     ["a source's remarks", `INSERT INTO sources VALUES (X'${"01".repeat(32)}', '', 0)`],
   ])("rejects an empty value for %s", (_, sql) => {
@@ -235,8 +237,20 @@ describe("schema", () => {
     );
   });
 
+  it("rejects an account without a type", () => {
+    expect(() => db.exec("INSERT INTO accounts VALUES ('cash', 'SGD', NULL, NULL)")).toThrow(
+      "NOT NULL constraint",
+    );
+  });
+
+  it("allows an account without an identifier", () => {
+    db.exec("INSERT INTO accounts VALUES ('cash', 'SGD', 'Cash', NULL)");
+
+    expect(db.selectValue("SELECT identifier FROM accounts WHERE name = 'cash'")).toBeNull();
+  });
+
   it("allows an account without a default currency", () => {
-    db.exec("INSERT INTO accounts VALUES ('cash', NULL)");
+    db.exec("INSERT INTO accounts VALUES ('cash', NULL, 'Bank', NULL)");
 
     expect(db.selectValue("SELECT default_currency FROM accounts WHERE name = 'cash'")).toBeNull();
   });
@@ -277,9 +291,9 @@ describe("schema", () => {
     });
 
     it("rejects an account that differs from another only in case", () => {
-      expect(() => db.exec("INSERT INTO accounts VALUES ('CHECKING', 'SGD')")).toThrow(
-        "UNIQUE constraint failed",
-      );
+      expect(() =>
+        db.exec("INSERT INTO accounts VALUES ('CHECKING', 'SGD', 'Bank', NULL)"),
+      ).toThrow("UNIQUE constraint failed");
     });
 
     it("lets a transaction refer to a category in another case", () => {

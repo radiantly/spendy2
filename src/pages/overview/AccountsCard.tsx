@@ -2,7 +2,7 @@ import { formatMoney } from "../../lib/money.ts";
 import { Card } from "./Card.tsx";
 import type { Overview } from "./loadOverview.ts";
 
-/** Each account's activity over the period, in its own currency. */
+/** Each account's money in and out over the period, in its own currency. */
 function AccountsCard({ overview, className = "" }: { overview: Overview; className?: string }) {
   const { accounts } = overview;
 
@@ -11,31 +11,26 @@ function AccountsCard({ overview, className = "" }: { overview: Overview; classN
       {accounts.length === 0 ? (
         <p className="text-ink-muted">No accounts yet.</p>
       ) : (
-        <ul className="flex flex-col gap-3">
+        <ul className="flex flex-col gap-5">
           {accounts.map((account) => (
-            <li
-              key={account.name}
-              className="flex flex-col gap-3 rounded-[20px] border border-line bg-canvas px-4.5 py-4"
-            >
-              <div className="flex items-center gap-2.5">
-                <h3 className="font-semibold">{account.name}</h3>
-                <span className="ml-auto shrink-0 font-mono text-xs text-ink-muted">
-                  {account.transactions.toLocaleString("en-US")} txns
+            <li key={account.name} className="flex items-center gap-3">
+              <div aria-hidden className="h-9 w-1.5 shrink-0 rounded-full bg-field" />
+              <div className="flex min-w-0 grow flex-col gap-0.5">
+                <h3 className="truncate font-semibold">{account.name}</h3>
+                <span className="truncate font-mono text-xs text-ink-muted">
+                  [{account.type}]{account.identifier !== null && ` ${account.identifier}`}
                 </span>
               </div>
-              <dl className="grid grid-cols-3 gap-2">
+              <dl className="flex shrink-0 flex-col items-end gap-0.5 text-sm font-display font-semibold">
                 {(
                   [
-                    ["In", account.money_in, "text-gain", false],
-                    ["Out", account.money_out, "text-danger", false],
-                    ["Transfers", account.transfers, "", true],
+                    ["In", account.money_in, "text-gain"],
+                    ["Out", -account.money_out, "text-danger"],
                   ] as const
-                ).map(([label, amount, color, signed]) => (
-                  <div key={label} className="flex flex-col gap-0.5">
-                    <dt className="text-xs text-ink-muted">{label}</dt>
-                    <dd className={`font-mono text-sm ${color}`}>
-                      {formatMoney(amount, account.currency, { whole: true, signed })}
-                    </dd>
+                ).map(([label, amount, color]) => (
+                  <div key={label} className={amount === 0 ? "text-ink-muted" : color}>
+                    <dt className="sr-only">{label}</dt>
+                    <dd>{formatMoney(amount, account.currency, { whole: true, signed: true })}</dd>
                   </div>
                 ))}
               </dl>
