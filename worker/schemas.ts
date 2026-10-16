@@ -50,6 +50,15 @@ export const databasePutPreconditionSchema = z.union([
 
 export type DatabasePutPrecondition = z.infer<typeof databasePutPreconditionSchema>;
 
+/** A database upload's headers: its precondition, and how long it is. */
+export const databasePutHeadersSchema = z.intersection(
+  databasePutPreconditionSchema,
+  z.object({
+    "content-length": z.string().regex(/^\d+$/),
+    "transfer-encoding": z.never().optional(),
+  }),
+);
+
 export const databaseGetPreconditionSchema = z.object({
   "if-none-match": databaseEtagSchema.optional(),
 });

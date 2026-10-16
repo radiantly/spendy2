@@ -2,6 +2,7 @@ import { env } from "cloudflare:workers";
 import { reset, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import * as opaque from "@serenity-kit/opaque";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { DATABASE_BLOB_MAGIC, DATABASE_BLOB_VERSION, toSha256Schema } from "../schemas.ts";
 import { loginToken, registerUser } from "../test/helpers.ts";
 import { DATABASE_CHUNK_BYTES, type UserStore } from "./UserStore.ts";
 
@@ -176,6 +177,21 @@ describe("UserStore", () => {
   });
 
   describe("database", () => {
+    /** The body of an upload. */
+    const streamOf = (bytes: Uint8Array) => new Response(bytes).body!;
+
+    const sha256Of = (bytes: Uint8Array) => toSha256Schema.decodeAsync(bytes.slice().buffer);
+
+    /**
+     * A database of `size` bytes, whose content differs all along it so
+     * chunks out of order would show.
+     */
+    function blob(size: number) {
+      const bytes = Uint8Array.from({ length: size }, (_, i) => i % 251);
+      bytes.set([...DATABASE_BLOB_MAGIC, DATABASE_BLOB_VERSION]);
+      return bytes;
+    }
+
     it("does not write storage when an unknown user uploads or downloads", async () => {
       const stub = env.USER.getByName("nobody");
 
@@ -185,8 +201,7 @@ describe("UserStore", () => {
           await instance.uploadDatabase(
             crypto.randomUUID(),
             { "if-none-match": "*" },
-            new ArrayBuffer(8),
-            "0".repeat(64),
+            streamOf(blob(8)),
           ),
         ).toEqual(unauthorized);
         expect(await instance.downloadDatabase(crypto.randomUUID())).toEqual(unauthorized);
@@ -205,33 +220,23 @@ describe("UserStore", () => {
       });
     }
 
-    /** `size` bytes that differ all along, so chunks out of order would show. */
-    function bytes(size: number) {
-      return Uint8Array.from({ length: size }, (_, i) => i % 251);
-    }
-
-    /** The hash is the caller's to compute; the store keeps whatever it's given. */
-    const hash = (n: number) => String(n).repeat(64);
-
     it.each([
       ["less than a chunk", DATABASE_CHUNK_BYTES - 1],
       ["exactly a chunk", DATABASE_CHUNK_BYTES],
       ["just over a chunk", DATABASE_CHUNK_BYTES + 1],
       ["several chunks", 3 * DATABASE_CHUNK_BYTES + 12345],
-    ])("returns a database of %s byte for byte", async (_name, size) => {
-      const body = bytes(size);
+    ])("returns a database of %s byte for byte, with its hash", async (_name, size) => {
+      const body = blob(size);
+      const sha256 = await sha256Of(body);
 
       await inStore(async (instance) => {
-        await instance.uploadDatabase(
-          SESSION,
-          { "if-none-match": "*" },
-          body.slice().buffer,
-          hash(1),
-        );
+        expect(
+          await instance.uploadDatabase(SESSION, { "if-none-match": "*" }, streamOf(body)),
+        ).toEqual({ success: true, sha256 });
         const result = await instance.downloadDatabase(SESSION);
 
         if (!result.success || !result.modified) expect.unreachable(JSON.stringify(result));
-        expect(result.sha256).toBe(hash(1));
+        expect(result.sha256).toBe(sha256);
         // every() rather than toEqual: a failing toEqual would print megabytes
         const downloaded = new Uint8Array(result.body);
         expect(downloaded.length).toBe(size);
@@ -247,36 +252,52 @@ describe("UserStore", () => {
             .toArray()
             .map(({ size }) => size);
 
-        await instance.uploadDatabase(
-          SESSION,
-          { "if-none-match": "*" },
-          bytes(2 * DATABASE_CHUNK_BYTES + 1).buffer,
-          hash(1),
-        );
+        const first = blob(2 * DATABASE_CHUNK_BYTES + 1);
+        await instance.uploadDatabase(SESSION, { "if-none-match": "*" }, streamOf(first));
         expect(rowSizes()).toEqual([DATABASE_CHUNK_BYTES, DATABASE_CHUNK_BYTES, 1]);
 
-        await instance.uploadDatabase(SESSION, { "if-match": hash(1) }, bytes(10).buffer, hash(2));
+        await instance.uploadDatabase(
+          SESSION,
+          { "if-match": await sha256Of(first) },
+          streamOf(blob(10)),
+        );
         expect(rowSizes()).toEqual([10]);
       });
     });
 
     it("leaves the stored database as it was when the precondition fails", async () => {
+      const body = blob(10);
+
       await inStore(async (instance) => {
-        await instance.uploadDatabase(SESSION, { "if-none-match": "*" }, bytes(10).buffer, hash(1));
+        await instance.uploadDatabase(SESSION, { "if-none-match": "*" }, streamOf(body));
 
         expect(
           await instance.uploadDatabase(
             SESSION,
-            { "if-match": hash(9) },
-            bytes(20).buffer,
-            hash(2),
+            { "if-match": "9".repeat(64) },
+            streamOf(blob(20)),
           ),
         ).toEqual({ success: false, code: "PRECONDITION_FAILED" });
         expect(await instance.downloadDatabase(SESSION)).toEqual({
           success: true,
           modified: true,
-          body: bytes(10).buffer,
-          sha256: hash(1),
+          body: body.buffer,
+          sha256: await sha256Of(body),
+        });
+      });
+    });
+
+    it.each([
+      ["no magic", new Uint8Array(8), "MISSING_SPENDY_MAGIC"],
+      ["another version", new Uint8Array([...DATABASE_BLOB_MAGIC, 2, 0]), "INVALID_VERSION_BYTE"],
+    ])("rejects a body with %s, storing nothing", async (_name, body, code) => {
+      await inStore(async (instance) => {
+        expect(
+          await instance.uploadDatabase(SESSION, { "if-none-match": "*" }, streamOf(body)),
+        ).toEqual({ success: false, code });
+        expect(await instance.downloadDatabase(SESSION)).toEqual({
+          success: false,
+          code: "NOT_FOUND",
         });
       });
     });

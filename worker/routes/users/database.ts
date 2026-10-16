@@ -1,13 +1,12 @@
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
+import { endTime, startTime, timing } from "hono/timing";
 import { requireAuth } from "../../middleware/requireAuth.ts";
 import { sValidator } from "@hono/standard-validator";
 import {
-  databaseBlobSchema,
   databaseEtagSchema,
   databaseGetPreconditionSchema,
-  databasePutPreconditionSchema,
-  toSha256Schema,
+  databasePutHeadersSchema,
 } from "../../schemas.ts";
 import { env } from "cloudflare:workers";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
@@ -16,30 +15,33 @@ const database = new Hono<{ Bindings: Env }>();
 
 database.put(
   "/",
+  timing(),
   requireAuth,
+  sValidator("header", databasePutHeadersSchema),
   bodyLimit({ maxSize: env.MAX_DATABASE_UPLOAD_BYTES }),
-  sValidator("header", databasePutPreconditionSchema),
   async (c) => {
-    const precondition = c.req.valid("header");
-
-    const body = await c.req.arrayBuffer();
-    const validationResult = databaseBlobSchema.safeDecode(body);
-    if (!validationResult.success) return c.json({ error: validationResult.error }, 400);
-
-    const sha256 = await toSha256Schema.decodeAsync(body);
+    const body = c.req.raw.body;
+    if (body === null) return c.json({ error: "MISSING_SPENDY_MAGIC" }, 400);
 
     const userStore = c.env.USER.getByName(c.var.username);
-    const result = await userStore.uploadDatabase(c.var.sessionId, precondition, body, sha256);
+
+    // the body is streamed to the user store as it arrives
+    startTime(c, "store", "Receiving and storing it");
+    const result = await userStore.uploadDatabase(c.var.sessionId, c.req.valid("header"), body);
+    endTime(c, "store");
+
     if (!result.success) {
       const STATUS: Record<typeof result.code, ContentfulStatusCode> = {
         UNAUTHORIZED: 401,
+        MISSING_SPENDY_MAGIC: 400,
+        INVALID_VERSION_BYTE: 400,
         PRECONDITION_FAILED: 412,
       };
       return c.json({ error: result.code }, STATUS[result.code]);
     }
 
     return c.body(null, 204, {
-      ETag: databaseEtagSchema.encode(sha256),
+      ETag: databaseEtagSchema.encode(result.sha256),
     });
   },
 );

@@ -1,6 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import * as opaque from "@serenity-kit/opaque";
-import type { DatabasePutPrecondition } from "../schemas.ts";
+import { databaseBlobSchema, toSha256Schema, type DatabasePutPrecondition } from "../schemas.ts";
 
 // Maximum BLOB size for durable object is 2MB. Thus DB is stored in 1MiB chunks
 export const DATABASE_CHUNK_BYTES = 1024 * 1024;
@@ -120,11 +120,22 @@ export class UserStore extends DurableObject<Env> {
   async uploadDatabase(
     sessionId: string,
     precondition: DatabasePutPrecondition,
-    body: ArrayBuffer,
-    sha256: string,
+    stream: ReadableStream<Uint8Array>,
   ): Promise<UploadDatabaseResponse> {
     const sessions = this.getKv("ACTIVE_SESSIONS") ?? new Set();
     if (!sessions.has(sessionId)) return { success: false, code: "UNAUTHORIZED" };
+
+    const body = await new Response(stream).arrayBuffer();
+    const header = databaseBlobSchema.safeDecode(body);
+    if (!header.success) {
+      // A wrong magic also fails the version check; the first issue is the cause.
+      const cause = header.error.issues[0]?.message;
+      return {
+        success: false,
+        code: cause === "INVALID_VERSION_BYTE" ? "INVALID_VERSION_BYTE" : "MISSING_SPENDY_MAGIC",
+      };
+    }
+    const sha256 = await toSha256Schema.decodeAsync(body);
 
     const current = this.getKv("DATABASE_SHA256");
     const precondition_satisfied =
@@ -152,7 +163,7 @@ export class UserStore extends DurableObject<Env> {
       }
       this.putKv("DATABASE_SHA256", sha256);
     });
-    return { success: true };
+    return { success: true, sha256 };
   }
 
   async downloadDatabase(
@@ -186,10 +197,14 @@ interface KvSchema {
 }
 
 export type UploadDatabaseResponse =
-  | { success: true }
+  | { success: true; sha256: string }
   | {
       success: false;
-      code: "UNAUTHORIZED" | "PRECONDITION_FAILED";
+      code:
+        | "UNAUTHORIZED"
+        | "MISSING_SPENDY_MAGIC"
+        | "INVALID_VERSION_BYTE"
+        | "PRECONDITION_FAILED";
     };
 
 export type DownloadDatabaseResponse =

@@ -30,7 +30,7 @@ async function etagOf(bytes: Uint8Array) {
 
 function putDatabase(
   token: string | undefined,
-  body: Uint8Array,
+  body: Uint8Array | ReadableStream<Uint8Array>,
   headers: Record<string, string> = {},
 ) {
   return exports.default.fetch("http://localhost/api/users/me/database", {
@@ -105,6 +105,18 @@ describe("PUT /api/users/me/database", () => {
 
     expect(etag).toBe(await etagOf(body));
     expect(await downloaded(token)).toEqual({ etag, body });
+  });
+
+  it("reports how long receiving and storing the upload took", async () => {
+    const token = await newUser();
+
+    const response = await putDatabase(token, databaseBlob("v1"), { "If-None-Match": "*" });
+
+    const metrics = response.headers.get("Server-Timing")?.split(",") ?? [];
+    expect(metrics.map((metric) => /^(\w+);dur=[\d.]+(;|$)/.exec(metric)?.[1])).toEqual([
+      "store",
+      "total",
+    ]);
   });
 
   it("replaces the database when If-Match is current", async () => {
@@ -182,14 +194,31 @@ describe("PUT /api/users/me/database", () => {
 
   describe("body", () => {
     it.each([
-      ["an empty body", new Uint8Array()],
-      ["only the magic", new TextEncoder().encode("SPENDY")],
-      ["the wrong magic", new TextEncoder().encode("SQLITE\x01data")],
-      ["an unsupported version", databaseBlob("v1", 2)],
-    ])("rejects %s", async (_name, body) => {
+      ["an empty body", new Uint8Array(), "MISSING_SPENDY_MAGIC"],
+      ["only the magic", new TextEncoder().encode("SPENDY"), "INVALID_VERSION_BYTE"],
+      ["the wrong magic", new TextEncoder().encode("SQLITE\x01data"), "MISSING_SPENDY_MAGIC"],
+      ["an unsupported version", databaseBlob("v1", 2), "INVALID_VERSION_BYTE"],
+    ])("rejects %s", async (_name, body, error) => {
       const token = await newUser();
 
       const response = await putDatabase(token, body, { "If-None-Match": "*" });
+
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ error });
+      expect(await downloaded(token)).toBe(404);
+    });
+
+    it("rejects an upload that doesn't say how long it is", async () => {
+      const token = await newUser();
+      // the runtime knows the length of other streams, like a Response's body
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(databaseBlob("v1"));
+          controller.close();
+        },
+      });
+
+      const response = await putDatabase(token, stream, { "If-None-Match": "*" });
 
       expect(response.status).toBe(400);
       expect(await downloaded(token)).toBe(404);
@@ -242,6 +271,28 @@ describe("PUT /api/users/me/database", () => {
     expect(statuses.toSorted()).toEqual([204, 412]);
     const winner = bodies[statuses.indexOf(204)]!;
     expect(await downloaded(token)).toEqual({ etag: await etagOf(winner), body: winner });
+  });
+
+  it("checks If-Match once an upload has arrived, against any stored meanwhile", async () => {
+    const token = await newUser();
+    const etag = await firstUpload(token, databaseBlob("v1"));
+    const slow = databaseBlob("slow");
+    // a stream with a length, so it's let through, sent in two parts
+    const { readable, writable } = new FixedLengthStream(slow.byteLength);
+    const writer = writable.getWriter();
+
+    const slowUpload = putDatabase(token, readable, { "If-Match": etag });
+    await writer.write(slow.subarray(0, 4));
+    // give the slow upload every chance to reach the user store
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const fast = databaseBlob("fast");
+    const fastUpload = await putDatabase(token, fast, { "If-Match": etag });
+    await writer.write(slow.subarray(4));
+    await writer.close();
+
+    expect(fastUpload.status).toBe(204);
+    expect((await slowUpload).status).toBe(412);
+    expect(await downloaded(token)).toEqual({ etag: await etagOf(fast), body: fast });
   });
 });
 
