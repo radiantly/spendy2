@@ -1,16 +1,14 @@
 import { env } from "cloudflare:workers";
 import { reset, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import * as opaque from "@serenity-kit/opaque";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { loginToken, registerUser } from "../test/helpers.ts";
+import { DATABASE_CHUNK_BYTES, type UserStore } from "./UserStore.ts";
 
 const CLEANUP_DELAY_MS = env.USER_CLEANUP_DELAY_SECONDS * 1000;
 
 beforeAll(() => opaque.ready);
-afterEach(async () => {
-  vi.restoreAllMocks();
-  await reset();
-});
+afterEach(() => reset());
 
 function startLoginRequest() {
   return opaque.client.startLogin({ password: "password" }).startLoginRequest;
@@ -180,7 +178,6 @@ describe("UserStore", () => {
   describe("database", () => {
     it("does not write storage when an unknown user uploads or downloads", async () => {
       const stub = env.USER.getByName("nobody");
-      const fetchSpy = vi.spyOn(globalThis, "fetch");
 
       await runInDurableObject(stub, async (instance, state) => {
         const unauthorized = { success: false, code: "UNAUTHORIZED" };
@@ -196,7 +193,92 @@ describe("UserStore", () => {
 
         expect(hasStorage(state)).toBe(false);
       });
-      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    const SESSION = crypto.randomUUID();
+
+    /** Runs `fn` in alice's store, with SESSION logged in. */
+    function inStore<R>(fn: (instance: UserStore, state: DurableObjectState) => Promise<R>) {
+      return runInDurableObject(env.USER.getByName("alice"), (instance: UserStore, state) => {
+        state.storage.kv.put("ACTIVE_SESSIONS", new Set([SESSION]));
+        return fn(instance, state);
+      });
+    }
+
+    /** `size` bytes that differ all along, so chunks out of order would show. */
+    function bytes(size: number) {
+      return Uint8Array.from({ length: size }, (_, i) => i % 251);
+    }
+
+    /** The hash is the caller's to compute; the store keeps whatever it's given. */
+    const hash = (n: number) => String(n).repeat(64);
+
+    it.each([
+      ["less than a chunk", DATABASE_CHUNK_BYTES - 1],
+      ["exactly a chunk", DATABASE_CHUNK_BYTES],
+      ["just over a chunk", DATABASE_CHUNK_BYTES + 1],
+      ["several chunks", 3 * DATABASE_CHUNK_BYTES + 12345],
+    ])("returns a database of %s byte for byte", async (_name, size) => {
+      const body = bytes(size);
+
+      await inStore(async (instance) => {
+        await instance.uploadDatabase(
+          SESSION,
+          { "if-none-match": "*" },
+          body.slice().buffer,
+          hash(1),
+        );
+        const result = await instance.downloadDatabase(SESSION);
+
+        if (!result.success || !result.modified) expect.unreachable(JSON.stringify(result));
+        expect(result.sha256).toBe(hash(1));
+        // every() rather than toEqual: a failing toEqual would print megabytes
+        const downloaded = new Uint8Array(result.body);
+        expect(downloaded.length).toBe(size);
+        expect(downloaded.every((byte, i) => byte === body[i])).toBe(true);
+      });
+    });
+
+    it("stores a database in rows of at most a chunk, all replaced by the next", async () => {
+      await inStore(async (instance, state) => {
+        const rowSizes = () =>
+          state.storage.sql
+            .exec<{ size: number }>("SELECT length(data) AS size FROM database_chunks ORDER BY seq")
+            .toArray()
+            .map(({ size }) => size);
+
+        await instance.uploadDatabase(
+          SESSION,
+          { "if-none-match": "*" },
+          bytes(2 * DATABASE_CHUNK_BYTES + 1).buffer,
+          hash(1),
+        );
+        expect(rowSizes()).toEqual([DATABASE_CHUNK_BYTES, DATABASE_CHUNK_BYTES, 1]);
+
+        await instance.uploadDatabase(SESSION, { "if-match": hash(1) }, bytes(10).buffer, hash(2));
+        expect(rowSizes()).toEqual([10]);
+      });
+    });
+
+    it("leaves the stored database as it was when the precondition fails", async () => {
+      await inStore(async (instance) => {
+        await instance.uploadDatabase(SESSION, { "if-none-match": "*" }, bytes(10).buffer, hash(1));
+
+        expect(
+          await instance.uploadDatabase(
+            SESSION,
+            { "if-match": hash(9) },
+            bytes(20).buffer,
+            hash(2),
+          ),
+        ).toEqual({ success: false, code: "PRECONDITION_FAILED" });
+        expect(await instance.downloadDatabase(SESSION)).toEqual({
+          success: true,
+          modified: true,
+          body: bytes(10).buffer,
+          sha256: hash(1),
+        });
+      });
     });
   });
 

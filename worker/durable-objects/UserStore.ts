@@ -1,7 +1,9 @@
 import { DurableObject } from "cloudflare:workers";
 import * as opaque from "@serenity-kit/opaque";
-import { S3, S3Error } from "../s3.ts";
 import type { DatabasePutPrecondition } from "../schemas.ts";
+
+// Maximum BLOB size for durable object is 2MB. Thus DB is stored in 1MiB chunks
+export const DATABASE_CHUNK_BYTES = 1024 * 1024;
 
 export class UserStore extends DurableObject<Env> {
   // for login
@@ -9,36 +11,12 @@ export class UserStore extends DurableObject<Env> {
   private loginOnlyAfter = 0;
   private loginAttempts = 0;
 
-  // for database uploads/downloads
-  private readonly s3: S3;
-  private databaseLock: Promise<unknown> = Promise.resolve();
-
-  constructor(ctx: DurableObjectState, env: Env) {
-    super(ctx, env);
-    this.s3 = new S3(env);
-  }
-
   private getKv<K extends keyof KvSchema>(key: K): KvSchema[K] | undefined {
     return this.ctx.storage.kv.get<KvSchema[K]>(key);
   }
 
   private putKv<K extends keyof KvSchema>(key: K, value: KvSchema[K]) {
     return this.ctx.storage.kv.put(key, value);
-  }
-
-  private deleteKv<K extends keyof KvSchema>(key: K) {
-    return this.ctx.storage.kv.delete(key);
-  }
-
-  /**
-   * Runs fn after every previously started fn has settled. The durable object
-   * accepts other requests while awaiting object storage, so check-then-write
-   * sequences on the database must hold this lock.
-   */
-  private withDatabaseLock<T>(fn: () => Promise<T>): Promise<T> {
-    const result = this.databaseLock.then(fn);
-    this.databaseLock = result.catch(() => {});
-    return result;
   }
 
   private get username() {
@@ -139,10 +117,6 @@ export class UserStore extends DurableObject<Env> {
     return { success: true };
   }
 
-  private get databaseBlobName() {
-    return this.username + ".db.gz.enc";
-  }
-
   async uploadDatabase(
     sessionId: string,
     precondition: DatabasePutPrecondition,
@@ -152,31 +126,35 @@ export class UserStore extends DurableObject<Env> {
     const sessions = this.getKv("ACTIVE_SESSIONS") ?? new Set();
     if (!sessions.has(sessionId)) return { success: false, code: "UNAUTHORIZED" };
 
-    return this.withDatabaseLock(async () => {
-      const current = this.getKv("DATABASE_SHA256");
-      const precondition_satisfied =
-        "if-none-match" in precondition
-          ? current === undefined
-          : current === precondition["if-match"];
-      if (!precondition_satisfied) return { success: false, code: "PRECONDITION_FAILED" };
+    const current = this.getKv("DATABASE_SHA256");
+    const precondition_satisfied =
+      "if-none-match" in precondition
+        ? current === undefined
+        : current === precondition["if-match"];
+    if (!precondition_satisfied) return { success: false, code: "PRECONDITION_FAILED" };
 
-      try {
-        await this.s3.put(this.databaseBlobName, body, sha256);
-      } catch (error) {
-        if (error instanceof S3Error) return { success: false, code: "STORAGE_ERROR" };
-        throw error;
+    this.ctx.storage.transactionSync(() => {
+      const { sql } = this.ctx.storage;
+      sql.exec(`
+        DROP TABLE IF EXISTS database_chunks;
+        CREATE TABLE database_chunks (
+          seq  INTEGER PRIMARY KEY, -- position, from 0
+          data BLOB NOT NULL        -- at most DATABASE_CHUNK_BYTES
+        ) STRICT;
+        `);
+      for (let seq = 0; seq * DATABASE_CHUNK_BYTES < body.byteLength; seq++) {
+        const start = seq * DATABASE_CHUNK_BYTES;
+        sql.exec(
+          "INSERT INTO database_chunks (seq, data) VALUES (?, ?)",
+          seq,
+          body.slice(start, start + DATABASE_CHUNK_BYTES),
+        );
       }
-
       this.putKv("DATABASE_SHA256", sha256);
-      return { success: true, sha256 };
     });
+    return { success: true };
   }
 
-  /**
-   * With `ifNoneMatch`, the sha256 of the version the client has: if it's
-   * still the current one, there's nothing to send. That's decided from the
-   * stored hash alone, so checking for changes never reaches object storage.
-   */
   async downloadDatabase(
     sessionId: string,
     ifNoneMatch?: string,
@@ -184,29 +162,20 @@ export class UserStore extends DurableObject<Env> {
     const sessions = this.getKv("ACTIVE_SESSIONS") ?? new Set();
     if (!sessions.has(sessionId)) return { success: false, code: "UNAUTHORIZED" };
 
-    // the lock is only held until the response headers arrive, the body is
-    // streamed afterwards
-    return this.withDatabaseLock(async () => {
-      const current = this.getKv("DATABASE_SHA256");
-      if (ifNoneMatch !== undefined && current === ifNoneMatch)
-        return { success: true, modified: false, sha256: current };
+    const current = this.getKv("DATABASE_SHA256");
+    if (current === undefined) return { success: false, code: "NOT_FOUND" };
+    if (current === ifNoneMatch) return { success: true, modified: false, sha256: current };
 
-      let blob;
-      try {
-        blob = await this.s3.get(this.databaseBlobName);
-      } catch (error) {
-        if (error instanceof S3Error) return { success: false, code: "STORAGE_ERROR" };
-        throw error;
-      }
-
-      if (blob === undefined) {
-        this.deleteKv("DATABASE_SHA256");
-        return { success: false, code: "NOT_FOUND" };
-      }
-      this.putKv("DATABASE_SHA256", blob.sha256);
-
-      return { success: true, modified: true, body: blob.body, sha256: blob.sha256 };
-    });
+    const chunks = this.ctx.storage.sql
+      .exec<{ data: ArrayBuffer }>("SELECT data FROM database_chunks ORDER BY seq")
+      .toArray();
+    const body = new Uint8Array(chunks.reduce((size, { data }) => size + data.byteLength, 0));
+    let offset = 0;
+    for (const { data } of chunks) {
+      body.set(new Uint8Array(data), offset);
+      offset += data.byteLength;
+    }
+    return { success: true, modified: true, body: body.buffer, sha256: current };
   }
 }
 
@@ -217,16 +186,16 @@ interface KvSchema {
 }
 
 export type UploadDatabaseResponse =
-  | { success: true; sha256: string }
+  | { success: true }
   | {
       success: false;
-      code: "UNAUTHORIZED" | "PRECONDITION_FAILED" | "STORAGE_ERROR";
+      code: "UNAUTHORIZED" | "PRECONDITION_FAILED";
     };
 
 export type DownloadDatabaseResponse =
-  | { success: true; modified: true; body: ReadableStream<Uint8Array>; sha256: string }
+  | { success: true; modified: true; body: ArrayBuffer; sha256: string }
   | { success: true; modified: false; sha256: string }
-  | { success: false; code: "UNAUTHORIZED" | "NOT_FOUND" | "STORAGE_ERROR" };
+  | { success: false; code: "UNAUTHORIZED" | "NOT_FOUND" };
 
 export type RegisterNewUserResponse =
   | { success: true }

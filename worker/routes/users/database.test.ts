@@ -1,26 +1,27 @@
 import { env, exports } from "cloudflare:workers";
 import { reset } from "cloudflare:test";
 import * as opaque from "@serenity-kit/opaque";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { toSha256Schema } from "../../schemas.ts";
-import { installFakeS3 } from "../../test/fake-s3.ts";
 import { loginToken, registerUser } from "../../test/helpers.ts";
 
-let s3: ReturnType<typeof installFakeS3>;
-
 beforeAll(() => opaque.ready);
-beforeEach(() => {
-  s3 = installFakeS3();
-});
-afterEach(async () => {
-  vi.restoreAllMocks();
-  await reset();
-});
+afterEach(() => reset());
 
 /** A blob in the SPENDY format with the given content after the header. */
 function databaseBlob(content: string, version = 1) {
   const encoder = new TextEncoder();
   return new Uint8Array([...encoder.encode("SPENDY"), version, ...encoder.encode(content)]);
+}
+
+/**
+ * A database of `size` bytes whose content differs all along it, so parts
+ * of it stored out of order would show.
+ */
+function largeDatabaseBlob(size: number) {
+  const bytes = Uint8Array.from({ length: size }, (_, i) => i % 251);
+  bytes.set(databaseBlob(""));
+  return bytes;
 }
 
 async function etagOf(bytes: Uint8Array) {
@@ -56,6 +57,27 @@ async function newUser(username = "alice") {
   return loginToken(username);
 }
 
+/** The stored database's ETag and content, or the status if there's none to download. */
+async function downloaded(token: string) {
+  const response = await getDatabase(token);
+  if (response.status !== 200) return response.status;
+  return {
+    etag: response.headers.get("ETag"),
+    body: new Uint8Array(await response.arrayBuffer()),
+  };
+}
+
+/**
+ * Like `downloaded`, with the content's hash (as an ETag) instead of the
+ * content, for databases too large to compare: a failing toEqual would print
+ * megabytes.
+ */
+async function downloadedHashes(token: string) {
+  const stored = await downloaded(token);
+  if (typeof stored !== "object") return stored;
+  return { etag: stored.etag, contentEtag: await etagOf(stored.body) };
+}
+
 /** Uploads the first database and returns its ETag. */
 async function firstUpload(token: string, body: Uint8Array) {
   const response = await putDatabase(token, body, { "If-None-Match": "*" });
@@ -65,11 +87,14 @@ async function firstUpload(token: string, body: Uint8Array) {
 
 describe("PUT /api/users/me/database", () => {
   it("requires authentication", async () => {
+    const token = await newUser();
+
     const response = await putDatabase(undefined, databaseBlob("v1"), {
       "If-None-Match": "*",
     });
+
     expect(response.status).toBe(401);
-    expect(s3.putCount).toBe(0);
+    expect(await downloaded(token)).toBe(404);
   });
 
   it("stores the first database", async () => {
@@ -79,9 +104,7 @@ describe("PUT /api/users/me/database", () => {
     const etag = await firstUpload(token, body);
 
     expect(etag).toBe(await etagOf(body));
-    const stored = s3.objects.get("alice.db.gz.enc");
-    expect(stored?.body).toEqual(body);
-    expect(stored?.metadata["x-amz-meta-sha256"]).toBe(etag.slice(1, -1));
+    expect(await downloaded(token)).toEqual({ etag, body });
   });
 
   it("replaces the database when If-Match is current", async () => {
@@ -93,7 +116,7 @@ describe("PUT /api/users/me/database", () => {
 
     expect(response.status).toBe(204);
     expect(response.headers.get("ETag")).toBe(await etagOf(body));
-    expect(s3.objects.get("alice.db.gz.enc")?.body).toEqual(body);
+    expect(await downloaded(token)).toEqual({ etag: await etagOf(body), body });
   });
 
   describe("preconditions", () => {
@@ -103,7 +126,7 @@ describe("PUT /api/users/me/database", () => {
       const response = await putDatabase(token, databaseBlob("v1"));
 
       expect(response.status).toBe(400);
-      expect(s3.putCount).toBe(0);
+      expect(await downloaded(token)).toBe(404);
     });
 
     it.each([
@@ -122,7 +145,7 @@ describe("PUT /api/users/me/database", () => {
 
     it("rejects If-None-Match: * when a database exists", async () => {
       const token = await newUser();
-      await firstUpload(token, databaseBlob("v1"));
+      const etag = await firstUpload(token, databaseBlob("v1"));
 
       const response = await putDatabase(token, databaseBlob("v2"), {
         "If-None-Match": "*",
@@ -130,7 +153,7 @@ describe("PUT /api/users/me/database", () => {
 
       expect(response.status).toBe(412);
       expect(await response.json()).toEqual({ error: "PRECONDITION_FAILED" });
-      expect(s3.putCount).toBe(1);
+      expect(await downloaded(token)).toEqual({ etag, body: databaseBlob("v1") });
     });
 
     it("rejects a stale If-Match", async () => {
@@ -143,7 +166,7 @@ describe("PUT /api/users/me/database", () => {
       });
 
       expect(response.status).toBe(412);
-      expect(s3.objects.get("alice.db.gz.enc")?.body).toEqual(databaseBlob("v2"));
+      expect(await downloaded(token)).toMatchObject({ body: databaseBlob("v2") });
     });
 
     it("rejects If-Match before the first upload", async () => {
@@ -169,72 +192,56 @@ describe("PUT /api/users/me/database", () => {
       const response = await putDatabase(token, body, { "If-None-Match": "*" });
 
       expect(response.status).toBe(400);
-      expect(s3.putCount).toBe(0);
+      expect(await downloaded(token)).toBe(404);
     });
 
-    it("accepts a database of exactly the maximum size", async () => {
+    it("stores a database of exactly the maximum size byte for byte", async () => {
       const token = await newUser();
-      const body = new Uint8Array(env.MAX_DATABASE_UPLOAD_BYTES);
-      body.set(databaseBlob(""));
+      const body = largeDatabaseBlob(env.MAX_DATABASE_UPLOAD_BYTES);
 
       const response = await putDatabase(token, body, { "If-None-Match": "*" });
 
       expect(response.status).toBe(204);
+      const etag = await etagOf(body);
+      expect(await downloadedHashes(token)).toEqual({ etag, contentEtag: etag });
+    });
+
+    it("replaces a larger database with a smaller one entirely", async () => {
+      const token = await newUser();
+      const etag = await firstUpload(token, largeDatabaseBlob(3 * 1024 * 1024));
+      const body = databaseBlob("small");
+
+      await putDatabase(token, body, { "If-Match": etag });
+
+      const replaced = await etagOf(body);
+      expect(await downloadedHashes(token)).toEqual({ etag: replaced, contentEtag: replaced });
     });
 
     it("rejects a database over the maximum size", async () => {
       const token = await newUser();
-      const body = new Uint8Array(env.MAX_DATABASE_UPLOAD_BYTES + 1);
-      body.set(databaseBlob(""));
+      const body = largeDatabaseBlob(env.MAX_DATABASE_UPLOAD_BYTES + 1);
 
       const response = await putDatabase(token, body, { "If-None-Match": "*" });
 
       expect(response.status).toBe(413);
       expect(await response.text()).toBe("Payload Too Large");
-      expect(s3.putCount).toBe(0);
-    });
-  });
-
-  describe("object storage failures", () => {
-    it("returns 502 and keeps the current version", async () => {
-      const token = await newUser();
-      const etag = await firstUpload(token, databaseBlob("v1"));
-      s3.failRequests(503);
-
-      const failed = await putDatabase(token, databaseBlob("v2"), {
-        "If-Match": etag,
-      });
-      expect(failed.status).toBe(502);
-      expect(await failed.json()).toEqual({ error: "STORAGE_ERROR" });
-
-      s3.recover();
-      const retried = await putDatabase(token, databaseBlob("v2"), {
-        "If-Match": etag,
-      });
-      expect(retried.status).toBe(204);
+      expect(await downloaded(token)).toBe(404);
     });
   });
 
   it("lets only one of two concurrent uploads with the same If-Match win", async () => {
     const token = await newUser();
     const etag = await firstUpload(token, databaseBlob("v1"));
-    s3.holdPuts();
+    const bodies = [databaseBlob("first"), databaseBlob("second")];
 
-    const first = putDatabase(token, databaseBlob("first"), {
-      "If-Match": etag,
-    });
-    await vi.waitUntil(() => s3.heldPutCount === 1);
-    const second = putDatabase(token, databaseBlob("second"), {
-      "If-Match": etag,
-    });
-    // give the second upload every chance to reach object storage
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    s3.release();
+    const responses = await Promise.all(
+      bodies.map((body) => putDatabase(token, body, { "If-Match": etag })),
+    );
 
-    expect((await first).status).toBe(204);
-    expect((await second).status).toBe(412);
-    expect(s3.putCount).toBe(2);
-    expect(s3.objects.get("alice.db.gz.enc")?.body).toEqual(databaseBlob("first"));
+    const statuses = responses.map(({ status }) => status);
+    expect(statuses.toSorted()).toEqual([204, 412]);
+    const winner = bodies[statuses.indexOf(204)]!;
+    expect(await downloaded(token)).toEqual({ etag: await etagOf(winner), body: winner });
   });
 });
 
@@ -274,50 +281,16 @@ describe("GET /api/users/me/database", () => {
     expect((await getDatabase(bob)).status).toBe(404);
   });
 
-  it("returns 502 when object storage fails", async () => {
-    const token = await newUser();
-    await firstUpload(token, databaseBlob("v1"));
-    s3.failRequests(503);
-
-    const response = await getDatabase(token);
-
-    expect(response.status).toBe(502);
-    expect(await response.json()).toEqual({ error: "STORAGE_ERROR" });
-  });
-
-  it("adopts the version in object storage when the stored hash is behind", async () => {
-    const token = await newUser();
-    await firstUpload(token, databaseBlob("v1"));
-    // an upload that reached object storage but whose hash was never stored
-    const body = databaseBlob("v2");
-    const sha256 = await toSha256Schema.decodeAsync(body.slice().buffer);
-    s3.objects.set("alice.db.gz.enc", {
-      body,
-      metadata: { "x-amz-meta-sha256": sha256 },
-    });
-
-    const response = await getDatabase(token);
-    expect(response.headers.get("ETag")).toBe(`"${sha256}"`);
-    await response.arrayBuffer();
-
-    const upload = await putDatabase(token, databaseBlob("v3"), {
-      "If-Match": `"${sha256}"`,
-    });
-    expect(upload.status).toBe(204);
-  });
-
   describe("If-None-Match", () => {
-    it("returns 304 for the current version, without reading object storage", async () => {
+    it("returns 304 for the current version", async () => {
       const token = await newUser();
       const etag = await firstUpload(token, databaseBlob("v1"));
-      const reads = s3.getCount;
 
       const response = await getDatabase(token, { "If-None-Match": etag });
 
       expect(response.status).toBe(304);
       expect(response.headers.get("ETag")).toBe(etag);
       expect(await response.arrayBuffer()).toHaveProperty("byteLength", 0);
-      expect(s3.getCount).toBe(reads);
     });
 
     it("returns the database when it has changed since", async () => {
@@ -357,18 +330,5 @@ describe("GET /api/users/me/database", () => {
         expect((await getDatabase(token, { "If-None-Match": header })).status).toBe(400);
       },
     );
-  });
-
-  it("forgets the stored hash when the object is gone", async () => {
-    const token = await newUser();
-    await firstUpload(token, databaseBlob("v1"));
-    s3.objects.clear();
-
-    expect((await getDatabase(token)).status).toBe(404);
-
-    const response = await putDatabase(token, databaseBlob("v2"), {
-      "If-None-Match": "*",
-    });
-    expect(response.status).toBe(204);
   });
 });

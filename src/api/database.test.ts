@@ -2,7 +2,6 @@ import { reset } from "cloudflare:test";
 import * as opaque from "@serenity-kit/opaque";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { forwardFetchToWorker, loginToken, registerUser } from "../../worker/test/helpers.ts";
-import { installFakeS3 } from "../../worker/test/fake-s3.ts";
 import { toSha256Schema } from "../../worker/schemas.ts";
 import { downloadDatabase, downloadDatabaseIfChanged, uploadDatabase } from "./database.ts";
 import { TOKEN } from "../test/fixtures.ts";
@@ -13,8 +12,6 @@ const UNKNOWN_SESSION = TOKEN;
 
 beforeAll(() => opaque.ready);
 beforeEach(async () => {
-  // The fake S3 first: forwardFetchToWorker passes the S3 requests on to it.
-  installFakeS3();
   forwardFetchToWorker();
   await registerUser("alice");
   token = await loginToken("alice");

@@ -8,8 +8,8 @@ export const PASSWORD = "correct horse battery staple";
  * Routes the global `fetch` to the worker, so frontend API clients (which
  * call relative URLs like `/api/users`) can be tested against the real
  * server. Requests to other origins go to the previous `fetch`: the worker
- * and its durable objects share this global, so their own requests (e.g. to
- * the fake S3) must not be looped back. Undo with `vi.unstubAllGlobals()`.
+ * and its durable objects share this global, so their own requests must not
+ * be looped back. Undo with `vi.unstubAllGlobals()`.
  */
 export function forwardFetchToWorker() {
   const previousFetch = globalThis.fetch;

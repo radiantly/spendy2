@@ -34,7 +34,6 @@ database.put(
       const STATUS: Record<typeof result.code, ContentfulStatusCode> = {
         UNAUTHORIZED: 401,
         PRECONDITION_FAILED: 412,
-        STORAGE_ERROR: 502,
       };
       return c.json({ error: result.code }, STATUS[result.code]);
     }
@@ -55,7 +54,6 @@ database.get("/", requireAuth, sValidator("header", databaseGetPreconditionSchem
     const STATUS: Record<typeof result.code, ContentfulStatusCode> = {
       UNAUTHORIZED: 401,
       NOT_FOUND: 404,
-      STORAGE_ERROR: 502,
     };
     return c.json({ error: result.code }, STATUS[result.code]);
   }
