@@ -10,7 +10,11 @@ import type {
 } from "../../db/queries/overview.ts";
 import { addDays, type DateRange } from "./period.ts";
 
-export type SubcategorySpending = { name: string; spent: number };
+export type SubcategorySpending = {
+  /** null for spending on the top-level category itself. */
+  name: string | null;
+  spent: number;
+};
 
 export type TopCategorySpending = {
   /** null for spending without a category. */
@@ -19,7 +23,7 @@ export type TopCategorySpending = {
   /**
    * Its direct subcategories' spending, each with their own subcategories'
    * included, most first. Spending on the category itself, if it has
-   * subcategories too, is listed under its own name.
+   * subcategories too, comes last.
    */
   subcategories: SubcategorySpending[];
 };
@@ -44,7 +48,11 @@ export function topCategoryOf(categories: readonly CategoryParent[]) {
   return (name: string) => ancestorsOf(name).at(-1) ?? name;
 }
 
-const bySpentDesc = (a: { spent: number }, b: { spent: number }) => b.spent - a.spent;
+type Spending = { name: string | null; spent: number };
+
+/** Most first, with a null name (no category, or no subcategory) last, however big. */
+const bySpentDescNullLast = (a: Spending, b: Spending) =>
+  a.name === null ? 1 : b.name === null ? -1 : b.spent - a.spent;
 
 /**
  * Spending grouped by top-level category, most first, with spending that
@@ -55,7 +63,10 @@ export function spendingByTopCategory(
   categories: readonly CategoryParent[],
 ): TopCategorySpending[] {
   const ancestorsOf = ancestry(categories);
-  const tops = new Map<string | null, { spent: number; subcategories: Map<string, number> }>();
+  const tops = new Map<
+    string | null,
+    { spent: number; subcategories: Map<string | null, number> }
+  >();
 
   for (const { category, spent } of rows) {
     // From the top: the top-level category, then the one under it.
@@ -63,9 +74,11 @@ export function spendingByTopCategory(
     const top = path[0] ?? null;
     const entry = tops.get(top) ?? { spent: 0, subcategories: new Map() };
     entry.spent += spent;
-    // Spending on the top-level category itself is listed under its own name.
-    const sub = path[1] ?? top;
-    if (sub !== null) entry.subcategories.set(sub, (entry.subcategories.get(sub) ?? 0) + spent);
+    if (top !== null) {
+      // Spending on the top-level category itself is under no subcategory.
+      const sub = path[1] ?? null;
+      entry.subcategories.set(sub, (entry.subcategories.get(sub) ?? 0) + spent);
+    }
     tops.set(top, entry);
   }
 
@@ -73,10 +86,10 @@ export function spendingByTopCategory(
     .map(([name, { spent, subcategories }]) => {
       const subs = [...subcategories].map(([sub, subSpent]) => ({ name: sub, spent: subSpent }));
       // Only spending on the category itself: nothing to break down.
-      const isOnlyItself = subs.length === 1 && subs[0]!.name === name;
-      return { name, spent, subcategories: isOnlyItself ? [] : subs.sort(bySpentDesc) };
+      const isOnlyItself = subs.length === 1 && subs[0]!.name === null;
+      return { name, spent, subcategories: isOnlyItself ? [] : subs.sort(bySpentDescNullLast) };
     })
-    .sort((a, b) => (a.name === null ? 1 : b.name === null ? -1 : bySpentDesc(a, b)));
+    .sort(bySpentDescNullLast);
 }
 
 export type CumulativePoint = { date: string; total: number };

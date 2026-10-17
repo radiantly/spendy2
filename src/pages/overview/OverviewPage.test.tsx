@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { page, userEvent, type Locator } from "vitest/browser";
 import { downloadDatabase, downloadDatabaseIfChanged, uploadDatabase } from "../../api/database.ts";
 import { renderApp } from "../../test/renderAuthPage.tsx";
@@ -276,6 +276,58 @@ describe("OverviewPage", () => {
       const subs = region("Where it went").getByRole("list").nth(1).getByRole("listitem");
       await expect.element(subs.nth(0)).toMatchTextContent("Groceries$46");
       await expect.element(subs.nth(1)).toMatchTextContent("Dining out$18");
+    });
+
+    it("lists spending on a category itself as uncategorized, last", async () => {
+      await opened(
+        [DATA, insert(15, "2026-10-02", "Rewards Card", -60, "Big Box", "Food")].join(";"),
+      );
+
+      await userEvent.click(region("Where it went").getByRole("button", { name: /Food/ }));
+
+      const subs = region("Where it went").getByRole("list").nth(1).getByRole("listitem");
+      await expect.element(subs.nth(0)).toMatchTextContent("Groceries$46");
+      await expect.element(subs.nth(1)).toMatchTextContent("Dining out$18");
+      await expect.element(subs.nth(2)).toMatchTextContent("Uncategorized$60");
+    });
+
+    // React only warns about rows sharing a key, and mixes up their state later.
+    const sameKeyWarnings = (error: MockInstance<typeof console.error>) =>
+      error.mock.calls.filter(([message]) => String(message).includes("same key"));
+
+    it("keeps a category named Uncategorized apart from spending without one", async () => {
+      const error = vi.spyOn(console, "error");
+      await opened(
+        [
+          DATA,
+          "INSERT INTO categories VALUES ('Uncategorized', NULL)",
+          insert(15, "2026-10-02", "Rewards Card", -10, "Mystery Shop", "Uncategorized"),
+        ].join(";"),
+      );
+
+      const rows = region("Where it went").getByRole("listitem");
+      await expect.element(rows.nth(2)).toMatchTextContent(/Uncategorized.*\$10/);
+      await expect.element(rows.nth(3)).toMatchTextContent(/Uncategorized.*\$32/);
+      expect(sameKeyWarnings(error)).toEqual([]);
+    });
+
+    it("keeps a subcategory named Uncategorized apart from spending on the category itself", async () => {
+      const error = vi.spyOn(console, "error");
+      await opened(
+        [
+          DATA,
+          "INSERT INTO categories VALUES ('Uncategorized', 'Food')",
+          insert(15, "2026-10-02", "Rewards Card", -10, "Mystery Shop", "Uncategorized"),
+          insert(16, "2026-10-02", "Rewards Card", -60, "Big Box", "Food"),
+        ].join(";"),
+      );
+
+      await userEvent.click(region("Where it went").getByRole("button", { name: /Food/ }));
+
+      const subs = region("Where it went").getByRole("list").nth(1).getByRole("listitem");
+      await expect.element(subs.nth(2)).toMatchTextContent("Uncategorized$10");
+      await expect.element(subs.nth(3)).toMatchTextContent("Uncategorized$60");
+      expect(sameKeyWarnings(error)).toEqual([]);
     });
   });
 

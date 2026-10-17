@@ -8,6 +8,9 @@ import { percent, type TopCategorySpending } from "./shape.ts";
 
 const UNCATEGORIZED = "Uncategorized";
 
+/** A row's key: its name, or "" for a null one, as no category can be named "". */
+const keyOf = (name: string | null) => name ?? "";
+
 /** Spending by top-level category, each opening up into its subcategories. */
 function CategoriesCard({ overview, className = "" }: { overview: Overview; className?: string }) {
   const { categories, currency, summary } = overview;
@@ -35,7 +38,7 @@ function CategoriesCard({ overview, className = "" }: { overview: Overview; clas
           <div aria-hidden className="flex h-4.5 gap-0.75 overflow-hidden rounded-full">
             {categories.map(({ name, spent }) => (
               <span
-                key={name ?? UNCATEGORIZED}
+                key={keyOf(name)}
                 style={{ flex: `${spent} 1 0`, backgroundColor: colorOf(name) }}
               />
             ))}
@@ -43,7 +46,7 @@ function CategoriesCard({ overview, className = "" }: { overview: Overview; clas
           <ul className="flex flex-col">
             {categories.map((category) => (
               <CategoryRow
-                key={category.name ?? UNCATEGORIZED}
+                key={keyOf(category.name)}
                 category={category}
                 color={colorOf(category.name)}
                 share={percent(category.spent, summary.spent)}
@@ -125,10 +128,10 @@ function CategoryRow({ category, color, share, barWidth, currency }: CategoryRow
         <ul id={subcategoriesId} className="flex flex-col gap-2.5 pb-4 pl-5.5">
           {subcategories.map((sub) => (
             <li
-              key={sub.name}
+              key={keyOf(sub.name)}
               className="grid grid-cols-[minmax(0,10rem)_minmax(0,1fr)_6rem] items-center gap-3.5 text-sm"
             >
-              <span>{sub.name}</span>
+              <span>{sub.name ?? UNCATEGORIZED}</span>
               <Bar
                 width={percent(sub.spent, spent)}
                 color={color}

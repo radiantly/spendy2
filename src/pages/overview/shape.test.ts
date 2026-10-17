@@ -57,11 +57,11 @@ describe("spendingByTopCategory", () => {
     ]);
   });
 
-  it("lists spending on a top-level category itself under its own name", () => {
+  it("lists spending on a top-level category itself without a name, last however big", () => {
     expect(
       spendingByTopCategory(
         [
-          { category: "Food", spent: 7 },
+          { category: "Food", spent: 70 },
           { category: "Groceries", spent: 30 },
         ],
         CATEGORIES,
@@ -69,10 +69,10 @@ describe("spendingByTopCategory", () => {
     ).toEqual([
       {
         name: "Food",
-        spent: 37,
+        spent: 100,
         subcategories: [
           { name: "Groceries", spent: 30 },
-          { name: "Food", spent: 7 },
+          { name: null, spent: 70 },
         ],
       },
     ]);
