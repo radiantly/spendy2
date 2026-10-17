@@ -11,109 +11,129 @@ import {
   parseRemarks,
 } from "./fields.ts";
 
-const r = (numerator: number, denominator = 1) => ({ numerator, denominator });
+/** An amount stored with `decimals`: 1234 with 2 is 12.34. */
+const a = (amount: number, decimals: number) => ({ amount, decimals });
 
 describe("formatAmount", () => {
   it.each([
-    [r(10), "USD", "USD 10.00"],
-    [r(-2469, 2), "USD", "USD -1,234.50"],
-    [r(100), "INR", "INR 100.00"],
-    [r(1500), "JPY", "JPY 1,500"],
-    [r(617, 500), "BHD", "BHD 1.234"],
-    [r(2469, 2000), "CLF", "CLF 1.2345"],
-    [r(10), "POINTS", "POINTS 10.00"],
+    [a(1000, 2), "USD", "USD 10.00"],
+    [a(-123_450, 2), "USD", "USD -1,234.50"],
+    [a(10_000, 2), "INR", "INR 100.00"],
+    [a(1500, 0), "JPY", "JPY 1,500"],
+    [a(1234, 3), "BHD", "BHD 1.234"],
+    [a(12_345, 4), "CLF", "CLF 1.2345"],
+    [a(1000, 2), "POINTS", "POINTS 10.00"],
   ])("formats %o %s as %s", (amount, currency, expected) => {
     expect(formatAmount(amount, currency)).toBe(expected);
   });
 
+  it("shows the currency's usual decimals, whatever it's stored with", () => {
+    expect(formatAmount(a(1000, 0), "USD")).toBe("USD 1,000.00");
+    expect(formatAmount(a(150_049, 2), "JPY")).toBe("JPY 1,500");
+  });
+
   it.each([
     // The float nearest 1.005 is below it, so rounding the float gives 1.00.
-    [r(201, 200), "USD 1.01"],
-    [r(-201, 200), "USD -1.01"],
-    [r(1, 3), "USD 0.33"],
-    [r(2, 3), "USD 0.67"],
-    [r(-1, 3), "USD -0.33"],
-    [r(-1, 300), "USD -0.00"],
+    [a(1005, 3), "USD 1.01"],
+    [a(-1005, 3), "USD -1.01"],
+    [a(3333, 4), "USD 0.33"],
+    [a(6667, 4), "USD 0.67"],
+    [a(-33, 4), "USD -0.00"],
   ])("rounds %o half away from zero to %s", (amount, expected) => {
     expect(formatAmount(amount, "USD")).toBe(expected);
   });
 
   it("formats amounts too large for a float exactly", () => {
-    expect(formatAmount(r(9_007_199_254_740_991, 100), "USD")).toBe("USD 90,071,992,547,409.91");
+    expect(formatAmount(a(9_007_199_254_740_991, 2), "USD")).toBe("USD 90,071,992,547,409.91");
   });
 });
 
 describe("amountEditText", () => {
   it.each([
-    [r(10), "USD", "10.00"],
-    [r(-2469, 2), "USD", "-1234.50"],
-    [r(1500), "JPY", "1500"],
-    [r(2469, 2000), "CLF", "1.2345"],
-    [r(1), "CLF", "1.0000"],
-  ])("edits %o %s as %s", (amount, currency, expected) => {
-    expect(amountEditText(amount, currency)).toBe(expected);
+    [a(1000, 2), "10.00"],
+    [a(-123_450, 2), "-1234.50"],
+    [a(1500, 0), "1500"],
+    [a(5, 2), "0.05"],
+    [a(-5, 3), "-0.005"],
+    [a(0, 2), "0.00"],
+  ])("edits %o as %s", (amount, expected) => {
+    expect(amountEditText(amount)).toBe(expected);
   });
 
-  it("has only the currency's decimals, so more are rounded", () => {
-    expect(amountEditText(r(1, 3), "USD")).toBe("0.33");
-    expect(amountEditText(r(246_911, 200), "USD")).toBe("1234.56");
+  it("keeps decimals the currency isn't usually shown with, so editing doesn't round them", () => {
+    expect(amountEditText(a(123_456, 4))).toBe("12.3456");
   });
 
   it("round-trips through parseAmount", () => {
-    for (const amount of [r(0), r(1, 100), r(-1, 100), r(9_999, 100), r(-987_654_321, 10)])
-      expect(parseAmount(amountEditText(amount, "USD"))).toEqual({ ok: true, value: amount });
+    for (const amount of [0, 1, -1, 9_999, -987_654_321])
+      expect(parseAmount(amountEditText(a(amount, 2)), 2)).toEqual({ ok: true, value: amount });
   });
 });
 
 describe("parseAmount", () => {
   it.each([
-    ["10", r(10)],
-    ["-12.5", r(-25, 2)],
-    ["+3", r(3)],
-    ["1,234.56", r(30_864, 25)],
-    [" 7 ", r(7)],
-    [".5", r(1, 2)],
-    ["5.", r(5)],
-    ["1.2345", r(2469, 2000)],
-    ["1.00005", r(20_001, 20_000)],
-    ["10.500", r(21, 2)],
-    ["-0.00005", r(-1, 20_000)],
-    ["-0", r(0)],
-    ["-0.000", r(0)],
-  ])("parses %s exactly as %o", (text, expected) => {
-    expect(parseAmount(text)).toEqual({ ok: true, value: expected });
+    ["10", 1000],
+    ["-12.5", -1250],
+    ["+3", 300],
+    ["1,234.56", 123_456],
+    [" 7 ", 700],
+    [".5", 50],
+    ["5.", 500],
+    ["10.500", 1050],
+    ["-0", 0],
+    ["-0.000", 0],
+  ])("parses %s as %d hundredths", (text, expected) => {
+    expect(parseAmount(text, 2)).toEqual({ ok: true, value: expected });
+  });
+
+  it.each([
+    ["1.005", 101],
+    ["-1.005", -101],
+    ["1.00499999", 100],
+    ["0.995", 100],
+    ["1.2345", 123],
+    ["-0.004", 0],
+  ])("rounds %s half away from zero, to %d hundredths", (text, expected) => {
+    expect(parseAmount(text, 2)).toEqual({ ok: true, value: expected });
+  });
+
+  it("parses into the decimals the currency is stored with", () => {
+    expect(parseAmount("1500", 0)).toEqual({ ok: true, value: 1500 });
+    expect(parseAmount("1499.5", 0)).toEqual({ ok: true, value: 1500 });
+    expect(parseAmount("1.2345", 4)).toEqual({ ok: true, value: 12_345 });
+    expect(parseAmount("1.5", 4)).toEqual({ ok: true, value: 15_000 });
   });
 
   it.each(["", "abc", "1.2.3", "--1", "1e3", ".", "USD 10", "1 000", "1/3"])(
     "rejects %j",
     (text) => {
-      expect(parseAmount(text).ok).toBe(false);
+      expect(parseAmount(text, 2).ok).toBe(false);
     },
   );
 
   it("rejects amounts beyond what can be stored exactly", () => {
-    expect(parseAmount("900719925474.0992")).toEqual({
+    expect(parseAmount("90071992547409.92", 2)).toEqual({
       ok: false,
       error: "That amount is too large",
     });
   });
 
   it("accepts the largest amount that can be stored exactly", () => {
-    expect(parseAmount("900719925474.0991")).toEqual({
+    expect(parseAmount("90071992547409.91", 2)).toEqual({
       ok: true,
-      value: r(9_007_199_254_740_991, 10_000),
+      value: 9_007_199_254_740_991,
     });
   });
 
-  it("rejects more decimals than can be stored exactly", () => {
-    expect(parseAmount("0.0000000000000001")).toEqual({
+  it("rejects an amount that rounds up past what can be stored", () => {
+    expect(parseAmount("90071992547409.915", 2)).toEqual({
       ok: false,
-      error: "That amount has too many decimals",
+      error: "That amount is too large",
     });
   });
 
-  it("accepts trailing zeros past what can be stored, as they don't change the amount", () => {
-    expect(parseAmount("1.50000000000000000000")).toEqual({ ok: true, value: r(3, 2) });
+  it("ignores decimals far past the stored ones", () => {
+    expect(parseAmount("1.50000000000000000001", 2)).toEqual({ ok: true, value: 150 });
   });
 });
 

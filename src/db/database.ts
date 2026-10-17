@@ -202,10 +202,18 @@ export class Database {
  * for blob errors). Network failures throw.
  */
 export async function openDatabase(session: Session): Promise<Database> {
-  const download = await downloadDatabase(session.token);
-  if (!download.success && download.code !== "NOT_FOUND")
-    throw new DatabaseOpenError(download.code);
-  return open(session, download.success ? download : null);
+  // Started first, so SQLite loads while the database downloads.
+  const started = startWorker();
+  let download: Awaited<ReturnType<typeof downloadDatabase>>;
+  try {
+    download = await downloadDatabase(session.token);
+    if (!download.success && download.code !== "NOT_FOUND")
+      throw new DatabaseOpenError(download.code);
+  } catch (error) {
+    stopWorker(started);
+    throw error;
+  }
+  return openIn(started, session, download.success ? download : null);
 }
 
 /**
@@ -229,22 +237,37 @@ export async function openNewerDatabase(
     throw new DatabaseOpenError(download.code);
   }
   if (download.sha256 === current.sha256) return null;
-  return open(session, download);
+  // Most checks find nothing newer, so the worker starts only once there is.
+  return openIn(startWorker(), session, download);
 }
 
-/** Opens `stored` in a new worker, or creates a new database if it's null. */
-async function open(
+type DatabaseWorker = { worker: Worker; connection: Connection<DatabaseApi> };
+
+/** A new database worker, which starts loading SQLite straight away. */
+function startWorker(): DatabaseWorker {
+  const worker = new Worker(new URL("./worker.ts", import.meta.url), { type: "module" });
+  return { worker, connection: connect<DatabaseApi>(worker) };
+}
+
+function stopWorker({ worker, connection }: DatabaseWorker) {
+  connection.close();
+  worker.terminate();
+}
+
+/**
+ * Opens `stored` in `started`, or creates a new database if it's null. Stops
+ * the worker if that fails.
+ */
+async function openIn(
+  started: DatabaseWorker,
   session: Session,
   stored: { blob: Uint8Array<ArrayBuffer>; sha256: string } | null,
 ) {
-  const worker = new Worker(new URL("./worker.ts", import.meta.url), { type: "module" });
-  const connection = connect<DatabaseApi>(worker);
   try {
-    await connection.remote.open(stored && transfer(stored.blob), session.kek);
+    await started.connection.remote.open(stored && transfer(stored.blob), session.kek);
   } catch (error) {
-    connection.close();
-    worker.terminate();
+    stopWorker(started);
     throw error;
   }
-  return new Database(worker, connection, session.token, stored?.sha256 ?? null);
+  return new Database(started.worker, started.connection, session.token, stored?.sha256 ?? null);
 }

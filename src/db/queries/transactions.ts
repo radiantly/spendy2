@@ -3,17 +3,20 @@
  * components, so the validate-database script can import and check them.
  */
 
-import type { Rational } from "../../lib/rational.ts";
+import type { Amount } from "../../lib/money.ts";
 
-/** The columns the transactions page shows. The amount is the fraction numerator / denominator. */
+/**
+ * The columns the transactions page shows. `amount` is in `decimals`, its
+ * currency's stored_decimals, so the row is also its `Amount`.
+ */
 export type TransactionRow = {
   id: string;
   naive_date: string;
   account_name: string;
   counterparty: string;
   category: string | null;
-  amount_numerator: number;
-  amount_denominator: number;
+  amount: number;
+  decimals: number;
   currency: string;
   remarks: string | null;
 };
@@ -25,48 +28,73 @@ export type TransactionRow = {
 export type ListedTransaction = TransactionRow & {
   transfer_account: string | null;
   duplicate_of: string | null;
-  /**
-   * Its amount in other currencies, as a JSON object of each currency's
-   * fraction: `{"USD": [-109, 10]}`. `{}` without any.
-   */
-  conversions: string;
+  /** Its amount in other currencies: `{ USD: { amount: -1090, decimals: 2 } }`. */
+  conversions: Record<string, Amount>;
 };
 
 /** `transaction`'s amount in `currency`, if it has a conversion to it. */
 export function conversionTo(
   transaction: Pick<ListedTransaction, "conversions">,
   currency: string,
-): Rational | undefined {
-  // The query builds the JSON, so its shape is known.
-  const fractions = JSON.parse(transaction.conversions) as Record<string, [number, number]>;
-  const fraction = fractions[currency];
-  return fraction && { numerator: fraction[0], denominator: fraction[1] };
+): Amount | undefined {
+  return transaction.conversions[currency];
 }
 
-const LISTED_COLUMNS = `
-  id, naive_date, account_name, counterparty, category,
-  amount_numerator, amount_denominator, currency, remarks, transfer_account, duplicate_of,
-  (SELECT json_group_object(
+/**
+ * A transaction as a JSON object of `ListedTransaction`'s fields. The queries
+ * return them all as one JSON array, built by SQLite: reading each row's
+ * columns into JavaScript takes several times as long for many rows.
+ */
+const LISTED_JSON = `json_object(
+  'id', transactions.id, 'naive_date', transactions.naive_date,
+  'account_name', transactions.account_name, 'counterparty', transactions.counterparty,
+  'category', transactions.category, 'amount', transactions.amount,
+  'decimals', currencies.stored_decimals, 'currency', transactions.currency,
+  'remarks', transactions.remarks, 'transfer_account', transactions.transfer_account,
+  'duplicate_of', transactions.duplicate_of,
+  -- json() so it's an object, not a string of one.
+  'conversions', json((
+    SELECT json_group_object(
       conversion.currency,
-      json_array(conversion.amount_numerator, conversion.amount_denominator)
+      json_object('amount', conversion.amount, 'decimals', conversion_currency.stored_decimals)
     )
     FROM conversions AS conversion
-    WHERE conversion.transaction_id = transactions.id) AS conversions
+    JOIN currencies AS conversion_currency ON conversion_currency.code = conversion.currency
+    WHERE conversion.transaction_id = transactions.id
+  ))
+)`;
+
+const LISTED_FROM = `
+  FROM transactions
+  JOIN currencies ON currencies.code = transactions.currency
 `;
 
-/** Newest first. Rows on the same day keep their import order, latest first. */
+/**
+ * Newest first. Rows on the same day keep their import order, latest first.
+ * Read the result with `listedTransactions`.
+ */
 export const LIST_TRANSACTIONS = `
-  SELECT ${LISTED_COLUMNS}
-  FROM transactions
-  ORDER BY naive_date DESC, seq DESC
+  SELECT json_group_array(
+    ${LISTED_JSON} ORDER BY transactions.naive_date DESC, transactions.seq DESC
+  ) AS transactions
+  ${LISTED_FROM}
 `;
 
-/** Rows of `LIST_TRANSACTIONS`, by id. Bind `[JSON.stringify(ids)]`. */
+/**
+ * Transactions of `LIST_TRANSACTIONS`, by id. Bind `[JSON.stringify(ids)]`.
+ * Read the result with `listedTransactions`.
+ */
 export const GET_TRANSACTIONS = `
-  SELECT ${LISTED_COLUMNS}
-  FROM transactions
-  WHERE id IN (SELECT value FROM json_each(?))
+  SELECT json_group_array(${LISTED_JSON}) AS transactions
+  ${LISTED_FROM}
+  WHERE transactions.id IN (SELECT value FROM json_each(?))
 `;
+
+/** The transactions in a result of `LIST_TRANSACTIONS` or `GET_TRANSACTIONS`. */
+export function listedTransactions(result: readonly Record<string, unknown>[]) {
+  // The query builds the JSON, so its shape is known.
+  return JSON.parse(String(result[0]!.transactions)) as ListedTransaction[];
+}
 
 /** Alphabetical, ignoring case (the names are `COLLATE NOCASE`). */
 export const LIST_CATEGORY_NAMES = `SELECT name FROM categories ORDER BY name`;
@@ -88,7 +116,7 @@ type TransactionFieldColumns = {
   account_name: Pick<TransactionRow, "account_name">;
   counterparty: Pick<TransactionRow, "counterparty">;
   category: Pick<TransactionRow, "category">;
-  amount: Pick<TransactionRow, "amount_numerator" | "amount_denominator">;
+  amount: Pick<TransactionRow, "amount">;
   remarks: Pick<TransactionRow, "remarks">;
 };
 
@@ -106,11 +134,7 @@ export const UPDATE_TRANSACTION = {
   account_name: `UPDATE transactions SET account_name = $account_name WHERE id = $id`,
   counterparty: `UPDATE transactions SET counterparty = $counterparty WHERE id = $id`,
   category: `UPDATE transactions SET category = $category WHERE id = $id`,
-  amount: `
-    UPDATE transactions
-    SET amount_numerator = $amount_numerator, amount_denominator = $amount_denominator
-    WHERE id = $id
-  `,
+  amount: `UPDATE transactions SET amount = $amount WHERE id = $id`,
   remarks: `UPDATE transactions SET remarks = $remarks WHERE id = $id`,
 } as const satisfies Record<EditableTransactionField, string>;
 

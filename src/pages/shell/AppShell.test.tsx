@@ -35,10 +35,10 @@ const TWO_TRANSACTIONS = `
   INSERT INTO accounts VALUES ('Savings', 'USD', 'Bank', NULL);
   INSERT INTO sources (hash, remarks) VALUES (${SOURCE_HASH_SQL}, 'statement.csv');
   INSERT INTO categories VALUES ('Groceries', NULL);
-  INSERT INTO transactions (seq, id, source, account_name, amount_numerator, amount_denominator, currency, counterparty, category, naive_date)
-    VALUES (1, '${OLDER}', ${SOURCE_HASH_SQL}, 'Everyday Checking', -5, 1, 'USD', 'Café Lumen', NULL, '2026-10-01');
-  INSERT INTO transactions (seq, id, source, account_name, amount_numerator, amount_denominator, currency, counterparty, category, naive_date)
-    VALUES (2, '${NEWER}', ${SOURCE_HASH_SQL}, 'Everyday Checking', -231, 5, 'USD', 'Corner Market', 'Groceries', '2026-10-09')
+  INSERT INTO transactions (seq, id, source, account_name, amount, currency, counterparty, category, naive_date)
+    VALUES (1, '${OLDER}', ${SOURCE_HASH_SQL}, 'Everyday Checking', -500, 'USD', 'Café Lumen', NULL, '2026-10-01');
+  INSERT INTO transactions (seq, id, source, account_name, amount, currency, counterparty, category, naive_date)
+    VALUES (2, '${NEWER}', ${SOURCE_HASH_SQL}, 'Everyday Checking', -4620, 'USD', 'Corner Market', 'Groceries', '2026-10-09')
 `;
 
 beforeEach(async () => {
@@ -627,19 +627,16 @@ describe("TransactionsPage", () => {
       await userEvent.click(saveButton());
       await expect.element(saveButton()).not.toBeInTheDocument();
       const [, blob] = vi.mocked(uploadDatabase).mock.calls[0]!;
-      return queryUploaded(
-        blob,
-        `SELECT amount_numerator, amount_denominator FROM transactions WHERE id = '${NEWER}'`,
-      );
+      return queryUploaded(blob, `SELECT amount FROM transactions WHERE id = '${NEWER}'`);
     };
 
-    it("stores an edited amount exactly, and shows it rounded", async () => {
+    it("stores an edited amount rounded to its currency's stored decimals", async () => {
       await opened();
 
       await editAmount("-46.20", "-12.345");
 
       await expect.element(page.getByText("-12.35", { exact: true })).toBeVisible();
-      expect(await storedAmount()).toEqual([{ amount_numerator: -2469, amount_denominator: 200 }]);
+      expect(await storedAmount()).toEqual([{ amount: -1235 }]);
     });
 
     it("puts back the stored amount when an edit can't be written", async () => {
@@ -655,7 +652,7 @@ describe("TransactionsPage", () => {
       await expect.element(page.getByText("-46.20", { exact: true })).toBeVisible();
     });
 
-    it("doesn't let a failed edit undo part of a later edit with the same denominator", async () => {
+    it("doesn't let a failed edit undo a later edit of the amount", async () => {
       await opened();
       const update = holdNextUpdate();
 
@@ -667,7 +664,7 @@ describe("TransactionsPage", () => {
         .element(page.getByText("Couldn't change that transaction: disk on fire"))
         .toBeVisible();
       await expect.element(page.getByText("-7.50", { exact: true })).toBeVisible();
-      expect(await storedAmount()).toEqual([{ amount_numerator: -15, amount_denominator: 2 }]);
+      expect(await storedAmount()).toEqual([{ amount: -750 }]);
     });
   });
 });
@@ -1073,7 +1070,7 @@ describe("undo and redo on the transactions page", () => {
     await expect.element(inTable("Corner Market")).toBeVisible();
   });
 
-  it("undoes both parts of an amount", async () => {
+  it("undoes an amount", async () => {
     await opened();
     await editCounterparty("Corner Market", "Corner Shop");
     await editAmount("-46.20", "-12.5");
@@ -1082,10 +1079,8 @@ describe("undo and redo on the transactions page", () => {
 
     await expect.element(inTable("-46.20")).toBeVisible();
     expect(
-      await uploaded(
-        `SELECT counterparty, amount_numerator, amount_denominator FROM transactions WHERE id = '${NEWER}'`,
-      ),
-    ).toEqual([{ counterparty: "Corner Shop", amount_numerator: -231, amount_denominator: 5 }]);
+      await uploaded(`SELECT counterparty, amount FROM transactions WHERE id = '${NEWER}'`),
+    ).toEqual([{ counterparty: "Corner Shop", amount: -4620 }]);
   });
 
   it("undoes a cleared range in one step, and selects it", async () => {

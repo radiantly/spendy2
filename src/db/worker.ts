@@ -72,8 +72,8 @@ const api = {
               sqlite3.capi.SQLITE_DESERIALIZE_RESIZEABLE,
           ),
         );
-        const integrity = next.selectValue("PRAGMA integrity_check");
-        if (integrity !== "ok") throw new Error(`The database is corrupt: ${String(integrity)}`);
+        // No integrity check: decrypting already rejects a blob changed since
+        // it was saved, and checking a large database takes a while.
       }
       migrate(next, MIGRATIONS);
       configureConnection(next);

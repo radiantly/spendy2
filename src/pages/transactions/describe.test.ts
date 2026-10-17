@@ -9,8 +9,8 @@ const row = (overrides: Partial<TransactionRow> = {}): TransactionRow => ({
   account_name: "Everyday Checking",
   counterparty: "Corner Market",
   category: "Groceries",
-  amount_numerator: -231,
-  amount_denominator: 5,
+  amount: -4620,
+  decimals: 2,
   currency: "USD",
   remarks: null,
   ...overrides,
@@ -44,7 +44,7 @@ describe("describeEdit", () => {
     ],
     [
       "an amount, with its currency",
-      { field: "amount", patch: { amount_numerator: -25, amount_denominator: 2 } },
+      { field: "amount", patch: { amount: -1250 } },
       "amount of Corner Market: USD -46.20 → USD -12.50",
     ],
     [

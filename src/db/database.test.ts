@@ -72,6 +72,32 @@ describe("openDatabase", () => {
     },
   );
 
+  it("starts the worker before the download finishes, so SQLite loads meanwhile", async () => {
+    const workers = vi.spyOn(globalThis, "Worker");
+    let startedBeforeDownload = 0;
+    vi.mocked(downloadDatabase).mockImplementation(async () => {
+      startedBeforeDownload = workers.mock.calls.length;
+      return { success: false, code: "NOT_FOUND" };
+    });
+
+    (await openDatabase(await session())).close();
+
+    expect(startedBeforeDownload).toBe(1);
+  });
+
+  it.each([
+    ["the download fails", { success: false, code: "DOWNLOAD_FAILED" } as const],
+    ["the network fails", new TypeError("Failed to fetch")],
+  ])("stops the worker it started when %s", async (_name, outcome) => {
+    const terminate = vi.spyOn(Worker.prototype, "terminate");
+    if (outcome instanceof Error) vi.mocked(downloadDatabase).mockRejectedValue(outcome);
+    else vi.mocked(downloadDatabase).mockResolvedValue(outcome);
+
+    await expect(openDatabase(await session())).rejects.toThrow();
+
+    expect(terminate).toHaveBeenCalledTimes(1);
+  });
+
   it("throws the blob error when the stored database can't be decrypted", async () => {
     const blob = await encryptDatabase(new Uint8Array(), await deriveKek("b3RoZXIga2V5"));
     vi.mocked(downloadDatabase).mockResolvedValue({ success: true, blob, sha256: SHA_A });

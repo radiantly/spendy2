@@ -4,7 +4,6 @@ import type {
   TransactionPatch,
   TransactionRow,
 } from "../../db/queries/transactions.ts";
-import type { Rational } from "../../lib/rational.ts";
 import {
   amountEditText,
   formatAmountValue,
@@ -30,11 +29,12 @@ export type CellEditor = {
   /** The text the input starts with. */
   editText: (row: TransactionRow) => string;
   /**
-   * The columns to store for the text, or why it can't be. `create` is set
-   * when the user picked the menu's create item.
+   * The columns to store for the text typed into `row`'s cell, or why it
+   * can't be. `create` is set when the user picked the menu's create item.
    */
   parse: (
     text: string,
+    row: TransactionRow,
     context: EditContext & { create: boolean },
   ) => ParseResult<TransactionPatch>;
   /** Makes the cell a combobox: an input with a menu of options. */
@@ -59,11 +59,6 @@ export const features = tableFeatures({ columnMeta: {} as TransactionColumnMeta 
 
 const helper = createColumnHelper<typeof features, TransactionRow>();
 
-const amountOf = (row: TransactionRow): Rational => ({
-  numerator: row.amount_numerator,
-  denominator: row.amount_denominator,
-});
-
 export const columns = helper.columns([
   helper.accessor("naive_date", {
     header: "Date",
@@ -86,7 +81,7 @@ export const columns = helper.columns([
       editor: {
         field: "account_name",
         editText: (row) => row.account_name,
-        parse: (text, { accounts }) =>
+        parse: (text, _row, { accounts }) =>
           mapResult(parseAccount(text, accounts), (account_name) => ({ account_name })),
         menu: ({ accounts }) => ({ options: accounts, noMatch: "No account found" }),
       },
@@ -112,7 +107,7 @@ export const columns = helper.columns([
       editor: {
         field: "category",
         editText: (row) => row.category ?? "",
-        parse: (text, { categories, create }) =>
+        parse: (text, _row, { categories, create }) =>
           mapResult(parseCategory(text, categories, create), (category) => ({ category })),
         menu: ({ categories }) => ({
           options: categories,
@@ -131,17 +126,13 @@ export const columns = helper.columns([
       mono: true,
       display: (row) => ({
         prefix: `${row.currency} `,
-        text: formatAmountValue(amountOf(row), row.currency),
+        text: formatAmountValue(row, row.currency),
       }),
       editor: {
         field: "amount",
         // Without the currency, so only the number is edited.
-        editText: (row) => amountEditText(amountOf(row), row.currency),
-        parse: (text) =>
-          mapResult(parseAmount(text), ({ numerator, denominator }) => ({
-            amount_numerator: numerator,
-            amount_denominator: denominator,
-          })),
+        editText: (row) => amountEditText(row),
+        parse: (text, row) => mapResult(parseAmount(text, row.decimals), (amount) => ({ amount })),
       },
     },
   }),

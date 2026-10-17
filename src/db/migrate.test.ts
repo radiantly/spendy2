@@ -157,8 +157,7 @@ describe("schema", () => {
       id: T1,
       source: SOURCE_HASH,
       account_name: "checking",
-      amount_numerator: -5,
-      amount_denominator: 4,
+      amount: -125,
       currency: "SGD",
       counterparty: "Coffee",
       naive_date: "2026-10-10",
@@ -172,7 +171,14 @@ describe("schema", () => {
   }
 
   it("creates the tables", () => {
-    expect(tables()).toEqual(["accounts", "categories", "conversions", "sources", "transactions"]);
+    expect(tables()).toEqual([
+      "accounts",
+      "categories",
+      "conversions",
+      "currencies",
+      "sources",
+      "transactions",
+    ]);
   });
 
   it("accepts a valid transaction", () => {
@@ -182,14 +188,52 @@ describe("schema", () => {
   });
 
   it("rejects a value of the wrong type", () => {
-    expect(() => insertTransaction({ amount_numerator: "-1.25" })).toThrow(
-      "SQLITE_CONSTRAINT_DATATYPE",
-    );
+    expect(() => insertTransaction({ amount: "-1.25" })).toThrow("SQLITE_CONSTRAINT_DATATYPE");
   });
 
-  it.each([0, -4])("rejects the amount denominator %i", (denominator) => {
-    expect(() => insertTransaction({ amount_denominator: denominator })).toThrow(
-      "CHECK constraint",
+  it("has ISO 4217's currencies, with their decimals", () => {
+    const decimals = (code: string) =>
+      db.selectValue("SELECT stored_decimals FROM currencies WHERE code = ?", [code]);
+
+    expect([decimals("USD"), decimals("JPY"), decimals("BHD"), decimals("HUF")]).toEqual([
+      2, 0, 3, 2,
+    ]);
+  });
+
+  it.each([
+    ["a currency's code", "INSERT INTO currencies VALUES ('', 2)"],
+    ["a currency's stored decimals", "INSERT INTO currencies VALUES ('XBT', -1)"],
+  ])("rejects an invalid value for %s", (_, sql) => {
+    expect(() => db.exec(sql)).toThrow("CHECK constraint");
+  });
+
+  it("allows a currency of the user's own", () => {
+    db.exec("INSERT INTO currencies VALUES ('XBT', 8)");
+    insertTransaction({ currency: "XBT", amount: 1 });
+
+    expect(db.selectValue("SELECT count(*) FROM transactions")).toBe(1);
+  });
+
+  it.each([
+    ["a transaction's", () => insertTransaction({ currency: "ABC" })],
+    [
+      "an account's display",
+      () => db.exec("INSERT INTO accounts VALUES ('cash', 'ABC', 'Cash', NULL)"),
+    ],
+    [
+      "a conversion's",
+      () => {
+        insertTransaction();
+        db.exec(`INSERT INTO conversions VALUES ('${T1}', 'ABC', 1)`);
+      },
+    ],
+  ])("rejects %s currency when it isn't one of the currencies", (_, insert) => {
+    expect(insert).toThrow("FOREIGN KEY constraint failed");
+  });
+
+  it("keeps a currency that's in use", () => {
+    expect(() => db.exec("DELETE FROM currencies WHERE code = 'SGD'")).toThrow(
+      "FOREIGN KEY constraint failed",
     );
   });
 
@@ -214,27 +258,18 @@ describe("schema", () => {
     expect(() => insertTransaction({ id })).toThrow("CHECK constraint");
   });
 
-  it.each(["currency", "counterparty", "remarks"])("rejects an empty %s", (column) => {
+  it.each(["counterparty", "remarks"])("rejects an empty %s", (column) => {
     expect(() => insertTransaction({ [column]: "" })).toThrow("CHECK constraint");
   });
 
   it.each([
     ["an account's name", "INSERT INTO accounts VALUES ('', 'SGD', 'Bank', NULL)"],
-    ["an account's display currency", "INSERT INTO accounts VALUES ('cash', '', 'Bank', NULL)"],
     ["an account's type", "INSERT INTO accounts VALUES ('cash', 'SGD', '', NULL)"],
     ["an account's identifier", "INSERT INTO accounts VALUES ('cash', 'SGD', 'Bank', '')"],
     ["a category's name", "INSERT INTO categories VALUES ('', NULL)"],
     ["a source's remarks", `INSERT INTO sources VALUES (X'${"01".repeat(32)}', '', 0)`],
   ])("rejects an empty value for %s", (_, sql) => {
     expect(() => db.exec(sql)).toThrow("CHECK constraint");
-  });
-
-  it("rejects a conversion to an empty currency", () => {
-    insertTransaction();
-
-    expect(() => db.exec(`INSERT INTO conversions VALUES ('${T1}', '', 1, 1)`)).toThrow(
-      "CHECK constraint",
-    );
   });
 
   it("rejects an account without a type", () => {
@@ -400,7 +435,7 @@ describe("schema", () => {
 
     function insertConversion(currency: string, transactionId = T1) {
       db.exec({
-        sql: "INSERT INTO conversions VALUES (?, ?, -9, 10)",
+        sql: "INSERT INTO conversions VALUES (?, ?, -90)",
         bind: [transactionId, currency],
       });
     }
@@ -428,12 +463,6 @@ describe("schema", () => {
 
     it("rejects a conversion of a missing transaction", () => {
       expect(() => insertConversion("USD", "missing")).toThrow("FOREIGN KEY constraint failed");
-    });
-
-    it("rejects a zero denominator", () => {
-      expect(() => db.exec(`INSERT INTO conversions VALUES ('${T1}', 'USD', 1, 0)`)).toThrow(
-        "CHECK constraint",
-      );
     });
 
     it("rejects a conversion to the transaction's own currency", () => {

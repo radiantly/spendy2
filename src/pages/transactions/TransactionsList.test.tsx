@@ -19,13 +19,13 @@ function transaction(overrides: Partial<ListedTransaction> = {}): ListedTransact
     account_name: "Everyday Checking",
     counterparty: "Aldi",
     category: "Groceries",
-    amount_numerator: -9474,
-    amount_denominator: 100,
+    amount: -9474,
+    decimals: 2,
     currency: "USD",
     remarks: null,
     transfer_account: null,
     duplicate_of: null,
-    conversions: "{}",
+    conversions: {},
     ...overrides,
   };
 }
@@ -109,7 +109,7 @@ describe("TransactionsList", () => {
   });
 
   it("shows money in with a plus, in green", async () => {
-    await show([transaction({ amount_numerator: 325049, counterparty: "Acme Corp Payroll" })]);
+    await show([transaction({ amount: 325049, counterparty: "Acme Corp Payroll" })]);
 
     await expect.element(only()).toMatchTextContent("USD +3,250.49");
     expect(colorOf("USD +3,250.49")).toBe(colorOfClass("text-gain"));
@@ -136,9 +136,9 @@ describe("TransactionsList", () => {
     await show([
       transaction({
         account_name: "Travel Card",
-        amount_numerator: -10,
-        amount_denominator: 1,
-        conversions: JSON.stringify({ INR: [-830, 1], EUR: [-46, 5] }),
+        amount: -1000,
+        decimals: 2,
+        conversions: { INR: { amount: -83000, decimals: 2 }, EUR: { amount: -920, decimals: 2 } },
       }),
     ]);
 
@@ -148,7 +148,10 @@ describe("TransactionsList", () => {
 
   it("says when it has no amount in its account's currency", async () => {
     await show([
-      transaction({ account_name: "Travel Card", conversions: JSON.stringify({ INR: [-830, 1] }) }),
+      transaction({
+        account_name: "Travel Card",
+        conversions: { INR: { amount: -83000, decimals: 2 } },
+      }),
     ]);
 
     await expect.element(only()).toMatchTextContent(/USD -94\.74\s*Not converted$/);
@@ -159,14 +162,19 @@ describe("TransactionsList", () => {
     ["in its account's currency", { account_name: "Travel Card", currency: "EUR" }],
     ["in an account without a display currency", { account_name: "Global Brokerage" }],
   ])("shows just the amount for one %s", async (_name, overrides) => {
-    await show([transaction({ ...overrides, conversions: JSON.stringify({ GBP: [-75, 1] }) })]);
+    await show([
+      transaction({ ...overrides, conversions: { GBP: { amount: -7500, decimals: 2 } } }),
+    ]);
 
     await expect.element(only()).toMatchTextContent(/-94\.74$/);
   });
 
   it("finds the account ignoring case", async () => {
     await show([
-      transaction({ account_name: "travel card", conversions: JSON.stringify({ EUR: [-87, 1] }) }),
+      transaction({
+        account_name: "travel card",
+        conversions: { EUR: { amount: -8700, decimals: 2 } },
+      }),
     ]);
 
     await expect.element(only()).toMatchTextContent(/EUR -87\.00$/);

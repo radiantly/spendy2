@@ -4,8 +4,7 @@
  * show on the cell.
  */
 
-import { currencyDecimals, formattable } from "../../lib/money.ts";
-import { reduce, type Rational } from "../../lib/rational.ts";
+import { currencyDecimals, decimalString, formattable, type Amount } from "../../lib/money.ts";
 
 export type ParseResult<T> = { ok: true; value: T } | { ok: false; error: string };
 
@@ -17,50 +16,47 @@ export function mapResult<T, U>(result: ParseResult<T>, map: (value: T) => U): P
   return result.ok ? ok(map(result.value)) : result;
 }
 
-/** With the currency's usual decimals, rounded half away from zero. */
-function formatDecimals(amount: Rational, currency: string, grouping: boolean) {
+/** The number part of `formatAmount`: `1,234.50`, with the currency's usual decimals. */
+export function formatAmountValue(amount: Amount, currency: string) {
   const decimals = currencyDecimals(currency);
   return new Intl.NumberFormat("en-US", {
     minimumFractionDigits: decimals,
     maximumFractionDigits: decimals,
-    useGrouping: grouping,
-  }).format(formattable(amount, decimals));
-}
-
-/** The number part of `formatAmount`: `1,234.50`. */
-export function formatAmountValue(amount: Rational, currency: string) {
-  return formatDecimals(amount, currency, true);
+  }).format(formattable(amount));
 }
 
 /** For display: `USD 1,234.50`, with the currency's usual decimals. */
-export function formatAmount(amount: Rational, currency: string) {
+export function formatAmount(amount: Amount, currency: string) {
   return `${currency} ${formatAmountValue(amount, currency)}`;
 }
 
 /**
  * For editing: just the number, without the currency or grouping
- * (`1234.50`). Like the display, it has the currency's usual decimals, so an
- * amount with more (like a third) is rounded if it's edited.
+ * (`1234.50`). Exactly as stored, even with more decimals than the currency
+ * is usually shown with, so editing it doesn't round it.
  */
-export function amountEditText(amount: Rational, currency: string) {
-  return formatDecimals(amount, currency, false);
+export function amountEditText(amount: Amount) {
+  return decimalString(amount);
 }
 
 const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER);
 
-/** Parses `-1,234.5` exactly, as the fraction -2469/2. */
-export function parseAmount(text: string): ParseResult<Rational> {
+/**
+ * Parses `-1,234.5` into an amount stored with `decimals`: -123450 with 2.
+ * More decimals than that are rounded, half away from zero, as the display
+ * rounds.
+ */
+export function parseAmount(text: string, decimals: number): ParseResult<number> {
   const match = /^([+-]?)(\d*)(?:\.(\d*))?$/.exec(text.replaceAll(",", "").trim());
   if (!match || (match[2] === "" && !match[3])) return fail("Enter a number, like -12.50");
 
-  const [, sign, whole, typed = ""] = match;
-  // Trailing zeros don't change the amount, but would make its denominator larger.
-  const fraction = typed.replace(/0+$/, "");
+  const [, sign, whole, fraction = ""] = match;
   // BigInt, as Number would round a too-large one to a safe integer.
-  const digits = BigInt(`${whole}${fraction}` || "0");
-  if (digits > MAX_SAFE) return fail("That amount is too large");
-  const amount = reduce(sign === "-" ? -Number(digits) : Number(digits), 10 ** fraction.length);
-  return amount === null ? fail("That amount has too many decimals") : ok(amount);
+  let units = BigInt(`${whole}${fraction.slice(0, decimals).padEnd(decimals, "0")}` || "0");
+  if ((fraction[decimals] ?? "0") >= "5") units++;
+  if (units > MAX_SAFE) return fail("That amount is too large");
+  // `|| 0` turns -0 (from rounding a small negative amount away) into 0.
+  return ok(sign === "-" ? -Number(units) || 0 : Number(units));
 }
 
 /** A local date as `YYYY-MM-DD`, the format the schema checks with `date()`. */

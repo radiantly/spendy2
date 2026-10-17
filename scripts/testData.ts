@@ -4,8 +4,6 @@
  */
 import { createHash } from "node:crypto";
 import type { Database } from "@sqlite.org/sqlite-wasm";
-import { currencyDecimals } from "../src/lib/money.ts";
-import { reduce } from "../src/lib/rational.ts";
 
 /** As the accounts table has it; `currency` is the display currency. */
 type Account = { name: string; currency: string | null; type: string; identifier: string | null };
@@ -122,12 +120,12 @@ export function generateTestData(
   const rand = random(42);
   const pick = <T>(items: readonly T[]) => items[Math.floor(rand() * items.length)]!;
   const between = (min: number, max: number) => min + rand() * (max - min);
-  /** To the currency's smallest unit (the cent, or the yen), as the fraction the schema stores. */
-  const amount = (value: number, currency: string) => {
-    const units = 10 ** currencyDecimals(currency);
-    const { numerator, denominator } = reduce(Math.round(value * units), units)!;
-    return [numerator, denominator];
-  };
+  const storedDecimals = new Map(
+    db.selectArrays("SELECT code, stored_decimals FROM currencies") as [string, number][],
+  );
+  /** As the schema stores it: in the currency's stored_decimals, rounded. */
+  const amount = (value: number, currency: string) =>
+    Math.round(value * 10 ** storedDecimals.get(currency)!);
 
   db.transaction(() => {
     for (const account of brokerage ? [...ACCOUNTS, BROKERAGE] : ACCOUNTS)
@@ -157,13 +155,12 @@ export function generateTestData(
         db.exec({ sql: "INSERT INTO categories VALUES (?, ?)", bind: [name, parent] });
 
     const insert = db.prepare(`
-      INSERT INTO transactions (seq, id, source, account_name, transfer_account, amount_numerator,
-        amount_denominator, currency, counterparty, category, naive_date, remarks)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO transactions (seq, id, source, account_name, transfer_account, amount,
+        currency, counterparty, category, naive_date, remarks)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const insertConversion = db.prepare(`
-      INSERT INTO conversions (transaction_id, currency, amount_numerator, amount_denominator)
-      VALUES (?, ?, ?, ?)
+      INSERT INTO conversions (transaction_id, currency, amount) VALUES (?, ?, ?)
     `);
     const insertSource = db.prepare("INSERT OR IGNORE INTO sources (hash, remarks) VALUES (?, ?)");
 
@@ -236,7 +233,7 @@ export function generateTestData(
             source,
             row.account.name,
             row.transfer ?? null,
-            ...amount(row.value, row.currency),
+            amount(row.value, row.currency),
             row.currency,
             row.counterparty,
             row.category,
@@ -245,7 +242,7 @@ export function generateTestData(
           ])
           .stepReset();
         if (row.account.currency === "EUR")
-          insertConversion.bind([id, "USD", ...amount(row.value * 1.09, "USD")]).stepReset();
+          insertConversion.bind([id, "USD", amount(row.value * 1.09, "USD")]).stepReset();
       }
     } finally {
       insert.finalize();

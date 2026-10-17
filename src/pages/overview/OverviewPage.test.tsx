@@ -19,6 +19,7 @@ vi.mock("./period.ts", async (importOriginal) => ({
   today: () => "2026-10-09",
 }));
 
+/** A transaction's SQL. Amounts are in whole units, stored in hundredths: every currency here has 2. */
 const insert = (
   seq: number,
   date: string,
@@ -34,16 +35,15 @@ const insert = (
     duplicateOf?: string;
   } = {},
 ) => `
-  INSERT INTO transactions (seq, id, source, account_name, transfer_account, amount_numerator,
-    amount_denominator, currency, counterparty, category, duplicate_of, naive_date)
+  INSERT INTO transactions (seq, id, source, account_name, transfer_account, amount, currency, counterparty, category, duplicate_of, naive_date)
   VALUES (${seq}, '${transactionId(seq)}', ${SOURCE_HASH_SQL}, '${account}', ${extra.transfer ? `'${extra.transfer}'` : "NULL"},
-    ${Math.round(amount * 100)}, 100, '${extra.currency ?? "USD"}',
+    ${Math.round(amount * 100)}, '${extra.currency ?? "USD"}',
     '${counterparty}', ${category === null ? "NULL" : `'${category}'`},
     ${extra.duplicateOf ? `'${extra.duplicateOf}'` : "NULL"}, '${date}')
   ${Object.entries(extra.conversions ?? {})
     .map(
       ([currency, value]) =>
-        `; INSERT INTO conversions VALUES ('${transactionId(seq)}', '${currency}', ${Math.round(value * 100)}, 100)`,
+        `; INSERT INTO conversions VALUES ('${transactionId(seq)}', '${currency}', ${Math.round(value * 100)})`,
     )
     .join("")}
 `;

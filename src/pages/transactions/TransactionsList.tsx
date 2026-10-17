@@ -5,7 +5,7 @@ import {
   type AccountCurrency,
   type ListedTransaction,
 } from "../../db/queries/transactions.ts";
-import type { Rational } from "../../lib/rational.ts";
+import type { Amount } from "../../lib/money.ts";
 import { findName, formatAmountValue } from "./fields.ts";
 
 /** Fixed, so the virtualizer knows where everything is without measuring. */
@@ -142,15 +142,10 @@ function DayHeading({ date, weekday }: { date: string; weekday: string }) {
   );
 }
 
-const amountOf = (transaction: ListedTransaction): Rational => ({
-  numerator: transaction.amount_numerator,
-  denominator: transaction.amount_denominator,
-});
-
 /** `+3,250.49` for money in, `-94.74` for money out. */
-function signedAmount(amount: Rational, currency: string) {
+function signedAmount(amount: Amount, currency: string) {
   const value = formatAmountValue(amount, currency);
-  return amount.numerator > 0 ? `+${value}` : value;
+  return amount.amount > 0 ? `+${value}` : value;
 }
 
 /** What goes where the category usually is. */
@@ -169,7 +164,6 @@ function TransactionItem({
   /** Its account's. */
   displayCurrency: string | null;
 }) {
-  const amount = amountOf(transaction);
   const { text, className } = label(transaction);
 
   return (
@@ -187,9 +181,9 @@ function TransactionItem({
         </span>
       </div>
       <div className="flex shrink-0 flex-col items-end gap-0.5 font-mono">
-        <span className={amount.numerator > 0 ? "text-gain" : ""}>
+        <span className={transaction.amount > 0 ? "text-gain" : ""}>
           <span className="text-xs text-ink-muted">{transaction.currency}</span>{" "}
-          {signedAmount(amount, transaction.currency)}
+          {signedAmount(transaction, transaction.currency)}
         </span>
         {displayCurrency !== null && transaction.currency !== displayCurrency && (
           <Conversion transaction={transaction} currency={displayCurrency} />

@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { configureConnection } from "../connection.ts";
 import { migrate } from "../migrate.ts";
 import { MIGRATIONS } from "../migrations.ts";
-import { reduce, type Rational } from "../../lib/rational.ts";
 import { SOURCE_HASH_SQL, transactionId } from "../../test/fixtures.ts";
 import {
   GET_OVERVIEW_META,
@@ -38,7 +37,7 @@ afterEach(() => db.close());
 type Transaction = {
   date?: string;
   account?: string;
-  amount: number | Rational;
+  amount: number;
   currency?: string;
   /** The amount in other currencies. */
   conversions?: Record<string, number>;
@@ -48,9 +47,13 @@ type Transaction = {
   counterparty?: string;
 };
 
-/** A whole-units amount, to the cent, as the schema stores it. */
-const stored = (amount: number | Rational) =>
-  typeof amount === "number" ? reduce(Math.round(amount * 100), 100)! : amount;
+/** A whole-units amount as the schema stores it, in the currency's stored_decimals. */
+function stored(amount: number, currency: string) {
+  const decimals = Number(
+    db.selectValue("SELECT stored_decimals FROM currencies WHERE code = ?", [currency]),
+  );
+  return Math.round(amount * 10 ** decimals);
+}
 
 /** Inserts a transaction; amounts are in whole units. Returns its id. */
 function add({
@@ -66,18 +69,16 @@ function add({
 }: Transaction) {
   seq++;
   const id = transactionId(seq);
-  const { numerator, denominator } = stored(amount);
   db.exec({
-    sql: `INSERT INTO transactions (seq, id, source, account_name, transfer_account, amount_numerator,
-      amount_denominator, currency, counterparty, category, duplicate_of, naive_date)
-      VALUES (?, ?, ${SOURCE_HASH_SQL}, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    sql: `INSERT INTO transactions (seq, id, source, account_name, transfer_account, amount,
+      currency, counterparty, category, duplicate_of, naive_date)
+      VALUES (?, ?, ${SOURCE_HASH_SQL}, ?, ?, ?, ?, ?, ?, ?, ?)`,
     bind: [
       seq,
       id,
       account,
       transfer ?? null,
-      numerator,
-      denominator,
+      stored(amount, currency),
       currency,
       counterparty,
       category,
@@ -86,11 +87,7 @@ function add({
     ],
   });
   for (const [to, value] of Object.entries(conversions)) {
-    const conversion = stored(value);
-    db.exec({
-      sql: "INSERT INTO conversions VALUES (?, ?, ?, ?)",
-      bind: [id, to, conversion.numerator, conversion.denominator],
-    });
+    db.exec({ sql: "INSERT INTO conversions VALUES (?, ?, ?)", bind: [id, to, stored(value, to)] });
   }
   return id;
 }
@@ -181,10 +178,14 @@ describe("GET_PERIOD_SUMMARY", () => {
     expect(summary()).toMatchObject({ spent: 42.5, income: 1000, transactions: 3 });
   });
 
-  it("adds up fractions", () => {
-    for (let i = 0; i < 3; i++) add({ amount: { numerator: -1, denominator: 3 } });
+  it("reads each amount in its currency's stored decimals", () => {
+    db.exec("INSERT INTO accounts VALUES ('Japan', 'JPY', 'Bank', NULL)");
+    db.exec("UPDATE currencies SET stored_decimals = 4 WHERE code = 'USD'");
+    add({ amount: -0.1234 });
+    add({ amount: -1500, account: "Japan", currency: "JPY" });
 
-    expect(summary()!.spent).toBeCloseTo(1, 10);
+    expect(summary()!.spent).toBeCloseTo(0.1234, 10);
+    expect(summary({ ...OCTOBER, $display: "JPY" })!.spent).toBe(1500);
   });
 
   it("covers accounts shown in the display currency, and it in accounts without one", () => {
@@ -481,28 +482,25 @@ describe("LIST_RECENT_TRANSACTIONS", () => {
     ]);
   });
 
-  it("has the exact amount, and only its conversion to the display currency", () => {
-    add({
-      amount: { numerator: -1, denominator: 3 },
-      currency: "EUR",
-      conversions: { INR: -30, USD: -0.36 },
-    });
+  it("has the amount as stored, and only its conversion to the display currency", () => {
+    db.exec("UPDATE currencies SET stored_decimals = 3 WHERE code = 'EUR'");
+    add({ amount: -0.333, currency: "EUR", conversions: { INR: -30, USD: -0.36 } });
     add({ amount: -1, date: "2026-10-01" });
 
     expect(rows(LIST_RECENT_TRANSACTIONS, bind)).toMatchObject([
       {
-        amount_numerator: -1,
-        amount_denominator: 3,
+        amount: -333,
+        decimals: 3,
         currency: "EUR",
-        display_numerator: -9,
-        display_denominator: 25,
+        conversion_amount: -36,
+        conversion_decimals: 2,
       },
       {
-        amount_numerator: -1,
-        amount_denominator: 1,
+        amount: -100,
+        decimals: 2,
         currency: "USD",
-        display_numerator: null,
-        display_denominator: null,
+        conversion_amount: null,
+        conversion_decimals: null,
       },
     ]);
   });

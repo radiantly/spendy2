@@ -273,7 +273,7 @@ function TransactionsTable({
     // Unchanged text is never parsed, so a stored value the parser wouldn't
     // accept can still be left as it is.
     if (text === editor.editText(row)) return { ok: true };
-    const result = editor.parse(text, { categories, accounts, create });
+    const result = editor.parse(text, row, { categories, accounts, create });
     if (!result.ok) return result;
     // Typed differently but the same value, like `1234.5` for `1234.50`.
     if (hasPatch(row, result.value)) return { ok: true };
@@ -281,9 +281,9 @@ function TransactionsTable({
     return { ok: true };
   }
 
-  /** What an emptied cell stores, or why it can't be empty. */
-  function clearedValue(editor: CellEditor) {
-    return editor.parse("", { categories, accounts, create: false });
+  /** What `row`'s emptied cell stores, or why it can't be empty. */
+  function clearedValue(editor: CellEditor, row: TransactionRow) {
+    return editor.parse("", row, { categories, accounts, create: false });
   }
 
   /** Empties the cells in `area` that can be empty, leaving the rest. */
@@ -291,11 +291,11 @@ function TransactionsTable({
     const changes: TransactionChange[] = [];
     for (let column = area.left; column <= area.right; column++) {
       const editor = editorOf(column);
-      const cleared = editor && clearedValue(editor);
-      if (!editor || !cleared?.ok) continue;
+      if (!editor) continue;
       for (let index = area.top; index <= area.bottom; index++) {
         const row = tableRows[index]!;
-        if (!hasPatch(row.original, cleared.value))
+        const cleared = clearedValue(editor, row.original);
+        if (cleared.ok && !hasPatch(row.original, cleared.value))
           changes.push({ rowIndex: row.index, field: editor.field, patch: cleared.value });
       }
     }
@@ -350,7 +350,8 @@ function TransactionsTable({
       else if (!editor) return;
       // Delete clears a cell that can be empty. Otherwise it, and Backspace
       // always, start an edit of empty text.
-      else if (event.key === "Delete" && clearedValue(editor).ok) clearCells(bounds(selection));
+      else if (event.key === "Delete" && clearedValue(editor, tableRows[active.row]!.original).ok)
+        clearCells(bounds(selection));
       else {
         reveal(active);
         startEditing(active, 0, "");

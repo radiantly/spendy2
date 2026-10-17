@@ -8,6 +8,7 @@ import {
   LIST_ACCOUNTS,
   LIST_CATEGORY_NAMES,
   LIST_TRANSACTIONS,
+  listedTransactions,
   UPDATE_TRANSACTION,
   updateBinds,
   type AccountCurrency,
@@ -53,13 +54,13 @@ function TransactionsPage() {
       database.query(LIST_CATEGORY_NAMES),
       database.query(LIST_ACCOUNTS),
     ]).then(
-      ([rows, categories, accounts]) => {
+      ([transactions, categories, accounts]) => {
         if (cancelled) return;
         setLoaded({
-          // The queries' columns match their row types, and the schema
-          // guarantees their types.
-          rows: rows as ListedTransaction[],
+          rows: listedTransactions(transactions),
           categories: namesOf(categories),
+          // The query's columns match the row type, and the schema
+          // guarantees their types.
           accounts: accounts as AccountCurrency[],
         });
       },
@@ -84,9 +85,9 @@ function TransactionsPage() {
       database.query(GET_TRANSACTIONS, [JSON.stringify(ids)]),
       database.query(LIST_CATEGORY_NAMES),
     ]).then(
-      ([rows, categories]) => {
+      ([transactions, categories]) => {
         if (cancelled) return;
-        const stored = new Map((rows as ListedTransaction[]).map((row) => [row.id, row]));
+        const stored = new Map(listedTransactions(transactions).map((row) => [row.id, row]));
         setLoaded(
           (current) =>
             current && {
@@ -172,9 +173,9 @@ function TransactionsPage() {
           }`,
         );
         const stored = new Map(
-          (
-            (await database.query(GET_TRANSACTIONS, [JSON.stringify(ids)])) as ListedTransaction[]
-          ).map((row) => [row.id, row]),
+          listedTransactions(await database.query(GET_TRANSACTIONS, [JSON.stringify(ids)])).map(
+            (row) => [row.id, row],
+          ),
         );
         // If a later edit changed the field again, that edit's write decides
         // it. A field's columns go back together, so they always match.

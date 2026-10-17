@@ -6,7 +6,6 @@ import { Toaster } from "sonner";
 import type { Edit } from "../../db/databaseContext.ts";
 import type { Moved } from "../../db/editHistory.ts";
 import type { EditedCell, TransactionRow } from "../../db/queries/transactions.ts";
-import { reduce } from "../../lib/rational.ts";
 import { mouse, pointIn } from "../../test/mouse.ts";
 import TransactionsTable, { ROW_HEIGHT } from "./TransactionsTable.tsx";
 
@@ -14,11 +13,14 @@ const ROW_COUNT = 100_000;
 const CATEGORIES = ["Dining out", "Groceries"];
 const ACCOUNTS = ["Everyday Checking", "Rewards Credit Card", "Savings"];
 
-/** -1,234.50 first, then a third, then minus cents. */
+/**
+ * -1,234.50 first, then 0.3333, stored with more decimals than USD is shown
+ * with, then minus cents.
+ */
 function amountOf(i: number) {
-  if (i === 0) return { numerator: -2469, denominator: 2 };
-  if (i === 1) return { numerator: 1, denominator: 3 };
-  return reduce(-i, 100)!;
+  if (i === 0) return { amount: -123_450, decimals: 2 };
+  if (i === 1) return { amount: 3333, decimals: 4 };
+  return { amount: -i, decimals: 2 };
 }
 
 function makeRows(count: number): TransactionRow[] {
@@ -28,8 +30,7 @@ function makeRows(count: number): TransactionRow[] {
     account_name: "Everyday Checking",
     counterparty: i === 0 ? "Corner Market" : `Shop ${i}`,
     category: i % 2 === 0 ? "Groceries" : null,
-    amount_numerator: amountOf(i).numerator,
-    amount_denominator: amountOf(i).denominator,
+    ...amountOf(i),
     currency: "USD",
     remarks: null,
   }));
@@ -258,11 +259,19 @@ describe("TransactionsTable", () => {
       await userEvent.keyboard("{Enter}");
 
       expect(onCommit).toHaveBeenCalledWith([
-        {
-          rowIndex: 0,
-          field: "amount",
-          patch: { amount_numerator: -4001, amount_denominator: 2 },
-        },
+        { rowIndex: 0, field: "amount", patch: { amount: -200_050 } },
+      ]);
+    });
+
+    it("rounds what's typed to the decimals the amount is stored with", async () => {
+      await renderTable();
+      await editAtCharacter(page.getByText("-1,234.50"), 0);
+
+      await input().fill("-2,000.505");
+      await userEvent.keyboard("{Enter}");
+
+      expect(onCommit).toHaveBeenCalledWith([
+        { rowIndex: 0, field: "amount", patch: { amount: -200_051 } },
       ]);
     });
 
@@ -305,29 +314,25 @@ describe("TransactionsTable", () => {
       await expect.element(page.getByText("0.33", { exact: true })).toBeVisible();
     });
 
-    it("doesn't change an amount with more decimals than its currency when left as it is", async () => {
+    it("edits an amount with more decimals than its currency exactly, so leaving it changes nothing", async () => {
       await renderTable();
       await editAtCharacter(page.getByText("0.33", { exact: true }), 0);
 
-      expect(input().element()).toHaveProperty("value", "0.33");
+      expect(input().element()).toHaveProperty("value", "0.3333");
       await userEvent.keyboard("{Enter}");
 
       expect(onCommit).not.toHaveBeenCalled();
     });
 
-    it("rounds an amount with more decimals than its currency once it's edited", async () => {
+    it("keeps an edited amount in the decimals it's stored with", async () => {
       await renderTable();
       await editAtCharacter(page.getByText("0.33", { exact: true }), 0);
 
-      await input().fill("0.330");
+      await input().fill("0.33");
       await userEvent.keyboard("{Enter}");
 
       expect(onCommit).toHaveBeenCalledWith([
-        {
-          rowIndex: 1,
-          field: "amount",
-          patch: { amount_numerator: 33, amount_denominator: 100 },
-        },
+        { rowIndex: 1, field: "amount", patch: { amount: 3300 } },
       ]);
     });
 

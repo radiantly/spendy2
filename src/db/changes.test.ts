@@ -18,11 +18,10 @@ beforeEach(() => {
     INSERT INTO accounts VALUES ('Checking', 'USD', 'Bank', NULL), ('Savings', 'USD', 'Bank', NULL);
     INSERT INTO sources (hash, remarks) VALUES (${SOURCE_HASH_SQL}, 'statement.csv');
     INSERT INTO categories VALUES ('Food', NULL), ('Groceries', 'Food'), ('Bills', NULL);
-    INSERT INTO transactions (seq, id, source, account_name, amount_numerator, amount_denominator,
-      currency, counterparty, category, naive_date, remarks)
-    VALUES (1, '${T1}', ${SOURCE_HASH_SQL}, 'Checking', -1, 1, 'USD', 'Corner Market', 'Groceries', '2026-10-01', 'weekly'),
-           (2, '${T2}', ${SOURCE_HASH_SQL}, 'Checking', -2, 1, 'USD', 'City Power', 'Bills', '2026-10-02', NULL);
-    INSERT INTO conversions VALUES ('${T1}', 'EUR', -9, 10);
+    INSERT INTO transactions (seq, id, source, account_name, amount, currency, counterparty, category, naive_date, remarks)
+    VALUES (1, '${T1}', ${SOURCE_HASH_SQL}, 'Checking', -100, 'USD', 'Corner Market', 'Groceries', '2026-10-01', 'weekly'),
+           (2, '${T2}', ${SOURCE_HASH_SQL}, 'Checking', -200, 'USD', 'City Power', 'Bills', '2026-10-02', NULL);
+    INSERT INTO conversions VALUES ('${T1}', 'EUR', -90);
   `);
 });
 afterEach(() => db.close());
@@ -50,10 +49,7 @@ const redo = (changes: Uint8Array) => applyChanges(sqlite3, db, changes);
 describe("undo and redo", () => {
   it.each([
     ["an edit", `UPDATE transactions SET counterparty = 'Corner Shop' WHERE id = '${T1}'`],
-    [
-      "both parts of an amount",
-      `UPDATE transactions SET amount_numerator = -5, amount_denominator = 2 WHERE id = '${T1}'`,
-    ],
+    ["an amount", `UPDATE transactions SET amount = -250 WHERE id = '${T1}'`],
     // The triggers delete Groceries, then Food.
     ["clearing a category", `UPDATE transactions SET category = NULL WHERE id = '${T1}'`],
     [

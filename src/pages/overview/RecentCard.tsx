@@ -58,25 +58,18 @@ function RecentCard({ overview, className = "" }: { overview: Overview; classNam
               </div>
               <div className="flex shrink-0 flex-col items-end gap-0.5 font-mono">
                 <span
-                  className={`text-sm font-medium ${transaction.amount_numerator > 0 ? "text-gain" : ""}`}
+                  className={`text-sm font-medium ${transaction.amount > 0 ? "text-gain" : ""}`}
                 >
-                  {formatMoney(
-                    {
-                      numerator: transaction.amount_numerator,
-                      denominator: transaction.amount_denominator,
-                    },
-                    transaction.currency,
-                    { signed: true },
-                  )}
+                  {formatMoney(transaction, transaction.currency, { signed: true })}
                 </span>
-                {transaction.display_numerator !== null &&
-                  transaction.display_denominator !== null && (
+                {transaction.conversion_amount !== null &&
+                  transaction.conversion_decimals !== null && (
                     <span className="text-[11px] text-ink-muted">
                       ≈{" "}
                       {formatMoney(
                         {
-                          numerator: transaction.display_numerator,
-                          denominator: transaction.display_denominator,
+                          amount: transaction.conversion_amount,
+                          decimals: transaction.conversion_decimals,
                         },
                         currency,
                         { signed: true },

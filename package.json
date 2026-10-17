@@ -28,6 +28,7 @@
     "@serenity-kit/opaque": "file:../opaque/build/ristretto",
     "@sqlite.org/sqlite-wasm": "^3.53.4-build2",
     "@tailwindcss/vite": "^4.3.3",
+    "@tanstack/react-query": "^5.104.3",
     "@tanstack/react-table": "^9.2.8",
     "@tanstack/react-virtual": "^3.14.14",
     "@zxcvbn-ts/core": "^4.2.0",
