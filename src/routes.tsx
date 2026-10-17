@@ -21,5 +21,8 @@ export const routes: RouteObject[] = [
   { path: "/register", element: <AuthPage mode="register" /> },
 ];
 
-/** Sizes icons by height so non-square ones keep the same scale (see `.icon` in index.css). */
-export const iconContext: IconContext = { size: "auto", className: "icon" };
+/**
+ * Sizes icons by height so non-square ones keep the same scale (see `.icon` in
+ * index.css). The size is 100% rather than a length, which would fix the width.
+ */
+export const iconContext: IconContext = { size: "100%", className: "icon" };

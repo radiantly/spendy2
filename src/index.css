@@ -78,9 +78,10 @@
  * wider viewBox (e.g. FaEyeSlash at 640 wide vs FaEye at 576). Size by height
  * instead, like Font Awesome's own CSS, so all icons share the same scale.
  *
- * App's IconContext sets the width/height attributes to "auto" so the width
- * follows the viewBox's aspect ratio; with fixed attributes, `width: auto`
- * would resolve to the attribute's value instead. Don't use react-icons'
+ * App's IconContext sets the width/height attributes to "100%" so the width
+ * follows the viewBox's aspect ratio; with a length, `width: auto` would
+ * resolve to the attribute's value instead. ("auto" works too, but isn't a
+ * valid attribute value, so browsers log an error for it.) Don't use react-icons'
  * `size` prop; size icons with font-size or height utilities, which take
  * precedence over this layer.
  */
