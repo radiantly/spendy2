@@ -1,4 +1,5 @@
 import { FaCaretDown } from "react-icons/fa6";
+import ActivePill from "../../components/ActivePill.tsx";
 import { PRESETS, type DateRange, type PeriodChoice } from "./period.ts";
 
 type PeriodPickerProps = {
@@ -11,9 +12,12 @@ type PeriodPickerProps = {
 const CHOICES = [...PRESETS, { id: "custom", label: "Custom" }] as const;
 type ChoiceId = (typeof CHOICES)[number]["id"];
 
+/** The anchor the buttons' pill is under: the pressed button. */
+const PRESSED = "--pressed-period";
+
 const pillClass = (pressed: boolean) =>
   `min-h-9 rounded-full px-3.5 text-sm font-medium outline-none focus-visible:ring-3 focus-visible:ring-focus ${
-    pressed ? "bg-ink text-canvas" : "text-ink-muted hover:text-ink"
+    pressed ? "text-ink" : "text-ink-muted hover:text-ink"
   }`;
 
 /**
@@ -34,7 +38,7 @@ function PeriodPicker({ choice, current, onChange }: PeriodPickerProps) {
       <div
         role="group"
         aria-label="Choose period"
-        className="hidden flex-wrap gap-1 rounded-full border border-line bg-surface p-1 md:flex"
+        className="relative isolate hidden flex-wrap gap-1 rounded-full border border-line bg-surface p-1 select-none md:flex"
       >
         {CHOICES.map(({ id, label }) => (
           <button
@@ -43,10 +47,12 @@ function PeriodPicker({ choice, current, onChange }: PeriodPickerProps) {
             aria-pressed={choice.kind === id}
             onClick={() => choose(id)}
             className={pillClass(choice.kind === id)}
+            style={choice.kind === id ? { anchorName: PRESSED } : undefined}
           >
             {label}
           </button>
         ))}
+        <ActivePill name={PRESSED} />
       </div>
       <div className="relative md:hidden">
         <select

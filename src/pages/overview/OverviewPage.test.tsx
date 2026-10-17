@@ -542,6 +542,32 @@ describe("OverviewPage", () => {
         .toHaveAttribute("aria-pressed", "true");
     });
 
+    it("slides the pill from the period it's under to the one picked", async () => {
+      await opened();
+      const group = page.getByRole("group", { name: "Choose period" });
+      const pill = group.element().querySelector(":scope > [aria-hidden]")!;
+      const button = (name: string) => group.getByRole("button", { name });
+      expect(pill.getBoundingClientRect().toJSON()).toEqual(rect(button("This month")).toJSON());
+
+      await userEvent.click(button("Last month"));
+
+      await expect.element(button("Last month")).toHaveAttribute("aria-pressed", "true");
+      const sliding = pill.getAnimations() as CSSTransition[];
+      expect(sliding.map(({ transitionProperty }) => transitionProperty)).toContain("left");
+      await Promise.all(sliding.map(({ finished }) => finished));
+      expect(pill.getBoundingClientRect().toJSON()).toEqual(rect(button("Last month")).toJSON());
+    });
+
+    it("doesn't let the periods' labels be selected", async () => {
+      await opened();
+
+      getSelection()!.selectAllChildren(
+        page.getByRole("group", { name: "Choose period" }).element(),
+      );
+
+      expect(getSelection()!.toString()).toBe("");
+    });
+
     it("shows everything, with nothing to compare", async () => {
       await opened();
 

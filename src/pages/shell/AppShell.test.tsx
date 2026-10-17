@@ -166,6 +166,38 @@ describe("AppShell", () => {
     expect(rect(avatar).top).toBeLessThan(tabs.bottom);
   });
 
+  it("slides the pill from the tab it's under to the one picked", async () => {
+    await loggedIn(null);
+    await renderApp("/");
+    const nav = page.getByRole("navigation", { name: "Main" });
+    await expect.element(nav).toBeVisible();
+    const pill = nav.element().querySelector(":scope > [aria-hidden]")!;
+    const [overview, transactions] = ["Overview", "Transactions"].map((name) =>
+      nav.getByRole("link", { name }),
+    );
+    await expect.element(overview!).toHaveAttribute("aria-current", "page");
+    expect(pill.getBoundingClientRect().toJSON()).toEqual(rect(overview!).toJSON());
+
+    await userEvent.click(transactions!);
+
+    await expect.element(transactions!).toHaveAttribute("aria-current", "page");
+    const sliding = pill.getAnimations() as CSSTransition[];
+    expect(sliding.map(({ transitionProperty }) => transitionProperty)).toContain("left");
+    await Promise.all(sliding.map(({ finished }) => finished));
+    expect(pill.getBoundingClientRect().toJSON()).toEqual(rect(transactions!).toJSON());
+  });
+
+  it("doesn't let the tabs' labels be selected", async () => {
+    await loggedIn(null);
+    await renderApp("/");
+    const tabs = page.getByRole("navigation", { name: "Main" });
+    await expect.element(tabs).toBeVisible();
+
+    getSelection()!.selectAllChildren(tabs.element());
+
+    expect(getSelection()!.toString()).toBe("");
+  });
+
   it("shows just the logo's mark below 640px, and its name from there", async () => {
     await page.viewport(639, 800);
     await loggedIn(null);

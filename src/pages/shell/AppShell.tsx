@@ -3,11 +3,15 @@ import { matchPath, Navigate, NavLink, useLocation } from "react-router";
 import { useAuth } from "../../auth/useAuth.ts";
 import DatabaseProvider from "../../db/DatabaseProvider.tsx";
 import { useDatabase } from "../../db/useDatabase.ts";
+import ActivePill from "../../components/ActivePill.tsx";
 import Logo from "../../components/Logo.tsx";
 import UserAvatar from "../../components/UserAvatar.tsx";
 import { useHistoryKeys } from "./historyKeys.ts";
 import SaveControls from "./SaveControls.tsx";
 import { describeOpenError } from "./openError.ts";
+
+/** The anchor the tabs' pill is under: the active tab. */
+const ACTIVE_TAB = "--active-tab";
 
 /** A page behind login, shown at `path`. */
 export type ShellPage = { path: string; element: ReactNode };
@@ -52,10 +56,11 @@ function Header({ username }: { username: string }) {
       </div>
       <nav
         aria-label="Main"
-        className="flex rounded-full border border-line bg-surface p-1 text-sm font-medium"
+        className="relative isolate flex rounded-full border border-line bg-surface p-1 text-sm font-medium select-none"
       >
         <Tab to="/">Overview</Tab>
         <Tab to="/transactions">Transactions</Tab>
+        <ActivePill name={ACTIVE_TAB} />
       </nav>
       <div className="flex flex-1 items-center justify-end gap-4 sm:ml-auto sm:flex-none">
         <SaveControls placement="header" />
@@ -72,9 +77,10 @@ function Tab({ to, children }: { to: string; children: string }) {
       end
       className={({ isActive }) =>
         `rounded-full px-4 py-2 outline-none focus-visible:ring-3 focus-visible:ring-focus ${
-          isActive ? "bg-ink text-canvas" : "text-ink-muted hover:text-ink"
+          isActive ? "text-ink" : "text-ink-muted hover:text-ink"
         }`
       }
+      style={({ isActive }) => (isActive ? { anchorName: ACTIVE_TAB } : undefined)}
     >
       {children}
     </NavLink>
