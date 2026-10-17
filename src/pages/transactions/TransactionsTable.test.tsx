@@ -400,11 +400,28 @@ describe("TransactionsTable", () => {
       await renderTable();
       await editAtCharacter(page.getByText("Corner Market"), 0);
       await input().fill("Corner Shop");
+      // Firefox scrolls the caret into view a frame after fill(), which a
+      // user's scrolling never comes before.
+      await new Promise((resolve) => requestAnimationFrame(resolve));
 
       window.scrollTo(0, document.documentElement.scrollHeight);
       await expect.element(page.getByText(`Shop ${ROW_COUNT - 1}`)).toBeInTheDocument();
 
       expect(input().element()).toHaveProperty("value", "Corner Shop");
+    });
+
+    it("lets the mouse wheel scroll the page away from the cell being edited", async () => {
+      await renderTable();
+      await editAtCharacter(page.getByText("Shop 2"), 0);
+
+      for (let i = 0; i < 5; i++) {
+        await userEvent.wheel(grid(), { delta: { y: 300 } });
+        // Frames between ticks, as between a user's.
+        for (let frame = 0; frame < 3; frame++)
+          await new Promise((resolve) => requestAnimationFrame(resolve));
+      }
+
+      await expect.poll(() => window.scrollY).toBe(1500);
     });
 
     it("moves to the cell below after Enter, with the grid focused", async () => {
@@ -736,12 +753,20 @@ describe("TransactionsTable", () => {
     });
 
     it("lets Tab leave the grid from its last cell", async () => {
-      await activate("Corner Market", DATE);
+      // Somewhere after the grid for focus to go: past the end of the page,
+      // where it goes differs between browsers.
+      await render(
+        <>
+          {table()}
+          <button type="button">After the table</button>
+        </>,
+      );
+      await makeActive("Corner Market", DATE);
       await userEvent.keyboard("{Control>}{End}{/Control}");
 
       await userEvent.keyboard("{Tab}");
 
-      await expect.element(grid()).not.toHaveFocus();
+      await expect.element(page.getByRole("button", { name: "After the table" })).toHaveFocus();
     });
 
     it("goes to the start and end of the row with Home and End", async () => {
@@ -1225,7 +1250,7 @@ describe("TransactionsTable", () => {
 
       await mouse.down(from);
       await mouse.move(below);
-      expect(selectedCells()).toHaveLength(2);
+      await expect.poll(() => selectedCells().length).toBe(2);
       await mouse.move(back);
       await mouse.up(back);
 
@@ -1299,6 +1324,7 @@ describe("TransactionsTable", () => {
 
       await mouse.down(pointIn(cellOf("Corner Market", COUNTERPARTY).element()));
       await mouse.move(end);
+      await expect.poll(() => selectedCells().length).toBe(2);
       // The release happened where the page couldn't see it, as when
       // switching windows mid-drag.
       document.dispatchEvent(
@@ -1389,6 +1415,21 @@ describe("TransactionsTable", () => {
 
       expect(selectedCells().length).toBeGreaterThan(10);
       expect(activeCell()?.textContent).toBe("Shop 5");
+    });
+
+    it("extends the range when the page scrolls under the held mouse", async () => {
+      await renderTable();
+      const point = pointIn(cellOf("Shop 2", COUNTERPARTY).element());
+      await mouse.down(pointIn(cellOf("Corner Market", COUNTERPARTY).element()));
+      await mouse.move(point);
+      await expect.poll(() => selectedCells().length).toBe(3);
+
+      // As the mouse wheel would, with the mouse still.
+      window.scrollBy(0, ROW_HEIGHT * 3);
+
+      await expect.poll(() => selectedCells().length).toBe(6);
+      await mouse.up(point);
+      expect(activeCell()?.textContent).toBe("Corner Market");
     });
 
     it("doesn't scroll the page for a press near the bottom of the window", async () => {
@@ -1695,6 +1736,62 @@ describe("TransactionsTable", () => {
 
       const menu = page.getByRole("listbox").element().parentElement!.getBoundingClientRect();
       expect(menu.bottom).toBeLessThanOrEqual(cell.element().getBoundingClientRect().top);
+    });
+
+    it("moves the menu above the cell when scrolling takes it near the bottom of the window", async () => {
+      await renderTable();
+      window.scrollTo(0, ROW_HEIGHT * 40);
+      // A row in the top half of the window, once the rows there are rendered.
+      const inTopHalf = () =>
+        [...renderedRows()].find((row) => {
+          const { top } = row.getBoundingClientRect();
+          return top > window.innerHeight / 3 && top < window.innerHeight / 2;
+        });
+      await expect.poll(inTopHalf).toBeDefined();
+      const cell = inTopHalf()!.children[ACCOUNT]!;
+      await userEvent.dblClick(page.elementLocator(cell));
+      const menu = () => page.getByRole("listbox").element().parentElement!.getBoundingClientRect();
+      await expect.element(page.getByRole("listbox")).toBeVisible();
+      expect(menu().top).toBeGreaterThanOrEqual(cell.getBoundingClientRect().bottom);
+
+      // Up, so the cell ends a row above the bottom of the window.
+      window.scrollBy(0, cell.getBoundingClientRect().bottom - (window.innerHeight - ROW_HEIGHT));
+
+      await expect.poll(() => menu().bottom <= cell.getBoundingClientRect().top).toBe(true);
+    });
+
+    it("shows the menu over the column headers when it opens up into them", async () => {
+      await page.viewport(1280, 150);
+      await renderTable();
+      const lastVisible = [...renderedRows()]
+        .filter((row) => row.getBoundingClientRect().bottom <= window.innerHeight)
+        .at(-1)!;
+
+      await userEvent.dblClick(page.elementLocator(lastVisible.children[ACCOUNT]!));
+
+      const menu = page.getByRole("listbox").element().parentElement!;
+      const header = page.getByRole("columnheader").first().element().getBoundingClientRect();
+      const box = menu.getBoundingClientRect();
+      expect(box.top).toBeLessThan(header.bottom);
+      expect(menu.contains(document.elementFromPoint(box.left + 10, box.top + 2))).toBe(true);
+    });
+
+    it("shows an error above a cell near the bottom of the window", async () => {
+      await renderTable();
+      const lastVisible = [...renderedRows()]
+        .filter((row) => row.getBoundingClientRect().bottom <= window.innerHeight)
+        .at(-1)!;
+      const cell = lastVisible.children[AMOUNT]!;
+      await userEvent.dblClick(page.elementLocator(cell));
+
+      await input().fill("twelve");
+      await userEvent.keyboard("{Enter}");
+
+      const error = page.getByRole("alert");
+      await expect.element(error).toBeVisible();
+      expect(error.element().getBoundingClientRect().bottom).toBeLessThanOrEqual(
+        cell.getBoundingClientRect().top,
+      );
     });
 
     it("keeps the highlighted option scrolled into view", async () => {

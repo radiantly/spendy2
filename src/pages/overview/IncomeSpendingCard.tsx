@@ -1,17 +1,10 @@
-import { scaleBand, scaleLinear } from "d3-scale";
-import { useRef } from "react";
 import { formatMoney } from "../../lib/money.ts";
-import { useElementWidth } from "../../lib/useElementWidth.ts";
 import { Card } from "./Card.tsx";
 import { CHART_MONTHS, type Overview } from "./loadOverview.ts";
 import { monthLabel } from "./period.ts";
+import { percent } from "./shape.ts";
 
 const BARS_HEIGHT = 190;
-const LABEL_HEIGHT = 24;
-/** Of each month's slot, the share left as space between it and the next. */
-const MONTH_PADDING = 0.2;
-/** Between a month's two bars (px). */
-const BAR_GAP = 4;
 
 /** Income and spending month by month, with the period's months picked out. */
 function IncomeSpendingCard({
@@ -22,18 +15,7 @@ function IncomeSpendingCard({
   className?: string;
 }) {
   const { months, currency } = overview;
-  const ref = useRef<HTMLDivElement>(null);
-  const width = useElementWidth(ref);
-
-  const x = scaleBand<string>()
-    .domain(months.map(({ month }) => month))
-    .range([0, width])
-    .paddingInner(MONTH_PADDING);
   const most = Math.max(...months.flatMap(({ income, spent }) => [income, spent]));
-  const y = scaleLinear()
-    .domain([0, most || 1])
-    .range([BARS_HEIGHT, 0]);
-  const barWidth = Math.max(0, (x.bandwidth() - BAR_GAP) / 2);
   const money = (amount: number) => formatMoney(amount, currency, { whole: true });
 
   return (
@@ -56,47 +38,28 @@ function IncomeSpendingCard({
       <p className="-mt-3 text-sm text-ink-muted">
         Last {CHART_MONTHS} months · selected period highlighted
       </p>
-      {/* Out of the flow, as in CumulativeChart. */}
-      <div ref={ref} className="relative" style={{ height: BARS_HEIGHT + LABEL_HEIGHT }}>
-        {width > 0 && (
-          <svg
-            width={width}
-            height={BARS_HEIGHT + LABEL_HEIGHT}
-            aria-hidden
-            className="absolute inset-0"
-          >
-            {months.map(({ month, income, spent, inPeriod }) => {
-              const left = x(month)!;
-              const bars = [
-                { amount: income, left, fill: "fill-ink-muted" },
-                { amount: spent, left: left + barWidth + BAR_GAP, fill: "fill-coral" },
-              ];
-              return (
-                <g key={month} opacity={inPeriod ? 1 : 0.28}>
-                  {bars.map((bar) => (
-                    <rect
-                      key={bar.fill}
-                      x={bar.left}
-                      y={y(bar.amount)}
-                      width={barWidth}
-                      height={BARS_HEIGHT - y(bar.amount)}
-                      rx={Math.min(6, barWidth / 2)}
-                      className={bar.fill}
-                    />
-                  ))}
-                  <text
-                    x={left + x.bandwidth() / 2}
-                    y={BARS_HEIGHT + LABEL_HEIGHT - 4}
-                    textAnchor="middle"
-                    className={`font-mono text-xs ${inPeriod ? "fill-ink" : "fill-ink-muted"}`}
-                  >
-                    {monthLabel(month)}
-                  </text>
-                </g>
-              );
-            })}
-          </svg>
-        )}
+      <div aria-hidden className="grid auto-cols-fr grid-flow-col gap-2">
+        {months.map(({ month, income, spent, inPeriod }) => (
+          <div key={month} className={`flex flex-col gap-1.5 ${inPeriod ? "" : "opacity-28"}`}>
+            <div className="flex items-end gap-1" style={{ height: BARS_HEIGHT }}>
+              {[
+                { amount: income, color: "bg-ink-muted" },
+                { amount: spent, color: "bg-coral" },
+              ].map(({ amount, color }) => (
+                <div
+                  key={color}
+                  className={`flex-1 rounded-md ${color}`}
+                  style={{ height: `${percent(amount, most)}%` }}
+                />
+              ))}
+            </div>
+            <span
+              className={`text-center font-mono text-xs ${inPeriod ? "text-ink" : "text-ink-muted"}`}
+            >
+              {monthLabel(month)}
+            </span>
+          </div>
+        ))}
       </div>
       <ul className="sr-only">
         {months.map(({ month, income, spent, inPeriod }) => (

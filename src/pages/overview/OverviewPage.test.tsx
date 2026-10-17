@@ -3,6 +3,7 @@ import { page, userEvent, type Locator } from "vitest/browser";
 import { downloadDatabase, downloadDatabaseIfChanged, uploadDatabase } from "../../api/database.ts";
 import { renderApp } from "../../test/renderAuthPage.tsx";
 import { rect } from "../../test/renderAuthPage.tsx";
+import { itFailsInFirefox } from "../../test/browsers.ts";
 import { SOURCE_HASH_SQL, transactionId } from "../../test/fixtures.ts";
 import { holdNext } from "../../test/holdNext.ts";
 import { loggedIn, storedDatabase } from "../../test/storedDatabase.ts";
@@ -561,20 +562,36 @@ describe("OverviewPage", () => {
         .toHaveAttribute("aria-pressed", "true");
     });
 
-    it("slides the pill from the period it's under to the one picked", async () => {
-      await opened();
-      const group = page.getByRole("group", { name: "Choose period" });
-      const pill = group.element().querySelector(":scope > [aria-hidden]")!;
-      const button = (name: string) => group.getByRole("button", { name });
-      expect(pill.getBoundingClientRect().toJSON()).toEqual(rect(button("This month")).toJSON());
+    describe("the pill", () => {
+      /** Picks Last month, the pill having been under This month. */
+      async function pickLastMonth() {
+        await opened();
+        const group = page.getByRole("group", { name: "Choose period" });
+        const pill = group.element().querySelector(":scope > [aria-hidden]")!;
+        const button = (name: string) => group.getByRole("button", { name });
+        expect(pill.getBoundingClientRect().toJSON()).toEqual(rect(button("This month")).toJSON());
 
-      await userEvent.click(button("Last month"));
+        await userEvent.click(button("Last month"));
 
-      await expect.element(button("Last month")).toHaveAttribute("aria-pressed", "true");
-      const sliding = pill.getAnimations() as CSSTransition[];
-      expect(sliding.map(({ transitionProperty }) => transitionProperty)).toContain("left");
-      await Promise.all(sliding.map(({ finished }) => finished));
-      expect(pill.getBoundingClientRect().toJSON()).toEqual(rect(button("Last month")).toJSON());
+        await expect.element(button("Last month")).toHaveAttribute("aria-pressed", "true");
+        return { pill, lastMonth: button("Last month") };
+      }
+
+      it("goes under the period picked", async () => {
+        const { pill, lastMonth } = await pickLastMonth();
+
+        await expect
+          .poll(() => pill.getBoundingClientRect().toJSON())
+          .toEqual(rect(lastMonth).toJSON());
+      });
+
+      // Firefox moves it straight there, as it doesn't animate a change of anchor.
+      itFailsInFirefox("slides there", async () => {
+        const { pill } = await pickLastMonth();
+
+        const sliding = pill.getAnimations() as CSSTransition[];
+        expect(sliding.map(({ transitionProperty }) => transitionProperty)).toContain("left");
+      });
     });
 
     it("doesn't let the periods' labels be selected", async () => {

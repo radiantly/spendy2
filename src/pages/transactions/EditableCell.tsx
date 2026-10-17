@@ -3,6 +3,7 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  type ComponentProps,
   type CSSProperties,
   type KeyboardEvent,
   type MouseEvent,
@@ -283,7 +284,8 @@ function CellInput({
         aria-activedescendant={showMenu && highlight >= 0 ? `${menuId}-${highlight}` : undefined}
         aria-invalid={error !== null || undefined}
         aria-errormessage={showError ? errorId : undefined}
-        className={`absolute inset-0 w-full bg-surface px-2 outline-2 -outline-offset-2 ${
+        style={{ anchorName: EDITED_CELL }}
+        className={`absolute inset-0 w-full cursor-text bg-surface px-2 outline-2 -outline-offset-2 ${
           error !== null ? "outline-danger" : "outline-focus"
         } ${paused ? "caret-transparent selection:bg-transparent" : ""} ${
           align === "end" ? "text-right" : ""
@@ -300,14 +302,14 @@ function CellInput({
         />
       )}
       {showError && (
-        <div
+        <CellPopup
           id={errorId}
           role="alert"
           onMouseDown={stopPress}
-          className="absolute top-full left-0 z-10 mt-1 rounded-md bg-danger px-2 py-1 font-sans text-xs whitespace-nowrap text-white"
+          className="rounded-md border-0 bg-danger px-2 py-1 font-sans text-xs whitespace-nowrap text-white"
         >
           {error}
-        </div>
+        </CellPopup>
       )}
     </>
   );
@@ -322,23 +324,39 @@ type MenuProps = {
   onPick: (item: MenuItem) => void;
 };
 
-/**
- * The combobox's options, below the cell, or above it when there's no room
- * below. Focus stays in the input throughout.
- */
-function Menu({ id, items, highlight, noMatch, onHighlight, onPick }: MenuProps) {
-  const popupRef = useRef<HTMLDivElement>(null);
-  const listRef = useRef<HTMLUListElement>(null);
-  const [above, setAbove] = useState(false);
+/** The anchor name of the edited cell's input, which its popups sit by. */
+const EDITED_CELL = "--edited-cell";
 
-  // Measured from the cell rather than the popup, so flipping it doesn't
-  // change the answer.
-  useLayoutEffect(() => {
-    const popup = popupRef.current!;
-    const cell = popup.parentElement!.getBoundingClientRect();
-    const height = popup.offsetHeight;
-    setAbove(cell.bottom + height > window.innerHeight && cell.top - height >= 0);
-  }, [items.length]);
+/**
+ * A popup of the edited cell, in the top layer: over everything, the sticky
+ * header too. It sits under the cell, or where there's no room, over it (or
+ * flipped sideways), as the browser works out again while the page scrolls.
+ */
+function CellPopup({ className = "", style, ...props }: ComponentProps<"div">) {
+  const ref = useRef<HTMLDivElement>(null);
+  // Shown as it mounts, before it's painted. Unmounting it hides it.
+  useLayoutEffect(() => ref.current!.showPopover(), []);
+  return (
+    <div
+      ref={ref}
+      popover="manual"
+      {...props}
+      // Over the browser's popover defaults: in the middle of the window, padded.
+      className={`m-0 mt-1 p-0 [inset:auto] ${className}`}
+      style={{
+        positionAnchor: EDITED_CELL,
+        top: "anchor(bottom)",
+        left: "anchor(left)",
+        positionTryFallbacks: "flip-block, flip-inline, flip-block flip-inline",
+        ...style,
+      }}
+    />
+  );
+}
+
+/** The combobox's options. Focus stays in the input throughout. */
+function Menu({ id, items, highlight, noMatch, onHighlight, onPick }: MenuProps) {
+  const listRef = useRef<HTMLUListElement>(null);
 
   // Scroll the list, not the page, to keep the highlighted option in view.
   useLayoutEffect(() => {
@@ -351,13 +369,12 @@ function Menu({ id, items, highlight, noMatch, onHighlight, onPick }: MenuProps)
   }, [highlight]);
 
   return (
-    <div
-      ref={popupRef}
+    <CellPopup
       // Keeps focus in the input, so picking doesn't blur it first.
       onMouseDown={stopPress}
-      className={`absolute left-0 z-20 w-max max-w-80 min-w-full cursor-default overflow-hidden rounded-md border border-line bg-surface font-sans shadow-lg ${
-        above ? "bottom-full mb-1" : "top-full mt-1"
-      }`}
+      className="w-max max-w-80 cursor-default overflow-hidden rounded-md border border-line bg-surface font-sans text-ink shadow-lg"
+      // At least as wide as the cell.
+      style={{ minWidth: "anchor-size(width)" }}
     >
       {items.length > 0 ? (
         <ul ref={listRef} id={id} role="listbox" className="relative max-h-56 overflow-y-auto py-1">
@@ -385,7 +402,7 @@ function Menu({ id, items, highlight, noMatch, onHighlight, onPick }: MenuProps)
           {noMatch}
         </p>
       )}
-    </div>
+    </CellPopup>
   );
 }
 

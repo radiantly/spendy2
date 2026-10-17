@@ -6,6 +6,7 @@ import { Database, openDatabase } from "../../db/database.ts";
 import { LIST_CATEGORY_NAMES, LIST_TRANSACTIONS } from "../../db/queries/transactions.ts";
 import { ClosedError } from "../../db/rpc.ts";
 import { loadSession } from "../../lib/session.ts";
+import { itFailsInFirefox } from "../../test/browsers.ts";
 import { SOURCE_HASH_SQL, TOKEN, transactionId } from "../../test/fixtures.ts";
 import { holdNext } from "../../test/holdNext.ts";
 import { rect, renderApp } from "../../test/renderAuthPage.tsx";
@@ -166,25 +167,40 @@ describe("AppShell", () => {
     expect(rect(avatar).top).toBeLessThan(tabs.bottom);
   });
 
-  it("slides the pill from the tab it's under to the one picked", async () => {
-    await loggedIn(null);
-    await renderApp("/");
-    const nav = page.getByRole("navigation", { name: "Main" });
-    await expect.element(nav).toBeVisible();
-    const pill = nav.element().querySelector(":scope > [aria-hidden]")!;
-    const [overview, transactions] = ["Overview", "Transactions"].map((name) =>
-      nav.getByRole("link", { name }),
-    );
-    await expect.element(overview!).toHaveAttribute("aria-current", "page");
-    expect(pill.getBoundingClientRect().toJSON()).toEqual(rect(overview!).toJSON());
+  describe("the tabs' pill", () => {
+    /** Picks Transactions, the pill having been under Overview. */
+    async function pickTransactions() {
+      await loggedIn(null);
+      await renderApp("/");
+      const nav = page.getByRole("navigation", { name: "Main" });
+      await expect.element(nav).toBeVisible();
+      const pill = nav.element().querySelector(":scope > [aria-hidden]")!;
+      const overview = nav.getByRole("link", { name: "Overview" });
+      const transactions = nav.getByRole("link", { name: "Transactions" });
+      await expect.element(overview).toHaveAttribute("aria-current", "page");
+      expect(pill.getBoundingClientRect().toJSON()).toEqual(rect(overview).toJSON());
 
-    await userEvent.click(transactions!);
+      await userEvent.click(transactions);
 
-    await expect.element(transactions!).toHaveAttribute("aria-current", "page");
-    const sliding = pill.getAnimations() as CSSTransition[];
-    expect(sliding.map(({ transitionProperty }) => transitionProperty)).toContain("left");
-    await Promise.all(sliding.map(({ finished }) => finished));
-    expect(pill.getBoundingClientRect().toJSON()).toEqual(rect(transactions!).toJSON());
+      await expect.element(transactions).toHaveAttribute("aria-current", "page");
+      return { pill, transactions };
+    }
+
+    it("goes under the tab picked", async () => {
+      const { pill, transactions } = await pickTransactions();
+
+      await expect
+        .poll(() => pill.getBoundingClientRect().toJSON())
+        .toEqual(rect(transactions).toJSON());
+    });
+
+    // Firefox moves it straight there, as it doesn't animate a change of anchor.
+    itFailsInFirefox("slides there", async () => {
+      const { pill } = await pickTransactions();
+
+      const sliding = pill.getAnimations() as CSSTransition[];
+      expect(sliding.map(({ transitionProperty }) => transitionProperty)).toContain("left");
+    });
   });
 
   it("doesn't let the tabs' labels be selected", async () => {
@@ -703,10 +719,9 @@ describe("Save on a phone", () => {
 
     const inHeader = page.getByRole("banner").getByRole("button", { name: "Save" });
     await expect.element(inHeader).toBeVisible();
-    expect([rect(inHeader).width, rect(inHeader).height]).toEqual([
-      floating.width,
-      floating.height,
-    ]);
+    // To a hundredth of a pixel: browsers round layout differently below that.
+    expect(rect(inHeader).width).toBeCloseTo(floating.width, 2);
+    expect(rect(inHeader).height).toBeCloseTo(floating.height, 2);
   });
 });
 
@@ -823,9 +838,14 @@ describe("a version saved elsewhere", () => {
     await userEvent.click(saveButton());
     await expect.element(saveButton()).not.toBeInTheDocument();
 
-    checkForUpdates();
-
-    expect(downloadDatabaseIfChanged).toHaveBeenLastCalledWith(TOKEN, SHA_B);
+    // Until the save has finished, which is a moment after Save goes (as
+    // soon as nothing's unsaved): a check before then is skipped.
+    await expect
+      .poll(() => {
+        checkForUpdates();
+        return vi.mocked(downloadDatabaseIfChanged).mock.lastCall;
+      })
+      .toEqual([TOKEN, SHA_B]);
   });
 
   it("isn't checked for while there are unsaved changes", async () => {

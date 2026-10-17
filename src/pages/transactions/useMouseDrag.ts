@@ -49,6 +49,8 @@ export function useMouseDrag(handlers: DragHandlers) {
     stopRef.current?.();
     let point = from;
     let frame = 0;
+    // Where the page was scrolled to at the last frame.
+    let scrolled = { x: window.scrollX, y: window.scrollY };
 
     function handleMove(event: MouseEvent) {
       // The release happened where the page couldn't see it.
@@ -70,14 +72,16 @@ export function useMouseDrag(handlers: DragHandlers) {
       const { autoScroll, topInset, move } = handlersRef.current;
       if (autoScroll()) {
         const viewport = document.documentElement;
-        const x = window.scrollX;
-        const y = window.scrollY;
         window.scrollBy(
           edgeScrollSpeed(point.x, 0, viewport.clientWidth),
           edgeScrollSpeed(point.y, topInset(), viewport.clientHeight),
         );
-        // The pointer is now over different content.
-        if (window.scrollX !== x || window.scrollY !== y) move(point);
+      }
+      // Scrolled by the above or anything else, like the mouse wheel: the
+      // pointer is now over different content.
+      if (window.scrollX !== scrolled.x || window.scrollY !== scrolled.y) {
+        scrolled = { x: window.scrollX, y: window.scrollY };
+        move(point);
       }
       frame = requestAnimationFrame(scrollFrame);
     }

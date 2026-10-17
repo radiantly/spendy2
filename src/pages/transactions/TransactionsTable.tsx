@@ -182,11 +182,13 @@ function TransactionsTable({
     scrollPaddingStart: ROW_HEIGHT,
     // Keep the active cell's row rendered when it scrolls out of view, so
     // the grid can still point at the cell, and the input of an edit in it
-    // (always the active cell) isn't thrown away.
+    // (always the active cell) isn't thrown away. In order, so its row is
+    // never moved in the DOM: that would blur the input, and React's
+    // focusing it again makes Firefox scroll back to it.
     rangeExtractor: (range: Range) => {
       const indexes = defaultRangeExtractor(range);
       if (selection && !indexes.includes(selection.active.row)) indexes.push(selection.active.row);
-      return indexes;
+      return indexes.sort((a, b) => a - b);
     },
   });
 
@@ -511,11 +513,14 @@ function TransactionsTable({
               key={row.id}
               role="row"
               aria-rowindex={item.index + 2}
-              className={`absolute inset-x-0 top-0 grid leading-7 ${isEditingRow ? "z-10" : ""}`}
+              className="absolute inset-x-0 grid leading-7"
               style={{
                 gridTemplateColumns: GRID_TEMPLATE,
                 height: ROW_HEIGHT,
-                transform: `translateY(${item.start - scrollMargin}px)`,
+                // Placed with top, not a transform: the edited cell's popups
+                // are anchored to it (see EditableCell), and Firefox places
+                // them wrongly against a transformed anchor.
+                top: item.start - scrollMargin,
               }}
             >
               {row.getAllCells().map((cell, column) => {

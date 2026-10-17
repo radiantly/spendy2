@@ -8,7 +8,7 @@ type CustomRangeInputsProps = {
 };
 
 const inputClass =
-  "border-b-3 border-ink bg-transparent outline-none focus-visible:border-focus focus-visible:ring-0";
+  "border-b-3 border-ink bg-transparent outline-none [field-sizing:content] focus-visible:border-focus focus-visible:ring-0";
 
 /** A custom range's dates, edited in place of the period's heading. */
 function CustomRangeInputs({ range, onChange, className = "" }: CustomRangeInputsProps) {

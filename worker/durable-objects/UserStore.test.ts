@@ -318,18 +318,24 @@ describe("UserStore", () => {
 
     it("does not accept a session evicted by the session limit", async () => {
       await registerUser("alice");
-      const sessionIds: string[] = [];
-      for (let i = 0; i <= env.MAX_SESSIONS_PER_USER; i++)
-        sessionIds.push(atob(await loginToken("alice")).split(":")[1]!);
+      const stub = env.USER.getByName("alice");
+      // As many as the limit allows, oldest first, so the next login is one
+      // too many. Stored directly: logging in for each would be slow.
+      const earlier = Array.from({ length: env.MAX_SESSIONS_PER_USER }, () => crypto.randomUUID());
+      await runInDurableObject(stub, (_instance, state) => {
+        state.storage.kv.put("ACTIVE_SESSIONS", new Set(earlier));
+      });
 
-      await runInDurableObject(env.USER.getByName("alice"), async (instance) => {
-        expect(await instance.logout(sessionIds[0]!)).toEqual({
+      const latest = atob(await loginToken("alice")).split(":")[1]!;
+
+      await runInDurableObject(stub, async (instance) => {
+        expect(await instance.logout(earlier[0]!)).toEqual({
           success: false,
           code: "UNAUTHORIZED",
         });
-        expect(await instance.logout(sessionIds.at(-1)!)).toEqual({
-          success: true,
-        });
+        // Only the oldest.
+        expect(await instance.logout(earlier[1]!)).toEqual({ success: true });
+        expect(await instance.logout(latest)).toEqual({ success: true });
       });
     });
 
