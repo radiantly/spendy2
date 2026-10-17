@@ -8,7 +8,7 @@ import { ClosedError } from "../../db/rpc.ts";
 import { loadSession } from "../../lib/session.ts";
 import { SOURCE_HASH_SQL, TOKEN, transactionId } from "../../test/fixtures.ts";
 import { holdNext } from "../../test/holdNext.ts";
-import { renderApp } from "../../test/renderAuthPage.tsx";
+import { rect, renderApp } from "../../test/renderAuthPage.tsx";
 import { loggedIn, SHA_A, SHA_B, session, storedDatabase } from "../../test/storedDatabase.ts";
 
 vi.mock("../../api/database.ts", () => ({
@@ -98,6 +98,9 @@ async function editCounterparty(from: string, to: string) {
   await userEvent.keyboard("{Enter}");
 }
 
+/** The transactions as a list, on screens too narrow for the table. */
+const list = () => page.getByRole("list", { name: "Transactions" });
+
 /** The page checks for a newer version when it's shown again, as well as every 10 seconds. */
 const checkForUpdates = () => document.dispatchEvent(new Event("visibilitychange"));
 
@@ -126,6 +129,55 @@ describe("AppShell", () => {
     await expect
       .element(page.getByRole("link", { name: "Overview" }))
       .not.toHaveAttribute("aria-current");
+  });
+
+  it.each([360, 390])(
+    "keeps the header on one line on a %ipx phone, with the tabs in the middle",
+    async (width) => {
+      await page.viewport(width, 800);
+      await loggedIn(null);
+      await renderApp("/");
+      const avatar = page.getByRole("img", { name: "Logged in as alice" });
+      await expect.element(avatar).toBeVisible();
+
+      const header = page.getByRole("banner").element();
+      const [logo, tabs, user] = [
+        header.firstElementChild!,
+        page.getByRole("navigation", { name: "Main" }).element(),
+        avatar.element(),
+      ].map((element) => element.getBoundingClientRect());
+      const middle = ({ top, bottom }: DOMRect) => (top + bottom) / 2;
+      expect(Math.abs(middle(logo!) - middle(tabs!))).toBeLessThanOrEqual(1);
+      expect(Math.abs(middle(user!) - middle(tabs!))).toBeLessThanOrEqual(1);
+      expect(Math.abs((tabs!.left + tabs!.right) / 2 - width / 2)).toBeLessThanOrEqual(1);
+    },
+  );
+
+  it.each([640, 1280])("puts the tabs right after the logo at %ipx", async (width) => {
+    await page.viewport(width, 800);
+    await loggedIn(null);
+    await renderApp("/");
+    const avatar = page.getByRole("img", { name: "Logged in as alice" });
+    await expect.element(avatar).toBeVisible();
+
+    const logo = page.getByRole("banner").element().firstElementChild!.getBoundingClientRect();
+    const tabs = rect(page.getByRole("navigation", { name: "Main" }));
+    expect(tabs.left - logo.right).toBe(24);
+    expect(rect(avatar).top).toBeLessThan(tabs.bottom);
+  });
+
+  it("shows just the logo's mark below 640px, and its name from there", async () => {
+    await page.viewport(639, 800);
+    await loggedIn(null);
+    await renderApp("/");
+    const name = page.getByRole("banner").getByText("spendy2");
+    await expect.element(page.getByRole("img", { name: "Logged in as alice" })).toBeVisible();
+    // Still there for screen readers.
+    expect(name.element().getBoundingClientRect().width).toBeLessThanOrEqual(1);
+
+    await page.viewport(640, 800);
+
+    await expect.poll(() => name.element().getBoundingClientRect().width).toBeGreaterThan(50);
   });
 
   it("shows the user's avatar", async () => {
@@ -163,7 +215,7 @@ describe("TransactionsPage", () => {
     await loggedIn(await storedDatabase(TWO_TRANSACTIONS));
     await renderApp("/transactions");
 
-    await expect.element(page.getByText("2 transactions")).toBeVisible();
+    await expect.element(page.getByRole("grid")).toBeVisible();
     const counterparties = page
       .getByRole("row")
       .elements()
@@ -244,20 +296,29 @@ describe("TransactionsPage", () => {
     await expect.poll(leave).toBe(true);
   });
 
-  it("spans the whole page width when the table is wider than the screen", async () => {
+  it("lists the transactions on a phone, within the screen", async () => {
     await page.viewport(390, 800);
     await loggedIn(await storedDatabase(TWO_TRANSACTIONS));
     await renderApp("/transactions");
-    await expect.element(page.getByText("Corner Market")).toBeVisible();
 
-    const pageWidth = document.documentElement.scrollWidth;
-    expect(pageWidth).toBeGreaterThan(390);
-    const widths = [
-      page.getByRole("banner").element(),
-      page.getByRole("columnheader").first().element().closest('[role="row"]')!,
-      page.getByText("Corner Market").element().closest('[role="row"]')!,
-    ].map((element) => element.getBoundingClientRect().width);
-    expect(widths).toEqual([pageWidth, pageWidth, pageWidth]);
+    await expect.element(list()).toMatchTextContent(/Corner Market.*Café Lumen/);
+    expect(page.getByRole("grid").query()).toBeNull();
+    expect(document.documentElement.scrollWidth).toBe(390);
+  });
+
+  it("shows the table from 768px wide, and the list below that", async () => {
+    await page.viewport(767, 800);
+    await loggedIn(await storedDatabase(TWO_TRANSACTIONS));
+    await renderApp("/transactions");
+    await expect.element(list()).toBeVisible();
+
+    await page.viewport(768, 800);
+    await expect.element(page.getByRole("grid")).toBeVisible();
+    expect(list().query()).toBeNull();
+
+    await page.viewport(767, 800);
+    await expect.element(list()).toBeVisible();
+    expect(page.getByRole("grid").query()).toBeNull();
   });
 
   it("changes the category to an existing one", async () => {
@@ -563,6 +624,60 @@ describe("TransactionsPage", () => {
   });
 });
 
+describe("Save on a phone", () => {
+  /** Unsaved changes, made in the table, then the screen narrowed to `height` tall. */
+  async function unsavedOnPhone(height = 800) {
+    await opened();
+    await editCounterparty("Corner Market", "Corner Shop");
+    await expect.element(saveButton()).toBeVisible();
+    await page.viewport(390, height);
+    await expect.element(list()).toBeVisible();
+  }
+
+  it("floats at the bottom of the screen, in the middle, instead of in the header", async () => {
+    await unsavedOnPhone();
+
+    await expect.element(saveButton()).toBeVisible();
+    expect(page.getByRole("banner").getByRole("button").query()).toBeNull();
+    const save = rect(saveButton());
+    expect(save.bottom).toBe(800 - 16);
+    expect(Math.abs((save.left + save.right) / 2 - 390 / 2)).toBeLessThanOrEqual(1);
+  });
+
+  it("saves", async () => {
+    await unsavedOnPhone();
+
+    await userEvent.click(saveButton());
+
+    await expect.element(saveButton()).not.toBeInTheDocument();
+    expect(uploadDatabase).toHaveBeenCalledTimes(1);
+  });
+
+  it("doesn't cover the end of the page", async () => {
+    await unsavedOnPhone(300);
+
+    window.scrollTo(0, document.documentElement.scrollHeight);
+
+    const last = list().getByRole("listitem").last();
+    await expect.poll(() => rect(last).bottom).toBeLessThanOrEqual(rect(saveButton()).top);
+  });
+
+  it("goes back in the header from 640px, the same size", async () => {
+    await unsavedOnPhone();
+    await expect.element(saveButton()).toBeVisible();
+    const floating = rect(saveButton());
+
+    await page.viewport(640, 800);
+
+    const inHeader = page.getByRole("banner").getByRole("button", { name: "Save" });
+    await expect.element(inHeader).toBeVisible();
+    expect([rect(inHeader).width, rect(inHeader).height]).toEqual([
+      floating.width,
+      floating.height,
+    ]);
+  });
+});
+
 describe("switching pages", () => {
   const tab = (name: string) => page.getByRole("link", { name });
   const period = (name: string) => page.getByRole("button", { name, exact: true });
@@ -851,6 +966,17 @@ describe("undo and redo on the transactions page", () => {
     expect(await uploaded(`SELECT counterparty FROM transactions WHERE id = '${NEWER}'`)).toEqual([
       { counterparty: "Corner Shop" },
     ]);
+  });
+
+  it("shows an undo in the list too", async () => {
+    await opened();
+    await editCounterparty("Corner Market", "Corner Shop");
+    await page.viewport(390, 800);
+    await expect.element(list()).toMatchTextContent("Corner Shop");
+
+    await undo();
+
+    await expect.element(list()).toMatchTextContent("Corner Market");
   });
 
   it("leaves nothing to save once every edit is undone, until one is redone", async () => {

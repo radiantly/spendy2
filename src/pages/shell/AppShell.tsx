@@ -28,14 +28,15 @@ function AppShell({ pages }: { pages: readonly ShellPage[] }) {
       session={state.session}
       onSessionEnded={() => endSession(state.session)}
     >
-      {/* At least as wide as the content: a page wider than the screen (like
-          the transactions table on a phone) scrolls sideways as a whole, and
-          everything spans that full width rather than just the screen's. */}
+      {/* At least as wide as the content: a page wider than the screen
+          scrolls sideways as a whole, and everything spans that full width
+          rather than just the screen's. */}
       <div className="flex min-h-svh min-w-fit flex-col">
         <Header username={state.session.username} />
         <main className="flex flex-1 flex-col">
           <DatabaseGate pages={pages} />
         </main>
+        <SaveControls placement="floating" />
       </div>
     </DatabaseProvider>
   );
@@ -43,8 +44,12 @@ function AppShell({ pages }: { pages: readonly ShellPage[] }) {
 
 function Header({ username }: { username: string }) {
   return (
-    <header className="flex flex-wrap items-center gap-x-6 gap-y-3 px-4 py-4 lg:px-8">
-      <Logo />
+    // On phones, the sides share the room the tabs leave equally, so the
+    // tabs sit in the middle. From 640px, they follow the logo.
+    <header className="flex flex-wrap items-center gap-x-3 gap-y-3 px-4 py-4 sm:gap-x-6 lg:px-8">
+      <div className="flex flex-1 sm:flex-none">
+        <Logo compact />
+      </div>
       <nav
         aria-label="Main"
         className="flex rounded-full border border-line bg-surface p-1 text-sm font-medium"
@@ -52,8 +57,8 @@ function Header({ username }: { username: string }) {
         <Tab to="/">Overview</Tab>
         <Tab to="/transactions">Transactions</Tab>
       </nav>
-      <div className="ml-auto flex items-center gap-4">
-        <SaveControls />
+      <div className="flex flex-1 items-center justify-end gap-4 sm:ml-auto sm:flex-none">
+        <SaveControls placement="header" />
         <UserAvatar username={username} alt={`Logged in as ${username}`} />
       </div>
     </header>

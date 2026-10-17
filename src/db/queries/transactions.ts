@@ -16,18 +16,41 @@ export type TransactionRow = {
   remarks: string | null;
 };
 
+/**
+ * A transaction as the page loads it: its row, and what the list on narrow
+ * screens also shows, which no edit changes.
+ */
+export type ListedTransaction = TransactionRow & {
+  transfer_account: string | null;
+  duplicate_of: string | null;
+  /**
+   * Its amount in other currencies, as a JSON object of each currency's
+   * fraction: `{"USD": [-109, 10]}`. `{}` without any.
+   */
+  conversions: string;
+};
+
+const LISTED_COLUMNS = `
+  id, naive_date, account_name, counterparty, category,
+  amount_numerator, amount_denominator, currency, remarks, transfer_account, duplicate_of,
+  (SELECT json_group_object(
+      conversion.currency,
+      json_array(conversion.amount_numerator, conversion.amount_denominator)
+    )
+    FROM conversions AS conversion
+    WHERE conversion.transaction_id = transactions.id) AS conversions
+`;
+
 /** Newest first. Rows on the same day keep their import order, latest first. */
 export const LIST_TRANSACTIONS = `
-  SELECT id, naive_date, account_name, counterparty, category,
-    amount_numerator, amount_denominator, currency, remarks
+  SELECT ${LISTED_COLUMNS}
   FROM transactions
   ORDER BY naive_date DESC, seq DESC
 `;
 
 /** Rows of `LIST_TRANSACTIONS`, by id. Bind `[JSON.stringify(ids)]`. */
 export const GET_TRANSACTIONS = `
-  SELECT id, naive_date, account_name, counterparty, category,
-    amount_numerator, amount_denominator, currency, remarks
+  SELECT ${LISTED_COLUMNS}
   FROM transactions
   WHERE id IN (SELECT value FROM json_each(?))
 `;
@@ -35,8 +58,13 @@ export const GET_TRANSACTIONS = `
 /** Alphabetical, ignoring case (the names are `COLLATE NOCASE`). */
 export const LIST_CATEGORY_NAMES = `SELECT name FROM categories ORDER BY name`;
 
-/** Alphabetical, ignoring case (the names are `COLLATE NOCASE`). */
-export const LIST_ACCOUNT_NAMES = `SELECT name FROM accounts ORDER BY name`;
+export type AccountCurrency = { name: string; display_currency: string | null };
+
+/**
+ * Every account with its display currency, alphabetical, ignoring case (the
+ * names are `COLLATE NOCASE`).
+ */
+export const LIST_ACCOUNTS = `SELECT name, display_currency FROM accounts ORDER BY name`;
 
 /** A top-level category, unless one with that name (in any case) exists. Bind `[name]`. */
 export const INSERT_CATEGORY = `INSERT INTO categories (name) VALUES (?) ON CONFLICT DO NOTHING`;

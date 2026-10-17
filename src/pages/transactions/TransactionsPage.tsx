@@ -5,24 +5,30 @@ import { useHoldUpdates, useOpenDatabase } from "../../db/useDatabase.ts";
 import {
   GET_TRANSACTIONS,
   INSERT_CATEGORY,
-  LIST_ACCOUNT_NAMES,
+  LIST_ACCOUNTS,
   LIST_CATEGORY_NAMES,
   LIST_TRANSACTIONS,
   UPDATE_TRANSACTION,
   updateBinds,
-  type TransactionRow,
+  type AccountCurrency,
+  type ListedTransaction,
 } from "../../db/queries/transactions.ts";
 import type { TransactionEdit } from "../../db/databaseContext.ts";
+import { useMediaQuery } from "../../hooks/useMediaQuery.ts";
 import { useUndoRedo } from "../shell/historyKeys.ts";
 import { describeEdit } from "./describe.ts";
 import { hasPatch, patchFrom } from "./patch.ts";
+import TransactionsList from "./TransactionsList.tsx";
 import TransactionsTable, { type TransactionChange } from "./TransactionsTable.tsx";
 
+/** Where the table's columns fit (Tailwind's md); narrower, the transactions are a list. */
+const TABLE_FITS = "(min-width: 48rem)";
+
 type Loaded = {
-  rows: TransactionRow[];
+  rows: ListedTransaction[];
   /** In the order the cell menus list them (see the queries). */
   categories: readonly string[];
-  accounts: readonly string[];
+  accounts: readonly AccountCurrency[];
 };
 
 /** The names from a `SELECT name …` query. */
@@ -40,22 +46,23 @@ function TransactionsPage() {
   // Undoing and redoing can happen from any page.
   const moved = useSyncExternalStore(history.subscribe, () => history.latest);
   const undoOrRedo = useUndoRedo(history);
+  const tableFits = useMediaQuery(TABLE_FITS);
 
   useEffect(() => {
     let cancelled = false;
     Promise.all([
       database.query(LIST_TRANSACTIONS),
       database.query(LIST_CATEGORY_NAMES),
-      database.query(LIST_ACCOUNT_NAMES),
+      database.query(LIST_ACCOUNTS),
     ]).then(
       ([rows, categories, accounts]) => {
         if (cancelled) return;
         setLoaded({
-          // The query's columns match TransactionRow, and the schema
+          // The queries' columns match their row types, and the schema
           // guarantees their types.
-          rows: rows as TransactionRow[],
+          rows: rows as ListedTransaction[],
           categories: namesOf(categories),
-          accounts: namesOf(accounts),
+          accounts: accounts as AccountCurrency[],
         });
       },
       () => {
@@ -81,7 +88,7 @@ function TransactionsPage() {
     ]).then(
       ([rows, categories]) => {
         if (cancelled) return;
-        const stored = new Map((rows as TransactionRow[]).map((row) => [row.id, row]));
+        const stored = new Map((rows as ListedTransaction[]).map((row) => [row.id, row]));
         setLoaded(
           (current) =>
             current && {
@@ -124,7 +131,7 @@ function TransactionsPage() {
     if (loaded === null || changes.length === 0) return;
     const ids = changes.map(({ rowIndex }) => loaded.rows[rowIndex]!.id);
     const apply = (
-      patchFor: (change: TransactionChange, row: TransactionRow) => Partial<TransactionRow>,
+      patchFor: (change: TransactionChange, row: ListedTransaction) => Partial<ListedTransaction>,
     ) =>
       setLoaded((current) => {
         if (current === null) return current;
@@ -167,9 +174,9 @@ function TransactionsPage() {
           }`,
         );
         const stored = new Map(
-          ((await database.query(GET_TRANSACTIONS, [JSON.stringify(ids)])) as TransactionRow[]).map(
-            (row) => [row.id, row],
-          ),
+          (
+            (await database.query(GET_TRANSACTIONS, [JSON.stringify(ids)])) as ListedTransaction[]
+          ).map((row) => [row.id, row]),
         );
         // If a later edit changed the field again, that edit's write decides
         // it. A field's columns go back together, so they always match.
@@ -201,19 +208,16 @@ function TransactionsPage() {
 
   return (
     <div className="flex flex-col gap-4 pb-8">
-      <div className="flex items-baseline justify-between gap-4 px-4 lg:px-8">
-        <h1 className="font-display text-3xl font-bold tracking-tight">Transactions</h1>
-        <p className="font-mono text-xs tracking-widest text-ink-muted uppercase">
-          {loaded.rows.length.toLocaleString("en-US")} transactions
-        </p>
-      </div>
+      <h1 className="px-4 font-display text-3xl font-bold tracking-tight lg:px-8">Transactions</h1>
       {loaded.rows.length === 0 ? (
         <p className="px-4 text-ink-muted lg:px-8">No transactions yet.</p>
+      ) : !tableFits ? (
+        <TransactionsList transactions={loaded.rows} accounts={loaded.accounts} />
       ) : (
         <TransactionsTable
           rows={loaded.rows}
           categories={loaded.categories}
-          accounts={loaded.accounts}
+          accounts={loaded.accounts.map(({ name }) => name)}
           onCommit={(changes) => void commit(changes)}
           onEditingChange={setEditing}
           lastUndoOrRedo={moved}
