@@ -7,11 +7,14 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
+import { QueryClientProvider } from "@tanstack/react-query";
 import { pollWhileVisible } from "../lib/pollWhileVisible.ts";
 import type { Session } from "../lib/session.ts";
 import { DatabaseOpenError, openDatabase, openNewerDatabase, type Database } from "./database.ts";
 import { DatabaseContext, type DatabaseState } from "./databaseContext.ts";
 import { EditHistory } from "./editHistory.ts";
+import { createQueryClient, databaseKey, refreshAfterWrites } from "./queryClient.ts";
+import { keepTransactionsInSync } from "./transactions.ts";
 
 /** How often to check for a version saved elsewhere (ms), while the page is visible. */
 const UPDATE_INTERVAL = 10_000;
@@ -31,7 +34,8 @@ function isSessionEnded(error: unknown) {
 
 /**
  * Opens the user's database for its children, and saves it. The database
- * closes when the provider unmounts.
+ * closes when the provider unmounts. What the children read from it is
+ * cached (see queryClient.ts), and kept up to date as it changes.
  *
  * While there's nothing to lose, a version saved elsewhere (another tab or
  * device) replaces the open one. Nothing is lost when there are no unsaved
@@ -51,7 +55,7 @@ function DatabaseProvider({
   children: ReactNode;
 }) {
   const [state, setState] = useState<DatabaseState>({ status: "loading" });
-  const [attempt, setAttempt] = useState(0);
+  const [queryClient] = useState(createQueryClient);
   const [saving, setSaving] = useState(false);
   const database = state.status === "ready" ? state.database : null;
   const dirty = useSyncExternalStore(
@@ -112,16 +116,25 @@ function DatabaseProvider({
       cancelled = true;
       stopPolling?.();
     };
-  }, [session, attempt]);
+  }, [session]);
 
-  // A database closes once it's no longer the one shown: replaced by a newer
-  // version or a new session, or unmounted. This runs after the pages using
-  // it have let go of it, so their unfinished reads are already ignored.
+  // While a database is the one shown, what's read from it is kept up to
+  // date. It closes, and its data is dropped, once it's no longer the one
+  // shown: replaced by a newer version or a new session, or unmounted. This
+  // runs after the pages using it have let go of it, so their unfinished
+  // reads are already ignored.
   useEffect(() => {
     if (state.status !== "ready") return;
-    const { database } = state;
-    return () => database.close();
-  }, [state]);
+    const { database, history } = state;
+    const stopRefreshing = refreshAfterWrites(queryClient, database);
+    const stopSyncing = keepTransactionsInSync(queryClient, database, history);
+    return () => {
+      stopRefreshing();
+      stopSyncing();
+      database.close();
+      queryClient.removeQueries({ queryKey: databaseKey(database) });
+    };
+  }, [state, queryClient]);
 
   useEffect(() => {
     if (!dirty) return;
@@ -153,21 +166,11 @@ function DatabaseProvider({
   }
 
   return (
-    <DatabaseContext
-      value={{
-        state,
-        dirty,
-        saving,
-        save,
-        holdUpdates,
-        retry: () => {
-          setState({ status: "loading" });
-          setAttempt((count) => count + 1);
-        },
-      }}
-    >
-      {children}
-    </DatabaseContext>
+    <QueryClientProvider client={queryClient}>
+      <DatabaseContext value={{ state, dirty, saving, save, holdUpdates }}>
+        {children}
+      </DatabaseContext>
+    </QueryClientProvider>
   );
 }
 

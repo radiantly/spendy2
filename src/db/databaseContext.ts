@@ -38,8 +38,6 @@ export type DatabaseContextValue = {
    * returned function is called, for state the replacement would lose.
    */
   holdUpdates: () => () => void;
-  /** Tries to open the database again after an error. */
-  retry: () => void;
 };
 
 export const DatabaseContext = createContext<DatabaseContextValue | null>(null);

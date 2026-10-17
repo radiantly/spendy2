@@ -11,7 +11,11 @@ import { useTable } from "@tanstack/react-table";
 import { defaultRangeExtractor, useWindowVirtualizer, type Range } from "@tanstack/react-virtual";
 import type { Moved } from "../../db/editHistory.ts";
 import type { Edit } from "../../db/databaseContext.ts";
-import type { TransactionPatch, TransactionRow } from "../../db/queries/transactions.ts";
+import {
+  hasPatch,
+  type TransactionPatch,
+  type TransactionRow,
+} from "../../db/queries/transactions.ts";
 import type { HistoryDirection } from "../../lib/historyKey.ts";
 import { columns, features, type CellEditor } from "./columns.ts";
 import { selectBetween, selectionAnchor, textOffsetAtPoint, wordAt } from "./caret.ts";
@@ -35,7 +39,6 @@ import {
   type GridSelection,
   type Motion,
 } from "./grid.ts";
-import { hasPatch } from "./patch.ts";
 import { useMouseDrag, type Point } from "./useMouseDrag.ts";
 
 /** Rows have a fixed height, so the virtualizer never has to measure them. */

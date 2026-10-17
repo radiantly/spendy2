@@ -88,7 +88,7 @@ function Tab({ to, children }: { to: string; children: string }) {
 }
 
 function DatabaseGate({ pages }: { pages: readonly ShellPage[] }) {
-  const { state, retry } = useDatabase();
+  const { state } = useDatabase();
   const { pathname } = useLocation();
   useHistoryKeys(state.status === "ready" ? state.history : null);
 
@@ -101,23 +101,16 @@ function DatabaseGate({ pages }: { pages: readonly ShellPage[] }) {
 
   if (state.status === "error")
     return (
-      <div className="m-auto flex max-w-sm flex-col items-center gap-4 text-center">
-        <p role="alert" className="text-ink">
-          {describeOpenError(state.error)}
-        </p>
-        <button
-          type="button"
-          onClick={retry}
-          className="rounded-full border border-line px-4 py-2 text-sm font-medium outline-none hover:bg-field focus-visible:ring-3 focus-visible:ring-focus"
-        >
-          Try again
-        </button>
-      </div>
+      <p role="alert" className="m-auto max-w-sm text-center text-ink">
+        {describeOpenError(state.error)}
+      </p>
     );
 
   // Every page stays rendered, the others hidden, so switching back to one
-  // finds it as it was left rather than loading again. A hidden page's
-  // effects are cleaned up, and run again when it's shown.
+  // finds it as it was left. A hidden page is rendered after the shown one,
+  // so its data loads in the background once the shown one's has started
+  // (see the pages' usePrefetchQuery). Its effects are cleaned up, and run again when
+  // it's shown.
   return pages.map(({ path, element }) => (
     <Activity key={path} mode={matchPath(path, pathname) ? "visible" : "hidden"}>
       {element}

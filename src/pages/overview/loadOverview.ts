@@ -1,4 +1,6 @@
+import { queryOptions } from "@tanstack/react-query";
 import type { Database } from "../../db/database.ts";
+import { databaseKey } from "../../db/queryClient.ts";
 import {
   GET_OVERVIEW_META,
   GET_PERIOD_SUMMARY,
@@ -147,4 +149,17 @@ export async function loadOverview(
     })),
     recent,
   };
+}
+
+/** `loadOverview` as a query: read again after each change to the database. */
+export function overviewQuery(
+  database: Database,
+  choice: PeriodChoice,
+  currency: string | null,
+  today: NaiveDate,
+) {
+  return queryOptions({
+    queryKey: [...databaseKey(database), "overview", choice, currency, today],
+    queryFn: () => loadOverview(database, choice, currency, today),
+  });
 }

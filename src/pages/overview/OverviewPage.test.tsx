@@ -135,7 +135,8 @@ describe("OverviewPage", () => {
     await loggedIn(null);
     await renderApp("/");
 
-    await expect.element(page.getByText("No transactions yet.")).toBeVisible();
+    // The transactions page, hidden, says so too.
+    await expect.element(page.getByText("No transactions yet.").shown()).toBeVisible();
   });
 
   describe("spent", () => {

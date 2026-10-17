@@ -27,7 +27,11 @@ export class DatabaseOpenError extends Error {
  * Writes go through `batch`, `undo` and `redo` (`query` is for reading), so
  * `unsaved` knows when the database differs from the version last saved.
  */
+let opened = 0;
+
 export class Database {
+  /** Tells this copy apart from the others opened before it, e.g. in cache keys. */
+  readonly id = ++opened;
   readonly #worker: Worker;
   readonly #connection: Connection<DatabaseApi>;
   readonly #token: string;

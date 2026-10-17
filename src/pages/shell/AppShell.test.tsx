@@ -3,6 +3,7 @@ import { page, userEvent } from "vitest/browser";
 import { toast } from "sonner";
 import { downloadDatabase, downloadDatabaseIfChanged, uploadDatabase } from "../../api/database.ts";
 import { Database, openDatabase } from "../../db/database.ts";
+import { GET_OVERVIEW_META } from "../../db/queries/overview.ts";
 import { LIST_CATEGORY_NAMES, LIST_TRANSACTIONS } from "../../db/queries/transactions.ts";
 import { ClosedError } from "../../db/rpc.ts";
 import { loadSession } from "../../lib/session.ts";
@@ -94,7 +95,7 @@ async function cellOf(text: string, column: number) {
 }
 
 async function editCounterparty(from: string, to: string) {
-  await userEvent.dblClick(page.getByText(from));
+  await userEvent.dblClick(page.getByText(from).shown());
   await page.getByRole("textbox").fill(to);
   await userEvent.keyboard("{Enter}");
 }
@@ -109,7 +110,7 @@ const checkForUpdates = () => document.dispatchEvent(new Event("visibilitychange
 async function opened() {
   await loggedIn(await storedDatabase(TWO_TRANSACTIONS));
   const app = await renderApp("/transactions");
-  await expect.element(page.getByText("Corner Market")).toBeVisible();
+  await expect.element(page.getByText("Corner Market").shown()).toBeVisible();
   return app;
 }
 
@@ -239,11 +240,11 @@ describe("AppShell", () => {
     await loggedIn(null);
     await renderApp("/transactions");
 
-    await expect.element(page.getByText("No transactions yet.")).toBeVisible();
+    await expect.element(page.getByText("No transactions yet.").shown()).toBeVisible();
     expect(saveButton().query()).toBeNull();
   });
 
-  it("explains a database that can't be opened and can try again", async () => {
+  it("explains a database that can't be opened", async () => {
     await loggedIn(null);
     vi.mocked(downloadDatabase).mockResolvedValueOnce({ success: false, code: "DOWNLOAD_FAILED" });
     await renderApp("/transactions");
@@ -251,10 +252,6 @@ describe("AppShell", () => {
     await expect
       .element(page.getByRole("alert"))
       .toHaveTextContent("Couldn't download your database. The server may be having trouble.");
-
-    await userEvent.click(page.getByRole("button", { name: "Try again" }));
-
-    await expect.element(page.getByText("No transactions yet.")).toBeVisible();
   });
 });
 
@@ -275,14 +272,14 @@ describe("TransactionsPage", () => {
   it("marks an edit as unsaved and saves it", async () => {
     await loggedIn(await storedDatabase(TWO_TRANSACTIONS));
     await renderApp("/transactions");
-    await expect.element(page.getByText("Corner Market")).toBeVisible();
+    await expect.element(page.getByText("Corner Market").shown()).toBeVisible();
     expect(saveButton().query()).toBeNull();
 
     await editCounterparty("Corner Market", "Corner Shop");
 
     await expect.element(saveButton()).toHaveAccessibleName("Save");
     await expect.element(saveButton()).toBeEnabled();
-    await expect.element(page.getByText("Corner Shop")).toBeVisible();
+    await expect.element(page.getByText("Corner Shop").shown()).toBeVisible();
     await userEvent.click(saveButton());
 
     await expect.element(saveButton()).not.toBeInTheDocument();
@@ -302,7 +299,7 @@ describe("TransactionsPage", () => {
     await userEvent.click(saveButton());
 
     await expect
-      .element(page.getByText(/saved from somewhere else since you opened it/))
+      .element(page.getByText(/saved from somewhere else since you opened it/).shown())
       .toBeVisible();
     await expect.element(saveButton()).toBeEnabled();
   });
@@ -331,7 +328,7 @@ describe("TransactionsPage", () => {
   it("warns before leaving with unsaved changes", async () => {
     await loggedIn(await storedDatabase(TWO_TRANSACTIONS));
     await renderApp("/transactions");
-    await expect.element(page.getByText("Corner Market")).toBeVisible();
+    await expect.element(page.getByText("Corner Market").shown()).toBeVisible();
     const leave = () => {
       const event = new Event("beforeunload", { cancelable: true });
       window.dispatchEvent(event);
@@ -473,7 +470,7 @@ describe("TransactionsPage", () => {
     await userEvent.keyboard("{Enter}");
 
     await expect
-      .element(page.getByText("Couldn't change that transaction: disk on fire"))
+      .element(page.getByText("Couldn't change that transaction: disk on fire").shown())
       .toBeVisible();
     await expect.poll(() => cafe.element().textContent).toBe("");
     await userEvent.dblClick(cafe);
@@ -516,7 +513,7 @@ describe("TransactionsPage", () => {
       await selectRange();
 
       await userEvent.keyboard("{Delete}");
-      await expect.poll(() => page.getByText("Weekly").all()).toHaveLength(0);
+      await expect.poll(() => page.getByText("Weekly").shown().all()).toHaveLength(0);
       await userEvent.click(saveButton());
 
       await expect.element(saveButton()).not.toBeInTheDocument();
@@ -542,10 +539,10 @@ describe("TransactionsPage", () => {
       await userEvent.keyboard("{Delete}");
 
       await expect
-        .element(page.getByText("Couldn't change those transactions: disk on fire"))
+        .element(page.getByText("Couldn't change those transactions: disk on fire").shown())
         .toBeVisible();
-      await expect.poll(() => page.getByText("Weekly").all()).toHaveLength(2);
-      await expect.element(page.getByText("Groceries")).toBeVisible();
+      await expect.poll(() => page.getByText("Weekly").shown().all()).toHaveLength(2);
+      await expect.element(page.getByText("Groceries").shown()).toBeVisible();
     });
   });
 
@@ -559,7 +556,7 @@ describe("TransactionsPage", () => {
     await expect.element(saveButton()).toBeEnabled();
     write.release();
     // Still unsaved once it's written.
-    await expect.element(page.getByText("Corner Shop")).toBeVisible();
+    await expect.element(page.getByText("Corner Shop").shown()).toBeVisible();
     await expect.element(saveButton()).toBeEnabled();
   });
 
@@ -572,9 +569,9 @@ describe("TransactionsPage", () => {
     update.fail();
 
     await expect
-      .element(page.getByText("Couldn't change that transaction: disk on fire"))
+      .element(page.getByText("Couldn't change that transaction: disk on fire").shown())
       .toBeVisible();
-    await expect.element(page.getByText("Corner Market")).toBeVisible();
+    await expect.element(page.getByText("Corner Market").shown()).toBeVisible();
   });
 
   it("doesn't let a failed edit undo a later edit to the same cell", async () => {
@@ -587,10 +584,10 @@ describe("TransactionsPage", () => {
     update.fail();
 
     await expect
-      .element(page.getByText("Couldn't change that transaction: disk on fire"))
+      .element(page.getByText("Couldn't change that transaction: disk on fire").shown())
       .toBeVisible();
-    await expect.element(page.getByText("Corner Store")).toBeVisible();
-    expect(page.getByText("Corner Market").query()).toBeNull();
+    await expect.element(page.getByText("Corner Store").shown()).toBeVisible();
+    expect(page.getByText("Corner Market").shown().query()).toBeNull();
     await userEvent.click(saveButton());
     await expect.element(saveButton()).not.toBeInTheDocument();
     const [, blob] = vi.mocked(uploadDatabase).mock.calls[0]!;
@@ -618,7 +615,7 @@ describe("TransactionsPage", () => {
 
   describe("amounts", () => {
     async function editAmount(from: string, to: string) {
-      await userEvent.dblClick(page.getByText(from, { exact: true }));
+      await userEvent.dblClick(page.getByText(from, { exact: true }).shown());
       await page.getByRole("textbox").fill(to);
       await userEvent.keyboard("{Enter}");
     }
@@ -635,7 +632,7 @@ describe("TransactionsPage", () => {
 
       await editAmount("-46.20", "-12.345");
 
-      await expect.element(page.getByText("-12.35", { exact: true })).toBeVisible();
+      await expect.element(page.getByText("-12.35", { exact: true }).shown()).toBeVisible();
       expect(await storedAmount()).toEqual([{ amount: -1235 }]);
     });
 
@@ -647,9 +644,9 @@ describe("TransactionsPage", () => {
       update.fail();
 
       await expect
-        .element(page.getByText("Couldn't change that transaction: disk on fire"))
+        .element(page.getByText("Couldn't change that transaction: disk on fire").shown())
         .toBeVisible();
-      await expect.element(page.getByText("-46.20", { exact: true })).toBeVisible();
+      await expect.element(page.getByText("-46.20", { exact: true }).shown()).toBeVisible();
     });
 
     it("doesn't let a failed edit undo a later edit of the amount", async () => {
@@ -661,9 +658,9 @@ describe("TransactionsPage", () => {
       update.fail();
 
       await expect
-        .element(page.getByText("Couldn't change that transaction: disk on fire"))
+        .element(page.getByText("Couldn't change that transaction: disk on fire").shown())
         .toBeVisible();
-      await expect.element(page.getByText("-7.50", { exact: true })).toBeVisible();
+      await expect.element(page.getByText("-7.50", { exact: true }).shown()).toBeVisible();
       expect(await storedAmount()).toEqual([{ amount: -750 }]);
     });
   });
@@ -733,17 +730,65 @@ describe("switching pages", () => {
     await expect.element(period("All")).toHaveAttribute("aria-pressed", "true");
   }
 
-  it("shows the transactions straight away on coming back, while they're read again", async () => {
-    await opened();
-    await userEvent.click(tab("Overview"));
-    await expect.element(page.getByRole("region", { name: "Recent" })).toBeVisible();
-    const reread = holdNextQuery((sql) => sql === LIST_TRANSACTIONS);
+  /** The database queries asked for from now on, with their answers. */
+  function recordQueries() {
+    const original = Database.prototype.query;
+    const queries: { sql: string; answer: Promise<unknown> }[] = [];
+    vi.spyOn(Database.prototype, "query").mockImplementation(function (this: Database, sql, bind) {
+      const answer = original.call(this, sql, bind);
+      queries.push({ sql, answer });
+      return answer;
+    });
+    return queries;
+  }
+
+  /**
+   * Waits until `sql` has been asked for, and everything asked for so far is
+   * answered. For a hidden page's query, once the shown page has loaded.
+   */
+  async function settled(queries: ReturnType<typeof recordQueries>, sql: string) {
+    await expect.poll(() => queries.some((query) => query.sql === sql)).toBe(true);
+    await Promise.all(queries.map(({ answer }) => answer));
+  }
+
+  it("reads the transactions while the overview shows, so they're ready to switch to", async () => {
+    await loggedIn(await storedDatabase(TWO_TRANSACTIONS));
+    const queries = recordQueries();
+    await renderApp("/");
+    await expect.element(page.getByRole("heading", { level: 1 })).toBeVisible();
+    await settled(queries, LIST_TRANSACTIONS);
+    const before = queries.length;
 
     await userEvent.click(tab("Transactions"));
 
     await expect.element(inTable("Corner Market")).toBeVisible();
-    expect(page.getByText("Loading transactions…").query()).toBeNull();
-    await reread.release();
+    expect(queries.slice(before)).toEqual([]);
+  });
+
+  it("reads the overview while the transactions show, so it's ready to switch to", async () => {
+    await loggedIn(await storedDatabase(TWO_TRANSACTIONS));
+    const queries = recordQueries();
+    await renderApp("/transactions");
+    await expect.element(inTable("Corner Market")).toBeVisible();
+    await settled(queries, GET_OVERVIEW_META);
+    const before = queries.length;
+
+    await userEvent.click(tab("Overview"));
+
+    await expect.element(page.getByRole("region", { name: "Recent" })).toBeVisible();
+    expect(queries.slice(before)).toEqual([]);
+  });
+
+  it("doesn't read the transactions again on coming back", async () => {
+    await opened();
+    await userEvent.click(tab("Overview"));
+    await expect.element(page.getByRole("region", { name: "Recent" })).toBeVisible();
+    const queries = recordQueries();
+
+    await userEvent.click(tab("Transactions"));
+
+    await expect.element(inTable("Corner Market")).toBeVisible();
+    expect(queries.map(({ sql }) => sql)).not.toContain(LIST_TRANSACTIONS);
   });
 
   it("keeps the overview's period", async () => {
@@ -807,7 +852,7 @@ describe("a version saved elsewhere", () => {
 
     checkForUpdates();
 
-    await expect.element(page.getByText("Corner Shop")).toBeVisible();
+    await expect.element(page.getByText("Corner Shop").shown()).toBeVisible();
     expect(downloadDatabaseIfChanged).toHaveBeenCalledWith(TOKEN, SHA_A);
     expect(saveButton().query()).toBeNull();
   });
@@ -816,7 +861,7 @@ describe("a version saved elsewhere", () => {
     await opened();
     await savedElsewhere(RENAMED);
     checkForUpdates();
-    await expect.element(page.getByText("Corner Shop")).toBeVisible();
+    await expect.element(page.getByText("Corner Shop").shown()).toBeVisible();
 
     await editCounterparty("Café Lumen", "Café Sol");
     await userEvent.click(saveButton());
@@ -854,13 +899,13 @@ describe("a version saved elsewhere", () => {
     checkForUpdates();
 
     expect(downloadDatabaseIfChanged).not.toHaveBeenCalled();
-    await expect.element(page.getByText("Café Sol")).toBeVisible();
+    await expect.element(page.getByText("Café Sol").shown()).toBeVisible();
   });
 
   it("isn't checked for while a cell is being edited, but is once it isn't", async () => {
     await opened();
     await savedElsewhere(RENAMED);
-    await userEvent.dblClick(page.getByText("Café Lumen"));
+    await userEvent.dblClick(page.getByText("Café Lumen").shown());
     await expect.element(page.getByRole("textbox")).toHaveFocus();
 
     checkForUpdates();
@@ -868,7 +913,7 @@ describe("a version saved elsewhere", () => {
     await userEvent.keyboard("{Escape}");
     checkForUpdates();
 
-    await expect.element(page.getByText("Corner Shop")).toBeVisible();
+    await expect.element(page.getByText("Corner Shop").shown()).toBeVisible();
   });
 
   it("is dropped when an edit is made while it downloads", async () => {
@@ -889,8 +934,8 @@ describe("a version saved elsewhere", () => {
     // Give it the chance to (wrongly) replace the data.
     await new Promise((resolve) => setTimeout(resolve, 200));
 
-    await expect.element(page.getByText("Café Sol")).toBeVisible();
-    await expect.element(page.getByText("Corner Market")).toBeVisible();
+    await expect.element(page.getByText("Café Sol").shown()).toBeVisible();
+    await expect.element(page.getByText("Corner Market").shown()).toBeVisible();
     await userEvent.click(saveButton());
     await expect.element(saveButton()).not.toBeInTheDocument();
     expect(vi.mocked(uploadDatabase).mock.calls[0]![2]).toEqual({ ifMatch: SHA_A });
@@ -905,7 +950,7 @@ describe("a version saved elsewhere", () => {
 
     checkForUpdates();
 
-    await expect.element(page.getByText("Corner Shop")).toBeVisible();
+    await expect.element(page.getByText("Corner Shop").shown()).toBeVisible();
   });
 
   it("keeps the active cell on a row that exists when it has fewer rows", async () => {
@@ -916,7 +961,7 @@ describe("a version saved elsewhere", () => {
 
     checkForUpdates();
 
-    await expect.element(page.getByText("Café Lumen")).not.toBeInTheDocument();
+    await expect.element(page.getByText("Café Lumen").shown()).not.toBeInTheDocument();
     const grid = page.getByRole("grid").element();
     const active = document.getElementById(grid.getAttribute("aria-activedescendant")!);
     expect(active?.textContent).toBe("Corner Market");
@@ -965,11 +1010,11 @@ describe("a session the server no longer accepts", () => {
     await new Promise((resolve) => setTimeout(resolve, 200));
 
     expect(router.state.location.pathname).toBe("/transactions");
-    await expect.element(page.getByText("Café Sol")).toBeVisible();
+    await expect.element(page.getByText("Café Sol").shown()).toBeVisible();
     vi.mocked(uploadDatabase).mockResolvedValue({ success: false, code: "UNAUTHORIZED" });
     await userEvent.click(saveButton());
     await expect
-      .element(page.getByText("Your session has ended. Log in again to save."))
+      .element(page.getByText("Your session has ended. Log in again to save.").shown())
       .toBeVisible();
   });
 });
@@ -998,7 +1043,7 @@ describe("undo and redo on the transactions page", () => {
   }
 
   async function editAmount(from: string, to: string) {
-    await userEvent.dblClick(page.getByText(from, { exact: true }));
+    await userEvent.dblClick(page.getByText(from, { exact: true }).shown());
     await page.getByRole("textbox").fill(to);
     await userEvent.keyboard("{Enter}");
   }
@@ -1091,12 +1136,12 @@ describe("undo and redo on the transactions page", () => {
     await focusGrid("Corner Market");
     await userEvent.click(await cellOf("Café Lumen", REMARKS), { modifiers: ["Shift"] });
     await userEvent.keyboard("{Delete}");
-    await expect.poll(() => page.getByText("Weekly").all()).toHaveLength(0);
+    await expect.poll(() => page.getByText("Weekly").shown().all()).toHaveLength(0);
     await focusGrid("Café Lumen", 0);
 
     await undo();
 
-    await expect.poll(() => page.getByText("Weekly").all()).toHaveLength(2);
+    await expect.poll(() => page.getByText("Weekly").shown().all()).toHaveLength(2);
     await expect.element(inTable("Groceries")).toBeVisible();
     // Groceries and both remarks changed (Café Lumen had no category to
     // clear), so the selection spans those columns of both rows.
@@ -1255,6 +1300,21 @@ describe("undo and redo on the transactions page", () => {
       expect(activeCell()).toBe((await cellOf("Corner Market", COUNTERPARTY)).element());
     });
 
+    it("shows every undo made on the Overview on the transactions page", async () => {
+      await opened();
+      await editCounterparty("Corner Market", "Corner Shop");
+      await editCounterparty("Café Lumen", "Café Sol");
+      await showOverview();
+
+      await undo();
+      await undo();
+      await expect.element(recent()).toMatchTextContent(/Corner Market.*Café Lumen/);
+      await userEvent.click(page.getByRole("link", { name: "Transactions" }));
+
+      await expect.element(inTable("Corner Market")).toBeVisible();
+      await expect.element(inTable("Café Lumen")).toBeVisible();
+    });
+
     it("undoes and redoes on the Overview, which shows it straight away", async () => {
       await opened();
       await editCounterparty("Corner Market", "Corner Shop");
@@ -1278,8 +1338,9 @@ describe("undo and redo on the transactions page", () => {
       await expect.element(recent()).toMatchTextContent(/Corner Market/);
       await userEvent.click(page.getByRole("link", { name: "Transactions" }));
 
-      await expect.element(inTable("Corner Market")).toBeVisible();
-      expect(activeCell()).toBe((await cellOf("Corner Market", COUNTERPARTY)).element());
+      // Already shown as undone; it's selected once the page hears of the undo.
+      const cell = (await cellOf("Corner Market", COUNTERPARTY)).element();
+      await expect.poll(activeCell).toBe(cell);
     });
 
     it("says what it undid and redid where the change can't be seen, in a toast each", async () => {
@@ -1289,15 +1350,28 @@ describe("undo and redo on the transactions page", () => {
 
       await undo();
       await expect
-        .element(page.getByText("Undid counterparty of Corner Market: Corner Market → Corner Shop"))
+        .element(
+          page
+            .getByText("Undid counterparty of Corner Market: Corner Market → Corner Shop")
+            .shown(),
+        )
         .toBeVisible();
       await redo();
 
       await expect
-        .element(page.getByText("Redid counterparty of Corner Market: Corner Market → Corner Shop"))
+        .element(
+          page
+            .getByText("Redid counterparty of Corner Market: Corner Market → Corner Shop")
+            .shown(),
+        )
         .toBeVisible();
       // Each gets its own toast, stacked rather than replaced.
-      expect(page.getByText(/^(Undid|Redid) /).all()).toHaveLength(2);
+      expect(
+        page
+          .getByText(/^(Undid|Redid) /)
+          .shown()
+          .all(),
+      ).toHaveLength(2);
     });
 
     it("doesn't say what it undid where the change can be seen", async () => {
@@ -1309,7 +1383,12 @@ describe("undo and redo on the transactions page", () => {
       // Give it the chance to (wrongly) say so.
       await new Promise((resolve) => setTimeout(resolve, 200));
 
-      expect(page.getByText(/^Undid /).query()).toBeNull();
+      expect(
+        page
+          .getByText(/^Undid /)
+          .shown()
+          .query(),
+      ).toBeNull();
     });
 
     it("leaves Ctrl+Z in a text field to the field", async () => {
@@ -1398,7 +1477,7 @@ describe("undo and redo on the transactions page", () => {
     vi.spyOn(Database.prototype, "batch").mockRejectedValueOnce(new Error("disk on fire"));
     await editCounterparty("Café Lumen", "Café Sol");
     await expect
-      .element(page.getByText("Couldn't change that transaction: disk on fire"))
+      .element(page.getByText("Couldn't change that transaction: disk on fire").shown())
       .toBeVisible();
     await focusGrid("Café Lumen");
 

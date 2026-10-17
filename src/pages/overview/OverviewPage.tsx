@@ -1,5 +1,5 @@
-import { useEffect, useState, useSyncExternalStore } from "react";
-import { ClosedError } from "../../db/rpc.ts";
+import { useState } from "react";
+import { keepPreviousData, usePrefetchQuery, useQuery } from "@tanstack/react-query";
 import { useOpenDatabase } from "../../db/useDatabase.ts";
 import AccountsCard from "./AccountsCard.tsx";
 import { Eyebrow } from "./Card.tsx";
@@ -7,7 +7,7 @@ import CustomRangeInputs from "./CustomRangeInputs.tsx";
 import CashFlowCard from "./CashFlowCard.tsx";
 import CategoriesCard from "./CategoriesCard.tsx";
 import IncomeSpendingCard from "./IncomeSpendingCard.tsx";
-import { loadOverview, overviewCurrency, type Overview } from "./loadOverview.ts";
+import { overviewCurrency, overviewQuery } from "./loadOverview.ts";
 import { formatDay, localDate, today, type PeriodChoice } from "./period.ts";
 import PeriodPicker from "./PeriodPicker.tsx";
 import RecentCard from "./RecentCard.tsx";
@@ -18,54 +18,40 @@ const headingClass = "font-display text-[1.625rem] font-bold tracking-tight";
 /** As tall as a custom range's underlined dates, so switching doesn't move the page. */
 const headingUnderlineClass = "border-b-3 border-transparent";
 
-type OverviewState =
-  | { status: "loading" }
-  | { status: "ready"; overview: Overview | null }
-  | { status: "error" };
-
 function OverviewPage() {
   const { database } = useOpenDatabase();
   const [choice, setChoice] = useState<PeriodChoice>({ kind: "this-month" });
   // Null: the most used.
   const [currency, setCurrency] = useState<string | null>(null);
-  const [state, setState] = useState<OverviewState>({ status: "loading" });
-  // Changes while this page shows come from undo and redo.
-  const dataVersion = useSyncExternalStore(database.subscribe, () => database.version);
+  const query = overviewQuery(database, choice, currency, today());
+  // Started while rendering, so it loads while the page is hidden too: its
+  // effects, where useQuery would start it, only run once it's shown.
+  usePrefetchQuery(query);
+  // The last overview stays up until the one for a new period or currency,
+  // or a newer version of the database, is ready.
+  const {
+    data: overview,
+    isPending,
+    isError,
+  } = useQuery({
+    ...query,
+    placeholderData: keepPreviousData,
+  });
 
-  // Loaded again for a new period or currency, a newer version of the
-  // database, and changes to the data. The last overview stays up until the
-  // next is ready.
-  useEffect(() => {
-    let cancelled = false;
-    loadOverview(database, choice, currency, today()).then(
-      (overview) => {
-        if (!cancelled) setState({ status: "ready", overview });
-      },
-      (error: unknown) => {
-        // The database closed (e.g. on logging out), and this page with it.
-        if (!cancelled && !(error instanceof ClosedError)) setState({ status: "error" });
-      },
-    );
-    return () => {
-      cancelled = true;
-    };
-  }, [database, choice, currency, dataVersion]);
-
-  if (state.status === "error")
+  if (isError)
     return (
       <p role="alert" className="m-auto text-ink">
         Couldn't load the overview.
       </p>
     );
 
-  if (state.status === "loading")
+  if (isPending)
     return (
       <p role="status" className="m-auto text-sm text-ink-muted">
         Loading overview…
       </p>
     );
 
-  const { overview } = state;
   if (overview === null) return <p className="m-auto text-ink-muted">No transactions yet.</p>;
   // Shown as picked straight away, while its overview loads.
   const pickedCurrency = overviewCurrency(currency, overview.currencies) ?? overview.currency;
