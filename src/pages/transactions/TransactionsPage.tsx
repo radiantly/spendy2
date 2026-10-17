@@ -14,15 +14,12 @@ import {
   type ListedTransaction,
 } from "../../db/queries/transactions.ts";
 import type { TransactionEdit } from "../../db/databaseContext.ts";
-import { useMediaQuery } from "../../hooks/useMediaQuery.ts";
+import { useBreakpoint } from "../../hooks/useBreakpoint.ts";
 import { useUndoRedo } from "../shell/historyKeys.ts";
 import { describeEdit } from "./describe.ts";
 import { hasPatch, patchFrom } from "./patch.ts";
 import TransactionsList from "./TransactionsList.tsx";
 import TransactionsTable, { type TransactionChange } from "./TransactionsTable.tsx";
-
-/** Where the table's columns fit (Tailwind's md); narrower, the transactions are a list. */
-const TABLE_FITS = "(min-width: 48rem)";
 
 type Loaded = {
   rows: ListedTransaction[];
@@ -46,7 +43,8 @@ function TransactionsPage() {
   // Undoing and redoing can happen from any page.
   const moved = useSyncExternalStore(history.subscribe, () => history.latest);
   const undoOrRedo = useUndoRedo(history);
-  const tableFits = useMediaQuery(TABLE_FITS);
+  // The table's columns fit from md; narrower, the transactions are a list.
+  const tableFits = useBreakpoint("md");
 
   useEffect(() => {
     let cancelled = false;

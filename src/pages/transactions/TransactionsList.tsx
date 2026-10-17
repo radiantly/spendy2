@@ -1,6 +1,10 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useWindowVirtualizer } from "@tanstack/react-virtual";
-import type { AccountCurrency, ListedTransaction } from "../../db/queries/transactions.ts";
+import {
+  conversionTo,
+  type AccountCurrency,
+  type ListedTransaction,
+} from "../../db/queries/transactions.ts";
 import type { Rational } from "../../lib/rational.ts";
 import { findName, formatAmountValue } from "./fields.ts";
 
@@ -147,14 +151,6 @@ const amountOf = (transaction: ListedTransaction): Rational => ({
 function signedAmount(amount: Rational, currency: string) {
   const value = formatAmountValue(amount, currency);
   return amount.numerator > 0 ? `+${value}` : value;
-}
-
-/** The transaction's amount in `currency`, if it has a conversion to it. */
-function conversionTo(transaction: ListedTransaction, currency: string): Rational | undefined {
-  // The query builds the JSON, so its shape is known.
-  const fractions = JSON.parse(transaction.conversions) as Record<string, [number, number]>;
-  const fraction = fractions[currency];
-  return fraction && { numerator: fraction[0], denominator: fraction[1] };
 }
 
 /** What goes where the category usually is. */

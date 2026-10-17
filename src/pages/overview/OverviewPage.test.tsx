@@ -305,18 +305,37 @@ describe("OverviewPage", () => {
     await expect.element(region("Accounts")).toMatchTextContent(/Travel Card.*Out-€33/);
   });
 
-  it("says an account without a display currency has several", async () => {
-    await opened(
-      [
-        DATA,
-        `INSERT INTO accounts VALUES ('Wallet', NULL, 'Cash', NULL)`,
-        insert(15, "2026-10-02", "Wallet", -10, "Kiosk", "Dining out"),
-      ].join(";"),
-    );
+  describe("an account without a display currency", () => {
+    const wallet = () => region("Accounts").getByRole("listitem").filter({ hasText: "Wallet" });
+    const withWallet = (...transactions: string[]) =>
+      opened(
+        [DATA, `INSERT INTO accounts VALUES ('Wallet', NULL, 'Cash', NULL)`, ...transactions].join(
+          ";",
+        ),
+      );
 
-    await expect
-      .element(region("Accounts").getByRole("listitem").filter({ hasText: "Wallet" }))
-      .toHaveTextContent("Wallet[Cash]Multiple currencies");
+    it("shows money in and out in the one currency its transactions are in", async () => {
+      await withWallet(
+        insert(15, "2026-10-02", "Wallet", -10, "Kiosk", "Dining out", { currency: "GBP" }),
+      );
+
+      await expect.element(wallet()).toHaveTextContent("Wallet[Cash]In£0Out-£10");
+    });
+
+    it("says when its transactions are in several currencies", async () => {
+      await withWallet(
+        insert(15, "2026-10-02", "Wallet", -10, "Kiosk", "Dining out", { currency: "GBP" }),
+        insert(16, "2026-10-03", "Wallet", -5, "Café", "Dining out", { currency: "EUR" }),
+      );
+
+      await expect.element(wallet()).toHaveTextContent("Wallet[Cash]Multiple currencies");
+    });
+
+    it("says when it has no transactions in the period", async () => {
+      await withWallet();
+
+      await expect.element(wallet()).toHaveTextContent("Wallet[Cash]No transactions");
+    });
   });
 
   it("shows each account's type and identifier, or just its type without one", async () => {

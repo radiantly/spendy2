@@ -4,7 +4,8 @@ import type { Overview } from "./loadOverview.ts";
 
 /**
  * Each account's money in and out over the period, in its display currency.
- * An account without one has its transactions in several currencies.
+ * An account without one shows them in the one currency its transactions are
+ * in, or else says it has none or several.
  */
 function AccountsCard({ overview, className = "" }: { overview: Overview; className?: string }) {
   const { accounts } = overview;
@@ -25,7 +26,9 @@ function AccountsCard({ overview, className = "" }: { overview: Overview; classN
                 </span>
               </div>
               {account.currency === null ? (
-                <span className="shrink-0 text-sm text-ink-muted">Multiple currencies</span>
+                <span className="shrink-0 text-sm text-ink-muted">
+                  {account.currencies === 0 ? "No transactions" : "Multiple currencies"}
+                </span>
               ) : (
                 <dl className="flex shrink-0 flex-col items-end gap-0.5 text-sm font-display font-semibold">
                   {(

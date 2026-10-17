@@ -3,6 +3,8 @@
  * components, so the validate-database script can import and check them.
  */
 
+import type { Rational } from "../../lib/rational.ts";
+
 /** The columns the transactions page shows. The amount is the fraction numerator / denominator. */
 export type TransactionRow = {
   id: string;
@@ -29,6 +31,17 @@ export type ListedTransaction = TransactionRow & {
    */
   conversions: string;
 };
+
+/** `transaction`'s amount in `currency`, if it has a conversion to it. */
+export function conversionTo(
+  transaction: Pick<ListedTransaction, "conversions">,
+  currency: string,
+): Rational | undefined {
+  // The query builds the JSON, so its shape is known.
+  const fractions = JSON.parse(transaction.conversions) as Record<string, [number, number]>;
+  const fraction = fractions[currency];
+  return fraction && { numerator: fraction[0], denominator: fraction[1] };
+}
 
 const LISTED_COLUMNS = `
   id, naive_date, account_name, counterparty, category,

@@ -4,7 +4,7 @@
  *
  * The overview is in one display currency, and covers the transactions in
  * accounts shown in it, as well as those in it in accounts without a display
- * currency (see OVERVIEW_CURRENCY). A transaction in another currency counts
+ * currency (see overviewCurrency). A transaction in another currency counts
  * through its conversion to it, and without one is left out of the totals.
  * Transfers between the user's own accounts and transactions marked as
  * duplicates are left out of spending and income. Totals are summed as
@@ -17,25 +17,30 @@ const amountOf = (table: string) =>
   `(${table}.amount_numerator * 1.0 / ${table}.amount_denominator)`;
 
 /**
- * The display currency whose overview a transaction is in: its account's, or
- * its own when the account has none (its transactions stay in their own
- * currencies). Needs `transactions` joined with its `account`.
+ * The display currency whose overview a transaction in `transactions` is in:
+ * its account's, or its own when the account has none (its transactions stay
+ * in their own currencies). Needs it joined with its `account`.
  */
-const OVERVIEW_CURRENCY = "coalesce(account.display_currency, transactions.currency)";
+const overviewCurrency = (transactions: string) =>
+  `coalesce(account.display_currency, ${transactions}.currency)`;
 
 /**
- * The transactions from `$from` to `$to` (inclusive) in the overview in
- * `$display`, with
- * - `display_amount`: the amount in `$display`, or null if there's none
- * - `display_numerator`, `display_denominator`: the amount's conversion to
- *   `$display`, if it has one (never when it's in `$display`)
- * - `counted`: whether it counts towards spending and income
+ * The transactions from `$from` to `$to` (inclusive) that also meet
+ * `condition`, with
+ * - `display_amount`: the amount in the display currency whose overview it's
+ *   in (see overviewCurrency): its own, or its conversion to it. Null if
+ *   there's none.
+ * - `display_numerator`, `display_denominator`: that conversion, if it has
+ *   one (never when it's in that currency)
+ * - `counted`: whether it counts towards spending and income: it's neither a
+ *   transfer between the user's own accounts nor marked as a duplicate
  */
-const IN_PERIOD = `
+const inPeriod = (condition: string) => `
   WITH t AS (
     SELECT transactions.*,
       CASE
-        WHEN transactions.currency = $display THEN ${amountOf("transactions")}
+        WHEN transactions.currency = ${overviewCurrency("transactions")}
+          THEN ${amountOf("transactions")}
         ELSE ${amountOf("conversion")}
       END AS display_amount,
       conversion.amount_numerator AS display_numerator,
@@ -44,22 +49,33 @@ const IN_PERIOD = `
     FROM transactions
     JOIN accounts AS account ON account.name = transactions.account_name
     LEFT JOIN conversions AS conversion
-      ON conversion.transaction_id = transactions.id AND conversion.currency = $display
-    WHERE naive_date BETWEEN $from AND $to AND ${OVERVIEW_CURRENCY} = $display
+      ON conversion.transaction_id = transactions.id
+      AND conversion.currency = ${overviewCurrency("transactions")}
+    WHERE naive_date BETWEEN $from AND $to AND ${condition}
   )
 `;
+
+/** The period's transactions in the overview in `$display` (see inPeriod). */
+const IN_PERIOD = inPeriod(`${overviewCurrency("transactions")} = $display`);
 
 export type CurrencyUse = { currency: string };
 
 /**
  * Every display currency with an overview, the one with the most
- * transactions first, then by name. No binds.
+ * transactions first, then by name. No binds. Each account's currencies are
+ * counted first, from transactions_account_currency, so only those few rows
+ * are grouped by their overview's currency.
  */
 export const LIST_CURRENCIES = `
-  SELECT ${OVERVIEW_CURRENCY} AS currency
-  FROM transactions JOIN accounts AS account ON account.name = transactions.account_name
+  SELECT ${overviewCurrency("used")} AS currency
+  FROM (
+    SELECT account_name, currency, count(*) AS transactions
+    FROM transactions
+    GROUP BY account_name, currency
+  ) AS used
+  JOIN accounts AS account ON account.name = used.account_name
   GROUP BY 1
-  ORDER BY count(*) DESC, 1
+  ORDER BY sum(used.transactions) DESC, 1
 `;
 
 export type OverviewMeta = {
@@ -90,10 +106,10 @@ export type PeriodSummary = {
    */
   unconverted: number;
   /**
-   * Transactions in other currencies than the display currency (so in
-   * accounts shown in it), transfers and duplicates too.
+   * Counted transactions spending money in other currencies than the display
+   * currency (so in accounts shown in it).
    */
-  foreign_currency: number;
+  foreign_currency_spends: number;
 };
 
 /** One row. Bind `{ $display, $from, $to }`. */
@@ -104,7 +120,8 @@ export const GET_PERIOD_SUMMARY = `${IN_PERIOD}
     count(*) AS transactions,
     count(CASE WHEN counted AND category IS NULL THEN 1 END) AS uncategorized,
     count(CASE WHEN counted AND display_amount IS NULL THEN 1 END) AS unconverted,
-    count(CASE WHEN currency <> $display THEN 1 END) AS foreign_currency
+    count(CASE WHEN counted AND currency <> $display AND amount_numerator < 0 THEN 1 END)
+      AS foreign_currency_spends
   FROM t
 `;
 
@@ -158,54 +175,55 @@ export type AccountActivity = {
   name: string;
   type: string;
   identifier: string | null;
+  /** How many currencies its counted transactions in the period are in. */
+  currencies: number;
 } & (
   | {
-      /** The account's display currency, which money in and out are in. */
+      /**
+       * What money in and out are in: the account's display currency, or
+       * without one, the one currency its counted transactions are in.
+       */
       currency: string;
       money_in: number;
       /** Positive. */
       money_out: number;
     }
-  /** Without a display currency, its transactions stay in their own currencies. */
+  /** Without a display currency, its counted transactions aren't in just one. */
   | { currency: null; money_in: null; money_out: null }
 );
 
 /**
  * Every account, the one with the most transactions in the period first.
  * Money in and out leave out transfers to and from the user's other
- * accounts, and are in the account's display currency: a transaction in
- * another currency counts through its conversion to it, and one without a
- * conversion only counts towards the account's place in the order.
- * Bind `{ $from, $to }`.
+ * accounts and duplicates. They're in the account's display currency: a
+ * transaction in another currency counts through its conversion to it, and
+ * one without a conversion only counts towards the account's place in the
+ * order. An account without a display currency has them only when its
+ * transactions are all in one currency. Bind `{ $from, $to }`.
  */
-export const LIST_ACCOUNT_ACTIVITY = `
-  WITH t AS (
-    SELECT transactions.id, transactions.account_name,
-      CASE
-        WHEN transactions.currency = account.display_currency THEN ${amountOf("transactions")}
-        ELSE ${amountOf("conversion")}
-      END AS amount,
-      transfer_account IS NULL AND duplicate_of IS NULL AS counted
-    FROM transactions
-    JOIN accounts AS account ON account.name = transactions.account_name
-    LEFT JOIN conversions AS conversion
-      ON conversion.transaction_id = transactions.id
-      AND conversion.currency = account.display_currency
-    WHERE naive_date BETWEEN $from AND $to
+export const LIST_ACCOUNT_ACTIVITY = `${inPeriod("TRUE")}
+  SELECT name, type, identifier, currencies, currency,
+    CASE WHEN currency IS NOT NULL THEN money_in END AS money_in,
+    CASE WHEN currency IS NOT NULL THEN money_out END AS money_out
+  FROM (
+    SELECT
+      account.name,
+      account.type,
+      account.identifier,
+      count(DISTINCT CASE WHEN counted THEN t.currency END) AS currencies,
+      coalesce(
+        account.display_currency,
+        CASE WHEN count(DISTINCT CASE WHEN counted THEN t.currency END) = 1
+          THEN max(CASE WHEN counted THEN t.currency END) END
+      ) AS currency,
+      coalesce(sum(CASE WHEN counted AND display_amount > 0 THEN display_amount END), 0) AS money_in,
+      coalesce(sum(CASE WHEN counted AND display_amount < 0 THEN -display_amount END), 0) AS money_out,
+      count(t.id) AS transactions
+    FROM accounts AS account
+    LEFT JOIN t ON t.account_name = account.name
+    GROUP BY account.name
   )
-  SELECT
-    account.name,
-    account.type,
-    account.identifier,
-    account.display_currency AS currency,
-    CASE WHEN account.display_currency IS NOT NULL
-      THEN coalesce(sum(CASE WHEN counted AND amount > 0 THEN amount END), 0) END AS money_in,
-    CASE WHEN account.display_currency IS NOT NULL
-      THEN coalesce(sum(CASE WHEN counted AND amount < 0 THEN -amount END), 0) END AS money_out
-  FROM accounts AS account
-  LEFT JOIN t ON t.account_name = account.name
-  GROUP BY account.name
-  ORDER BY count(t.id) DESC, account.name
+  ORDER BY transactions DESC, name
 `;
 
 export type RecentTransaction = {

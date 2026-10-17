@@ -137,6 +137,14 @@ describe("LIST_CURRENCIES", () => {
 
     expect(currencies()).toEqual(["EUR", "USD"]);
   });
+
+  it("counts each account's currencies from an index, without reading the transactions", () => {
+    const plan = db
+      .selectObjects(`EXPLAIN QUERY PLAN ${LIST_CURRENCIES}`)
+      .map(({ detail }) => detail);
+
+    expect(plan).toContain("SCAN transactions USING COVERING INDEX transactions_account_currency");
+  });
 });
 
 describe("GET_OVERVIEW_META", () => {
@@ -230,15 +238,17 @@ describe("GET_PERIOD_SUMMARY", () => {
     expect(summary()).toMatchObject({ spent: 22, unconverted: 0 });
   });
 
-  it("counts the transactions in other currencies, transfers and duplicates too", () => {
+  it("counts the spending in other currencies, without transfers or duplicates", () => {
     addCash();
     const original = add({ amount: -20, currency: "EUR", conversions: { USD: -22 } });
+    add({ amount: -20, currency: "EUR" });
+    add({ amount: 30, currency: "EUR", conversions: { USD: 33 } });
     add({ amount: -20, currency: "EUR", duplicateOf: original });
     add({ amount: -20, currency: "EUR", transfer: "Savings" });
     add({ amount: -1 });
     add({ amount: -1, account: "Cash" });
 
-    expect(summary()).toMatchObject({ transactions: 5, foreign_currency: 3 });
+    expect(summary()).toMatchObject({ transactions: 7, foreign_currency_spends: 2 });
   });
 
   it("leaves transfers out of spending, income and what needs a category", () => {
@@ -359,6 +369,7 @@ describe("LIST_ACCOUNT_ACTIVITY", () => {
       name: "Checking",
       type: "Bank",
       identifier: "••4821",
+      currencies: 1,
       currency: "USD",
       money_in: 2560,
       money_out: 40,
@@ -394,17 +405,49 @@ describe("LIST_ACCOUNT_ACTIVITY", () => {
     });
   });
 
-  it("lists an account without a display currency, without amounts", () => {
-    db.exec("INSERT INTO accounts VALUES ('Cash', NULL, 'Cash', NULL)");
-    add({ amount: -5, account: "Cash" });
+  describe("an account without a display currency", () => {
+    const cash = () => rows(LIST_ACCOUNT_ACTIVITY, bind).find(({ name }) => name === "Cash");
+    beforeEach(addCash);
 
-    expect(rows(LIST_ACCOUNT_ACTIVITY, bind)[0]).toEqual({
-      name: "Cash",
-      type: "Cash",
-      identifier: null,
-      currency: null,
-      money_in: null,
-      money_out: null,
+    it("has amounts in the one currency its transactions are in", () => {
+      add({ amount: -5, account: "Cash", currency: "GBP" });
+      add({ amount: 2, account: "Cash", currency: "GBP" });
+
+      expect(cash()).toEqual({
+        name: "Cash",
+        type: "Cash",
+        identifier: null,
+        currencies: 1,
+        currency: "GBP",
+        money_in: 2,
+        money_out: 5,
+      });
+    });
+
+    it("has none when its transactions are in several currencies", () => {
+      add({ amount: -5, account: "Cash", currency: "GBP" });
+      add({ amount: -2, account: "Cash", currency: "EUR" });
+
+      expect(cash()).toMatchObject({
+        currencies: 2,
+        currency: null,
+        money_in: null,
+        money_out: null,
+      });
+    });
+
+    it("goes by the transactions counted, not transfers or duplicates", () => {
+      const original = add({ amount: -5, account: "Cash", currency: "GBP" });
+      add({ amount: -300, account: "Cash", currency: "EUR", transfer: "Checking" });
+      add({ amount: -5, account: "Cash", currency: "USD", duplicateOf: original });
+
+      expect(cash()).toMatchObject({ currencies: 1, currency: "GBP", money_out: 5 });
+    });
+
+    it("has none without transactions in the period", () => {
+      add({ amount: -5, account: "Cash", currency: "GBP", date: "2026-09-30" });
+
+      expect(cash()).toMatchObject({ currencies: 0, currency: null, money_out: null });
     });
   });
 

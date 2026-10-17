@@ -39,6 +39,12 @@
   --color-strength-4: var(--color-lime);
 }
 
+/* Breakpoints useBreakpoint reads at runtime. Static, as Tailwind otherwise
+   leaves out theme variables it doesn't see used. */
+@theme static {
+  --breakpoint-md: 48rem;
+}
+
 @media (prefers-color-scheme: dark) {
   :root {
     --color-canvas: #0e0e10;

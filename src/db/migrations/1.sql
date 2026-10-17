@@ -63,6 +63,8 @@ CREATE INDEX transactions_category ON transactions(category);
 CREATE INDEX categories_parent ON categories(parent);
 -- for the amounts in one currency
 CREATE INDEX conversions_currency ON conversions(currency);
+-- for the overview's list of currencies, and the account foreign keys' cascades
+CREATE INDEX transactions_account_currency ON transactions(account_name, currency);
 
 -- A conversion is into another currency: a transaction's amount in its own
 -- currency is its amount. Checked from both sides, so neither a conversion nor

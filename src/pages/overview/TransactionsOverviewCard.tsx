@@ -5,7 +5,7 @@ import type { Overview } from "./loadOverview.ts";
 /**
  * What needs attention in the period's transactions: how many have no
  * category, or no amount in the overview's currency. When none do, how many
- * there are, and how many are in other currencies.
+ * there are, and how many spend money in other currencies.
  */
 function TransactionsOverviewCard({
   overview,
@@ -14,7 +14,7 @@ function TransactionsOverviewCard({
   overview: Overview;
   className?: string;
 }) {
-  const { transactions, uncategorized, unconverted, foreign_currency } = overview.summary;
+  const { transactions, uncategorized, unconverted, foreign_currency_spends } = overview.summary;
   const counts = [
     uncategorized > 0
       ? { count: uncategorized, label: "uncategorized", color: "text-danger" }
@@ -25,7 +25,7 @@ function TransactionsOverviewCard({
         },
     unconverted > 0
       ? { count: unconverted, label: "not converted", color: "text-warning" }
-      : { count: foreign_currency, label: "foreign currency spends", color: "" },
+      : { count: foreign_currency_spends, label: "foreign currency spends", color: "" },
   ];
 
   return (
