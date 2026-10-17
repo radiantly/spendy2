@@ -4,6 +4,7 @@ import { useAuth } from "../../auth/useAuth.ts";
 import DatabaseProvider from "../../db/DatabaseProvider.tsx";
 import { useDatabase } from "../../db/useDatabase.ts";
 import Logo from "../../components/Logo.tsx";
+import UserAvatar from "../../components/UserAvatar.tsx";
 import { useHistoryKeys } from "./historyKeys.ts";
 import SaveControls from "./SaveControls.tsx";
 import { describeOpenError } from "./openError.ts";
@@ -53,12 +54,7 @@ function Header({ username }: { username: string }) {
       </nav>
       <div className="ml-auto flex items-center gap-4">
         <SaveControls />
-        <span
-          aria-label={`Logged in as ${username}`}
-          className="grid size-10 place-items-center rounded-full border border-line font-display text-lg font-semibold text-ink"
-        >
-          {username[0]}
-        </span>
+        <UserAvatar username={username} alt={`Logged in as ${username}`} />
       </div>
     </header>
   );

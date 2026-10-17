@@ -164,11 +164,11 @@ describe("AppShell", () => {
       .not.toHaveAttribute("aria-current");
   });
 
-  it("shows the user's initial", async () => {
+  it("shows the user's avatar", async () => {
     await loggedIn(null);
     await renderApp("/");
 
-    await expect.element(page.getByLabelText("Logged in as alice")).toHaveTextContent("a");
+    await expect.element(page.getByRole("img", { name: "Logged in as alice" })).toBeVisible();
   });
 
   it("opens a new database for a user who has none", async () => {
