@@ -4,6 +4,7 @@ import { downloadDatabase, downloadDatabaseIfChanged, uploadDatabase } from "../
 import { renderApp } from "../../test/renderAuthPage.tsx";
 import { rect } from "../../test/renderAuthPage.tsx";
 import { SOURCE_HASH_SQL, transactionId } from "../../test/fixtures.ts";
+import { holdNext } from "../../test/holdNext.ts";
 import { loggedIn, storedDatabase } from "../../test/storedDatabase.ts";
 
 vi.mock("../../api/database.ts", () => ({
@@ -24,7 +25,13 @@ const insert = (
   amount: number,
   counterparty: string,
   category: string | null,
-  extra: { currency?: string; converted?: number; transfer?: string; duplicateOf?: string } = {},
+  extra: {
+    currency?: string;
+    /** The amount in other currencies. */
+    conversions?: Record<string, number>;
+    transfer?: string;
+    duplicateOf?: string;
+  } = {},
 ) => `
   INSERT INTO transactions (seq, id, source, account_name, transfer_account, amount_numerator,
     amount_denominator, currency, counterparty, category, duplicate_of, naive_date)
@@ -32,11 +39,12 @@ const insert = (
     ${Math.round(amount * 100)}, 100, '${extra.currency ?? "USD"}',
     '${counterparty}', ${category === null ? "NULL" : `'${category}'`},
     ${extra.duplicateOf ? `'${extra.duplicateOf}'` : "NULL"}, '${date}')
-  ${
-    extra.converted === undefined
-      ? ""
-      : `; INSERT INTO conversions VALUES ('${transactionId(seq)}', 'USD', ${Math.round(extra.converted * 100)}, 100)`
-  }
+  ${Object.entries(extra.conversions ?? {})
+    .map(
+      ([currency, value]) =>
+        `; INSERT INTO conversions VALUES ('${transactionId(seq)}', '${currency}', ${Math.round(value * 100)}, 100)`,
+    )
+    .join("")}
 `;
 
 /** Today is Oct 9, 2026 (see the mock of period.ts). */
@@ -57,7 +65,7 @@ const DATA = [
   insert(7, "2026-10-04", "Rewards Card", -46.2, "Corner Market", "Groceries"),
   insert(8, "2026-10-06", "Travel Card", -24, "Café Sol", "Dining out", {
     currency: "EUR",
-    converted: -26.4,
+    conversions: { USD: -26.4 },
   }),
   insert(9, "2026-10-07", "Rewards Card", -32, "SQ *KINDLING", null),
   insert(10, "2026-10-07", "Rewards Card", -18.4, "Café Lumen", "Dining out"),
@@ -130,18 +138,18 @@ describe("OverviewPage", () => {
   });
 
   describe("spent", () => {
-    it("adds up spending, leaving out transfers, duplicates and other currencies", async () => {
+    it("adds up spending in the currency's accounts, leaving out transfers and duplicates", async () => {
       await opened();
 
-      // Rent 1,300 + groceries 46.20 + converted 26.40 + 32 + 18.40.
-      await expect.element(region("Spent")).toMatchTextContent(/SPENT · OCTOBER\s*\$1,423/i);
+      // Rent 1,300 + groceries 46.20 + 32 + 18.40. Café Sol is on the card shown in EUR.
+      await expect.element(region("Spent")).toMatchTextContent(/SPENT · OCTOBER\s*\$1,397/i);
     });
 
     it("compares with the same days last month", async () => {
       await opened();
 
       // Sep 1 – 9: 1,500.
-      await expect.element(region("Spent")).toMatchTextContent(range("down 5%vs Sep 1 – 9"));
+      await expect.element(region("Spent")).toMatchTextContent(range("down 7%vs Sep 1 – 9"));
     });
 
     it("names the biggest categories", async () => {
@@ -149,7 +157,7 @@ describe("OverviewPage", () => {
 
       const top = region("Spent").getByRole("listitem");
       await expect.element(top.nth(0)).toMatchTextContent("Housing$1,300");
-      await expect.element(top.nth(1)).toMatchTextContent("Food$91");
+      await expect.element(top.nth(1)).toMatchTextContent("Food$65");
       expect(top.elements()).toHaveLength(2);
     });
 
@@ -158,7 +166,7 @@ describe("OverviewPage", () => {
 
       await expect
         .element(region("Spent").getByRole("img"))
-        .toHaveAccessibleName("Spending added up from Oct 1, 2026 to Oct 9, 2026, reaching $1,423");
+        .toHaveAccessibleName("Spending added up from Oct 1, 2026 to Oct 9, 2026, reaching $1,397");
     });
   });
 
@@ -166,20 +174,72 @@ describe("OverviewPage", () => {
     await opened();
 
     await expect.element(region("Cash flow")).toMatchTextContent(/Money in\s*\$2,560/);
-    await expect.element(region("Cash flow")).toMatchTextContent(/Money out\s*\$1,423/);
+    await expect.element(region("Cash flow")).toMatchTextContent(/Money out\s*\$1,397/);
     await expect
       .element(region("Cash flow"))
-      .toMatchTextContent("You spent 56% of what came in. +$1,137 net.");
+      .toMatchTextContent("You spent 55% of what came in. +$1,163 net.");
   });
 
-  it("counts the transactions, and those without a category", async () => {
-    await opened();
+  describe("transactions overview", () => {
+    const card = () => region("Transactions overview");
+    /** The number shown above `label` in the card. */
+    const count = (label: string) =>
+      card().getByText(label, { exact: true }).element().nextElementSibling!.textContent;
 
-    const glance = region("At a glance");
-    await expect.element(glance).toMatchTextContent(/^At a glancetransactions9uncategorized1See/);
-    await expect
-      .element(glance.getByRole("link", { name: "See transactions →" }))
-      .toHaveAttribute("href", "/transactions");
+    it("counts the uncategorized, and else those in other currencies", async () => {
+      await opened();
+
+      await expect
+        .element(card())
+        .toMatchTextContent(/^Transactions overviewuncategorized1foreign currency spends0See/);
+      await expect
+        .element(card().getByRole("link", { name: "See transactions →" }))
+        .toHaveAttribute("href", "/transactions");
+    });
+
+    it("counts the transactions when none are uncategorized", async () => {
+      await opened(
+        [
+          DATA,
+          insert(15, "2026-10-02", "Travel Card", -10, "Airport Taxi", "Dining out", {
+            conversions: { EUR: -9.2 },
+          }),
+        ].join(";"),
+      );
+
+      await userEvent.selectOptions(page.getByRole("combobox", { name: "Currency" }), "EUR");
+
+      // Café Sol, and Airport Taxi in USD.
+      await expect
+        .element(card())
+        .toMatchTextContent(/^Transactions overviewtransactions2foreign currency spends1See/);
+    });
+
+    it("counts as not converted those in accounts shown in the currency picked", async () => {
+      await opened(
+        [
+          DATA,
+          insert(15, "2026-10-02", "Rewards Card", -10, "London Cab", "Dining out", {
+            currency: "GBP",
+          }),
+          insert(16, "2026-10-02", "Travel Card", -20, "London Pub", "Dining out", {
+            currency: "GBP",
+          }),
+          insert(17, "2026-10-02", "Travel Card", -30, "Paris Cab", "Dining out", {
+            currency: "GBP",
+            conversions: { EUR: -35 },
+          }),
+        ].join(";"),
+      );
+      await expect.element(card()).toMatchTextContent("uncategorized1not converted1");
+
+      await userEvent.selectOptions(page.getByRole("combobox", { name: "Currency" }), "EUR");
+
+      // Café Sol's 24 and Paris Cab's 35; London Pub isn't converted.
+      await expect.element(region("Spent")).toMatchTextContent("€59");
+      expect(count("transactions")).toBe("3");
+      expect(count("not converted")).toBe("1");
+    });
   });
 
   describe("where it went", () => {
@@ -187,9 +247,21 @@ describe("OverviewPage", () => {
       await opened();
 
       const rows = region("Where it went").getByRole("listitem");
-      await expect.element(rows.nth(0)).toMatchTextContent(/Housing.*91%\$1,300/);
-      await expect.element(rows.nth(1)).toMatchTextContent(/Food.*6%\$91/);
+      await expect.element(rows.nth(0)).toMatchTextContent(/Housing.*93%\$1,300/);
+      await expect.element(rows.nth(1)).toMatchTextContent(/Food.*5%\$65/);
       await expect.element(rows.nth(2)).toMatchTextContent(/Uncategorized2%\$32/);
+    });
+
+    it("keeps the bars inside the card when more went uncategorized than anywhere", async () => {
+      await opened(
+        [DATA, insert(15, "2026-10-02", "Rewards Card", -2000, "Mystery Shop", null)].join(";"),
+      );
+      const card = region("Where it went");
+      await expect.element(card).toMatchTextContent(/Uncategorized.*\$2,032/);
+
+      const { right } = card.element().getBoundingClientRect();
+      for (const element of card.element().querySelectorAll("*"))
+        expect(element.getBoundingClientRect().right).toBeLessThanOrEqual(right);
     });
 
     it("opens a category into its subcategories", async () => {
@@ -202,7 +274,7 @@ describe("OverviewPage", () => {
       await expect.element(food).toHaveAttribute("aria-expanded", "true");
       const subs = region("Where it went").getByRole("list").nth(1).getByRole("listitem");
       await expect.element(subs.nth(0)).toMatchTextContent("Groceries$46");
-      await expect.element(subs.nth(1)).toMatchTextContent("Dining out$45");
+      await expect.element(subs.nth(1)).toMatchTextContent("Dining out$18");
     });
   });
 
@@ -218,6 +290,33 @@ describe("OverviewPage", () => {
     await expect.element(accounts.nth(2)).toMatchTextContent(/^India Savings.*Out-₹5,000$/);
     await expect.element(accounts.nth(3)).toMatchTextContent(/^Travel Card.*Out-€24$/);
     await expect.element(accounts.nth(4)).toHaveTextContent("Savings[Bank] ••1190In$0Out$0");
+  });
+
+  it("counts other currencies in an account's own through their conversions", async () => {
+    await opened(
+      [
+        DATA,
+        insert(15, "2026-10-02", "Travel Card", -10, "Airport Taxi", "Dining out", {
+          conversions: { EUR: -9.2 },
+        }),
+      ].join(";"),
+    );
+
+    await expect.element(region("Accounts")).toMatchTextContent(/Travel Card.*Out-€33/);
+  });
+
+  it("says an account without a display currency has several", async () => {
+    await opened(
+      [
+        DATA,
+        `INSERT INTO accounts VALUES ('Wallet', NULL, 'Cash', NULL)`,
+        insert(15, "2026-10-02", "Wallet", -10, "Kiosk", "Dining out"),
+      ].join(";"),
+    );
+
+    await expect
+      .element(region("Accounts").getByRole("listitem").filter({ hasText: "Wallet" }))
+      .toHaveTextContent("Wallet[Cash]Multiple currencies");
   });
 
   it("shows each account's type and identifier, or just its type without one", async () => {
@@ -258,13 +357,13 @@ describe("OverviewPage", () => {
 
       const rows = region("Recent").getByRole("listitem");
       expect(rows.elements().map((row) => row.querySelector(".truncate")?.textContent)).toEqual([
-        "Apollo Pharmacy",
         "Café Lumen",
         "Transfer to Savings",
         "Café Lumen",
         "SQ *KINDLING",
-        "Café Sol",
         "Corner Market",
+        "Acme Corp Payroll",
+        "Parkside Apartments",
       ]);
     });
 
@@ -273,13 +372,28 @@ describe("OverviewPage", () => {
 
       const rows = region("Recent").getByRole("listitem");
       await expect
-        .element(rows.nth(1))
+        .element(rows.nth(0))
         .toMatchTextContent(
           /Oct 8Café LumenFood › Dining outRewards CardMarked as duplicate-\$18\.40/,
         );
-      await expect.element(rows.nth(2)).toMatchTextContent(/TransferEveryday Checking-\$300\.00/);
-      await expect.element(rows.nth(4)).toMatchTextContent(/UncategorizedRewards Card/);
-      await expect.element(rows.nth(5)).toMatchTextContent(/-€24\.00≈ -\$26\.40/);
+      await expect.element(rows.nth(1)).toMatchTextContent(/TransferEveryday Checking-\$300\.00/);
+      await expect.element(rows.nth(3)).toMatchTextContent(/UncategorizedRewards Card/);
+    });
+
+    it("shows an amount in another currency with its conversion", async () => {
+      await opened(
+        [
+          DATA,
+          insert(15, "2026-10-09", "Rewards Card", -20, "Bistro Paris", "Dining out", {
+            currency: "EUR",
+            conversions: { USD: -21.8 },
+          }),
+        ].join(";"),
+      );
+
+      await expect
+        .element(region("Recent").getByRole("listitem").nth(0))
+        .toMatchTextContent(/Bistro Paris.*-€20\.00≈ -\$21\.80/);
     });
 
     it("links to all transactions", async () => {
@@ -303,17 +417,112 @@ describe("OverviewPage", () => {
     await expect.element(months.nth(6)).toMatchTextContent("Sep 2026: income $0, spending $1,550");
     await expect
       .element(months.nth(7))
-      .toMatchTextContent("Oct 2026: income $2,560, spending $1,423 (in the selected period)");
+      .toMatchTextContent("Oct 2026: income $2,560, spending $1,397 (in the selected period)");
   });
 
-  it("notes the base currency and what was left out", async () => {
+  it("notes the currency amounts are in", async () => {
     await opened();
 
     await expect
       .element(page.getByText(/^Decrypted locally/))
-      .toMatchTextContent(
-        "Decrypted locally · last import Oct 7, 2026 · amounts in USD, converted where noted · 1 in other currencies left out",
+      .toHaveTextContent(
+        "Decrypted locally · last import Oct 7, 2026 · amounts in USD, converted where noted",
       );
+  });
+
+  describe("choosing a currency", () => {
+    const currency = () => region("Spent").getByRole("combobox", { name: "Currency" });
+
+    it("lists the currencies on the Spent card, the most used first, starting on it", async () => {
+      await opened();
+
+      await expect.element(currency()).toHaveValue("USD");
+      expect(
+        currency()
+          .getByRole("option")
+          .elements()
+          .map((option) => option.textContent),
+      ).toEqual(["USD", "EUR", "INR"]);
+    });
+
+    it("shows the transactions of the currency picked, in it", async () => {
+      await opened(
+        [
+          DATA,
+          insert(15, "2026-10-02", "Travel Card", -10, "Airport Taxi", "Dining out", {
+            conversions: { EUR: -9.2 },
+          }),
+        ].join(";"),
+      );
+
+      await userEvent.selectOptions(currency(), "EUR");
+
+      // Café Sol's 24, and Airport Taxi's 9.20 converted.
+      await expect.element(region("Spent")).toMatchTextContent(/SPENT · OCTOBER\s*€33/i);
+      const recent = region("Recent").getByRole("listitem");
+      await expect.element(recent.nth(0)).toMatchTextContent(/Café Sol.*-€24\.00$/);
+      await expect.element(recent.nth(1)).toMatchTextContent(/Airport Taxi.*-\$10\.00≈ -€9\.20$/);
+      expect(recent.elements()).toHaveLength(2);
+      await expect
+        .element(page.getByText(/^Decrypted locally/))
+        .toMatchTextContent("amounts in EUR, converted where noted");
+    });
+
+    it("shows the currency picked while its overview loads", async () => {
+      await opened();
+      const load = holdNext(
+        "query",
+        (_sql, bind) => (bind as { $display?: string } | undefined)?.$display === "EUR",
+      );
+
+      await userEvent.selectOptions(currency(), "EUR");
+
+      await expect.element(currency()).toHaveValue("EUR");
+      // Still the USD overview: it's loading.
+      await expect.element(region("Spent")).toMatchTextContent("$1,397");
+      await load.release();
+      await expect.element(region("Spent")).toMatchTextContent("€24");
+      await expect.element(currency()).toHaveValue("EUR");
+    });
+
+    it("keeps the currency picked for another period", async () => {
+      await opened();
+      await userEvent.selectOptions(currency(), "EUR");
+      await expect.element(region("Spent")).toMatchTextContent("€24");
+
+      await userEvent.click(page.getByRole("button", { name: "Last month" }));
+
+      await expect.element(region("Spent")).toMatchTextContent(/SPENT · SEPTEMBER\s*€0/i);
+      await expect.element(currency()).toHaveValue("EUR");
+    });
+
+    it("is there when there's nothing to compare with", async () => {
+      await opened();
+
+      await userEvent.click(page.getByRole("button", { name: "All" }));
+
+      await expect.element(region("Spent")).toMatchTextContent(/SPENT · ALL TIME/i);
+      await expect.element(currency()).toHaveValue("USD");
+    });
+
+    it("goes back to the most used once the one picked has no amounts", async () => {
+      await opened();
+      await userEvent.selectOptions(currency(), "INR");
+      await expect.element(region("Spent")).toMatchTextContent("₹5,000");
+      const newer = await storedDatabase(
+        `${DATA}; DELETE FROM transactions WHERE currency = 'INR'`,
+      );
+      vi.mocked(downloadDatabaseIfChanged).mockResolvedValue({
+        success: true,
+        blob: newer,
+        sha256: "c".repeat(64),
+      });
+
+      document.dispatchEvent(new Event("visibilitychange"));
+
+      await expect.element(region("Spent")).toMatchTextContent("$1,397");
+      await expect.element(currency()).toHaveValue("USD");
+    });
   });
 
   describe("choosing a period", () => {
@@ -341,7 +550,7 @@ describe("OverviewPage", () => {
       await expect
         .element(page.getByRole("heading", { level: 1 }))
         .toMatchTextContent(range("Aug – Oct 2026"));
-      await expect.element(region("Spent")).toMatchTextContent(/SPENT · ALL TIME\s*\$4,213/i);
+      await expect.element(region("Spent")).toMatchTextContent(/SPENT · ALL TIME\s*\$4,187/i);
       await expect.element(region("Spent")).not.toMatchTextContent("vs");
     });
 
@@ -358,7 +567,7 @@ describe("OverviewPage", () => {
       await expect
         .element(page.getByRole("heading", { level: 1 }))
         .toMatchTextContent(range("Sep 1 – Oct 9, 2026"));
-      await expect.element(region("Spent")).toMatchTextContent(/\$2,973/);
+      await expect.element(region("Spent")).toMatchTextContent(/\$2,947/);
     });
 
     it("edits a custom range's dates where the heading was", async () => {
@@ -482,7 +691,7 @@ describe("OverviewPage", () => {
       const order = [
         "Spent",
         "Cash flow",
-        "At a glance",
+        "Transactions overview",
         "Where it went",
         "Accounts",
         "Recent",
@@ -496,7 +705,7 @@ describe("OverviewPage", () => {
 
   it("shows a newer version saved elsewhere", async () => {
     await opened();
-    await expect.element(region("Spent")).toMatchTextContent("$1,423");
+    await expect.element(region("Spent")).toMatchTextContent("$1,397");
     const newer = await storedDatabase(`${DATA}; DELETE FROM transactions WHERE category = 'Rent'`);
     vi.mocked(downloadDatabaseIfChanged).mockResolvedValue({
       success: true,
@@ -506,6 +715,6 @@ describe("OverviewPage", () => {
 
     document.dispatchEvent(new Event("visibilitychange"));
 
-    await expect.element(region("Spent")).toMatchTextContent("$123");
+    await expect.element(region("Spent")).toMatchTextContent("$97");
   });
 });

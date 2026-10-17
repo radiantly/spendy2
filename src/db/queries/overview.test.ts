@@ -11,6 +11,7 @@ import {
   LIST_ACCOUNT_ACTIVITY,
   LIST_CATEGORY_PARENTS,
   LIST_CATEGORY_SPENDING,
+  LIST_CURRENCIES,
   LIST_DAILY_SPENDING,
   LIST_MONTHLY_TOTALS,
   LIST_RECENT_TRANSACTIONS,
@@ -95,13 +96,53 @@ function add({
 }
 
 const rows = (sql: string, bind?: BindingSpec) => db.selectObjects(sql, bind);
-const OCTOBER = { $base: "USD", $from: "2026-10-01", $to: "2026-10-31" };
+const OCTOBER = { $display: "USD", $from: "2026-10-01", $to: "2026-10-31" };
 const summary = (bind: BindingSpec = OCTOBER) => rows(GET_PERIOD_SUMMARY, bind)[0];
+/** An account without a display currency. */
+const addCash = () => db.exec("INSERT INTO accounts VALUES ('Cash', NULL, 'Cash', NULL)");
+
+describe("LIST_CURRENCIES", () => {
+  const currencies = () => rows(LIST_CURRENCIES).map(({ currency }) => currency);
+
+  it("is empty without transactions", () => {
+    expect(currencies()).toEqual([]);
+  });
+
+  it("lists the display currency with the most transactions first, ignoring conversions", () => {
+    add({ amount: -1 });
+    add({ amount: -1, currency: "EUR", account: "Travel", conversions: { USD: -1.1, INR: -90 } });
+    add({ amount: -1, currency: "EUR", account: "Travel", conversions: { USD: -1.1, INR: -90 } });
+
+    expect(currencies()).toEqual(["EUR", "USD"]);
+  });
+
+  it("lists an account's display currency for its transactions in other currencies", () => {
+    add({ amount: -1, account: "Travel" });
+
+    expect(currencies()).toEqual(["EUR"]);
+  });
+
+  it("lists the currencies of transactions in accounts without a display currency", () => {
+    addCash();
+    add({ amount: -1, account: "Cash", currency: "GBP" });
+    add({ amount: -1, account: "Cash" });
+    add({ amount: -1 });
+
+    expect(currencies()).toEqual(["USD", "GBP"]);
+  });
+
+  it("breaks a tie by the currency's name", () => {
+    add({ amount: -1 });
+    add({ amount: -1, currency: "EUR", account: "Travel" });
+
+    expect(currencies()).toEqual(["EUR", "USD"]);
+  });
+});
 
 describe("GET_OVERVIEW_META", () => {
   it("is empty without transactions", () => {
     expect(rows(GET_OVERVIEW_META)).toEqual([
-      { base_currency: null, first_date: null, last_date: null, last_import: expect.any(Number) },
+      { first_date: null, last_date: null, last_import: expect.any(Number) },
     ]);
   });
 
@@ -109,29 +150,6 @@ describe("GET_OVERVIEW_META", () => {
     db.exec("DELETE FROM sources");
 
     expect(rows(GET_OVERVIEW_META)[0]).toMatchObject({ last_import: null });
-  });
-
-  it("picks the currency most transactions have an amount in, counting conversions", () => {
-    add({ amount: -1 });
-    add({ amount: -1, currency: "EUR", account: "Travel", conversions: { USD: -1.1, INR: -90 } });
-    add({ amount: -1, currency: "EUR", account: "Travel", conversions: { USD: -1.1, INR: -90 } });
-
-    expect(rows(GET_OVERVIEW_META)[0]).toMatchObject({ base_currency: "USD" });
-  });
-
-  it("counts a converted transaction in its own currency too", () => {
-    add({ amount: -1, currency: "EUR", account: "Travel", conversions: { USD: -1.1 } });
-    add({ amount: -1, currency: "EUR", account: "Travel", conversions: { USD: -1.1 } });
-    add({ amount: -1, currency: "EUR", account: "Travel" });
-
-    expect(rows(GET_OVERVIEW_META)[0]).toMatchObject({ base_currency: "EUR" });
-  });
-
-  it("breaks a tie by the currency's name", () => {
-    add({ amount: -1 });
-    add({ amount: -1, currency: "EUR", account: "Travel" });
-
-    expect(rows(GET_OVERVIEW_META)[0]).toMatchObject({ base_currency: "EUR" });
   });
 
   it("spans the transactions' dates", () => {
@@ -161,29 +179,66 @@ describe("GET_PERIOD_SUMMARY", () => {
     expect(summary()!.spent).toBeCloseTo(1, 10);
   });
 
-  it("uses a conversion to the base currency", () => {
-    add({ amount: -20, currency: "EUR", account: "Travel", conversions: { USD: -21.8 } });
+  it("covers accounts shown in the display currency, and it in accounts without one", () => {
+    addCash();
+    add({ amount: -10 });
+    add({ amount: -5, account: "Cash" });
+    // Neither in an account shown in USD nor in USD itself.
+    add({ amount: -20, currency: "EUR", account: "Travel", conversions: { USD: -22 } });
+    add({ amount: -7, currency: "EUR", account: "Cash", conversions: { USD: -7.7 } });
+
+    expect(summary()).toMatchObject({ spent: 15, transactions: 2, uncategorized: 2 });
+  });
+
+  it("covers the overview in the display currency asked for", () => {
+    addCash();
+    add({ amount: -10, account: "Travel", conversions: { EUR: -9 } });
+    add({ amount: -20, currency: "EUR" });
+    add({ amount: -7, currency: "EUR", account: "Cash" });
+
+    expect(summary({ ...OCTOBER, $display: "EUR" })).toMatchObject({
+      spent: 16,
+      transactions: 2,
+    });
+  });
+
+  it("uses a conversion to the display currency", () => {
+    add({ amount: -20, currency: "EUR", conversions: { USD: -21.8 } });
 
     expect(summary()).toMatchObject({ spent: 21.8, unconverted: 0 });
   });
 
-  it("counts a transaction with several conversions once, in the base currency", () => {
-    add({
-      amount: -20,
-      currency: "EUR",
-      account: "Travel",
-      conversions: { INR: -1800, USD: -21.8 },
-    });
+  it("counts a transaction with several conversions once, in the display currency", () => {
+    add({ amount: -20, currency: "EUR", conversions: { INR: -1800, USD: -21.8 } });
 
     expect(summary()).toMatchObject({ spent: 21.8, transactions: 1, unconverted: 0 });
   });
 
-  it("leaves out, and counts, transactions with no amount in the base currency", () => {
+  it("leaves out, and counts as unconverted, those with no amount in the display currency", () => {
     add({ amount: -10 });
-    add({ amount: -5000, currency: "INR", account: "India" });
-    add({ amount: -20, currency: "EUR", account: "Travel", conversions: { INR: -1800 } });
+    add({ amount: -20, currency: "EUR" });
+    add({ amount: -20, currency: "EUR", conversions: { INR: -1800 } });
 
-    expect(summary()).toMatchObject({ spent: 10, unconverted: 2, transactions: 3 });
+    expect(summary()).toMatchObject({ spent: 10, transactions: 3, unconverted: 2 });
+  });
+
+  it("doesn't count transfers or duplicates as unconverted", () => {
+    const original = add({ amount: -20, currency: "EUR", conversions: { USD: -22 } });
+    add({ amount: -20, currency: "EUR", duplicateOf: original });
+    add({ amount: -20, currency: "EUR", transfer: "Savings" });
+
+    expect(summary()).toMatchObject({ spent: 22, unconverted: 0 });
+  });
+
+  it("counts the transactions in other currencies, transfers and duplicates too", () => {
+    addCash();
+    const original = add({ amount: -20, currency: "EUR", conversions: { USD: -22 } });
+    add({ amount: -20, currency: "EUR", duplicateOf: original });
+    add({ amount: -20, currency: "EUR", transfer: "Savings" });
+    add({ amount: -1 });
+    add({ amount: -1, account: "Cash" });
+
+    expect(summary()).toMatchObject({ transactions: 5, foreign_currency: 3 });
   });
 
   it("leaves transfers out of spending, income and what needs a category", () => {
@@ -314,8 +369,20 @@ describe("LIST_ACCOUNT_ACTIVITY", () => {
     });
   });
 
-  it("orders by, but doesn't add up, transactions in another currency", () => {
-    add({ amount: -10, account: "Travel", currency: "USD" });
+  it("counts a transaction in another currency through its conversion to the account's", () => {
+    add({ amount: -10, account: "Travel", conversions: { INR: -830, EUR: -9.2 } });
+    add({ amount: 5, account: "Travel", conversions: { EUR: 4.6 } });
+
+    expect(rows(LIST_ACCOUNT_ACTIVITY, bind)[0]).toMatchObject({
+      name: "Travel",
+      currency: "EUR",
+      money_in: 4.6,
+      money_out: 9.2,
+    });
+  });
+
+  it("orders by, but doesn't add up, transactions with no amount in the account's currency", () => {
+    add({ amount: -10, account: "Travel", conversions: { INR: -830 } });
 
     expect(rows(LIST_ACCOUNT_ACTIVITY, bind)[0]).toMatchObject({ name: "Travel", money_out: 0 });
   });
@@ -327,11 +394,18 @@ describe("LIST_ACCOUNT_ACTIVITY", () => {
     });
   });
 
-  it("leaves out accounts without a default currency, for now", () => {
-    db.exec("INSERT INTO accounts VALUES ('Cash', NULL, 'Bank', NULL)");
+  it("lists an account without a display currency, without amounts", () => {
+    db.exec("INSERT INTO accounts VALUES ('Cash', NULL, 'Cash', NULL)");
     add({ amount: -5, account: "Cash" });
 
-    expect(rows(LIST_ACCOUNT_ACTIVITY, bind).map(({ name }) => name)).not.toContain("Cash");
+    expect(rows(LIST_ACCOUNT_ACTIVITY, bind)[0]).toEqual({
+      name: "Cash",
+      type: "Cash",
+      identifier: null,
+      currency: null,
+      money_in: null,
+      money_out: null,
+    });
   });
 
   it("leaves transactions marked as duplicates out of the amounts", () => {
@@ -364,11 +438,10 @@ describe("LIST_RECENT_TRANSACTIONS", () => {
     ]);
   });
 
-  it("has the exact amount, and only its conversion to the base currency", () => {
+  it("has the exact amount, and only its conversion to the display currency", () => {
     add({
       amount: { numerator: -1, denominator: 3 },
       currency: "EUR",
-      account: "Travel",
       conversions: { INR: -30, USD: -0.36 },
     });
     add({ amount: -1, date: "2026-10-01" });
@@ -378,16 +451,27 @@ describe("LIST_RECENT_TRANSACTIONS", () => {
         amount_numerator: -1,
         amount_denominator: 3,
         currency: "EUR",
-        base_numerator: -9,
-        base_denominator: 25,
+        display_numerator: -9,
+        display_denominator: 25,
       },
       {
         amount_numerator: -1,
         amount_denominator: 1,
         currency: "USD",
-        base_numerator: null,
-        base_denominator: null,
+        display_numerator: null,
+        display_denominator: null,
       },
     ]);
+  });
+
+  it("lists only those in the overview in the display currency", () => {
+    addCash();
+    const checking = add({ amount: -1, date: "2026-10-01" });
+    const cash = add({ amount: -1, account: "Cash", date: "2026-10-02" });
+    // In USD, but in an account shown in EUR.
+    add({ amount: -1, account: "Travel", date: "2026-10-03" });
+    add({ amount: -1, account: "Cash", currency: "EUR", date: "2026-10-04" });
+
+    expect(rows(LIST_RECENT_TRANSACTIONS, bind).map(({ id }) => id)).toEqual([cash, checking]);
   });
 });

@@ -2,7 +2,10 @@
 -- same name. Columns referring to them do too, so comparisons agree.
 CREATE TABLE accounts (
   name              TEXT NOT NULL COLLATE NOCASE PRIMARY KEY CHECK (name <> ''),
-  default_currency  TEXT CHECK (default_currency <> ''),
+  -- The currency the account's amounts are shown in: a transaction in another
+  -- currency counts through its conversion to it, and one without a conversion
+  -- is left out (and flagged). NULL: each transaction in its own currency.
+  display_currency  TEXT CHECK (display_currency <> ''),
   type              TEXT NOT NULL CHECK (type <> ''), -- e.g. "Bank" or "Card"
   identifier        TEXT CHECK (identifier <> '') -- e.g. a masked account or card number, like ••4821
 ) STRICT;

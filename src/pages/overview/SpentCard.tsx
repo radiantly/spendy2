@@ -1,15 +1,30 @@
 import { formatMoney } from "../../lib/money.ts";
 import { Eyebrow } from "./Card.tsx";
 import CumulativeChart from "./CumulativeChart.tsx";
+import CurrencyPicker from "./CurrencyPicker.tsx";
 import type { Overview } from "./loadOverview.ts";
 import { percent } from "./shape.ts";
 
 /** How many of the biggest categories the card names. */
 const TOP_CATEGORIES = 3;
 
-/** The period's spending: the total, how it compares, where most went, and how it built up. */
-function SpentCard({ overview, className = "" }: { overview: Overview; className?: string }) {
-  const { period, currency, summary, previousSpent, categories, cumulative } = overview;
+type SpentCardProps = {
+  overview: Overview;
+  /**
+   * The currency picked, which the picker shows. The overview is in the one
+   * before it while the new one loads.
+   */
+  pickedCurrency: string;
+  onCurrencyChange: (currency: string) => void;
+  className?: string;
+};
+
+/**
+ * The period's spending: the total, how it compares, where most went, and
+ * how it built up. The currency it's all in is picked here, for the page.
+ */
+function SpentCard({ overview, pickedCurrency, onCurrencyChange, className = "" }: SpentCardProps) {
+  const { period, currency, currencies, summary, previousSpent, categories, cumulative } = overview;
   const top = categories.filter(({ name }) => name !== null).slice(0, TOP_CATEGORIES);
 
   return (
@@ -23,13 +38,20 @@ function SpentCard({ overview, className = "" }: { overview: Overview; className
           <p className="font-display text-[clamp(3.5rem,8vw,5.5rem)] leading-[0.95] font-extrabold tracking-[-0.04em]">
             {formatMoney(summary.spent, currency, { whole: true })}
           </p>
-          {period.previous && previousSpent !== null && previousSpent > 0 && (
-            <Change
-              spent={summary.spent}
-              previousSpent={previousSpent}
-              label={period.previous.label}
+          <div className="flex flex-wrap items-center gap-2">
+            {period.previous && previousSpent !== null && previousSpent > 0 && (
+              <Change
+                spent={summary.spent}
+                previousSpent={previousSpent}
+                label={period.previous.label}
+              />
+            )}
+            <CurrencyPicker
+              currencies={currencies}
+              value={pickedCurrency}
+              onChange={onCurrencyChange}
             />
-          )}
+          </div>
         </div>
         {top.length > 0 && (
           <div className="flex flex-col items-end gap-1.5 text-right">
@@ -72,7 +94,7 @@ function Change({
         ? ["▲", "text-coral", "up"]
         : ["=", "text-paper", "same"];
   return (
-    <p className="inline-flex items-center gap-2 self-start rounded-full bg-ink-on-lime px-3.5 py-1.5 font-mono text-sm text-paper">
+    <p className="inline-flex items-center gap-2 rounded-full bg-ink-on-lime px-3.5 py-1.5 font-mono text-sm text-paper">
       <span className={`font-medium ${color}`}>
         <span aria-hidden>{arrow}</span>
         <span className="sr-only">{words}</span> {Math.abs(change)}%

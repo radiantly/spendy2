@@ -1,4 +1,4 @@
-import { FiChevronDown } from "react-icons/fi";
+import { FaCaretDown } from "react-icons/fa6";
 import { PRESETS, type DateRange, type PeriodChoice } from "./period.ts";
 
 type PeriodPickerProps = {
@@ -61,9 +61,9 @@ function PeriodPicker({ choice, current, onChange }: PeriodPickerProps) {
             </option>
           ))}
         </select>
-        <FiChevronDown
+        <FaCaretDown
           aria-hidden
-          className="pointer-events-none absolute top-1/2 right-4 -translate-y-1/2 text-ink-muted"
+          className="pointer-events-none absolute top-1/2 right-4 -translate-y-1/2 text-[11px] text-ink-muted"
         />
       </div>
     </>

@@ -45,7 +45,7 @@ describe("database worker", () => {
 
     expect(await second.open(blob, kek)).toEqual({ created: false });
     expect(await second.query("SELECT * FROM accounts")).toEqual([
-      { name: "checking", default_currency: "SGD", type: "Bank", identifier: null },
+      { name: "checking", display_currency: "SGD", type: "Bank", identifier: null },
     ]);
     expect(await second.query("PRAGMA foreign_keys")).toEqual([{ foreign_keys: 1 }]);
   });

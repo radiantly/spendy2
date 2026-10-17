@@ -2,17 +2,17 @@ import { useEffect, useState, useSyncExternalStore } from "react";
 import { ClosedError } from "../../db/rpc.ts";
 import { useOpenDatabase } from "../../db/useDatabase.ts";
 import AccountsCard from "./AccountsCard.tsx";
-import AtAGlanceCard from "./AtAGlanceCard.tsx";
 import { Eyebrow } from "./Card.tsx";
 import CustomRangeInputs from "./CustomRangeInputs.tsx";
 import CashFlowCard from "./CashFlowCard.tsx";
 import CategoriesCard from "./CategoriesCard.tsx";
 import IncomeSpendingCard from "./IncomeSpendingCard.tsx";
-import { loadOverview, type Overview } from "./loadOverview.ts";
+import { loadOverview, overviewCurrency, type Overview } from "./loadOverview.ts";
 import { formatDay, localDate, today, type PeriodChoice } from "./period.ts";
 import PeriodPicker from "./PeriodPicker.tsx";
 import RecentCard from "./RecentCard.tsx";
 import SpentCard from "./SpentCard.tsx";
+import TransactionsOverviewCard from "./TransactionsOverviewCard.tsx";
 
 const headingClass = "font-display text-[1.625rem] font-bold tracking-tight";
 /** As tall as a custom range's underlined dates, so switching doesn't move the page. */
@@ -26,15 +26,18 @@ type OverviewState =
 function OverviewPage() {
   const { database } = useOpenDatabase();
   const [choice, setChoice] = useState<PeriodChoice>({ kind: "this-month" });
+  // Null: the most used.
+  const [currency, setCurrency] = useState<string | null>(null);
   const [state, setState] = useState<OverviewState>({ status: "loading" });
   // Changes while this page shows come from undo and redo.
   const dataVersion = useSyncExternalStore(database.subscribe, () => database.version);
 
-  // Loaded again for a new period, a newer version of the database, and
-  // changes to the data. The last overview stays up until the next is ready.
+  // Loaded again for a new period or currency, a newer version of the
+  // database, and changes to the data. The last overview stays up until the
+  // next is ready.
   useEffect(() => {
     let cancelled = false;
-    loadOverview(database, choice, today()).then(
+    loadOverview(database, choice, currency, today()).then(
       (overview) => {
         if (!cancelled) setState({ status: "ready", overview });
       },
@@ -46,7 +49,7 @@ function OverviewPage() {
     return () => {
       cancelled = true;
     };
-  }, [database, choice, dataVersion]);
+  }, [database, choice, currency, dataVersion]);
 
   if (state.status === "error")
     return (
@@ -64,6 +67,8 @@ function OverviewPage() {
 
   const { overview } = state;
   if (overview === null) return <p className="m-auto text-ink-muted">No transactions yet.</p>;
+  // Shown as picked straight away, while its overview loads.
+  const pickedCurrency = overviewCurrency(currency, overview.currencies) ?? overview.currency;
 
   return (
     // The page can grow wider than the screen for content that needs it (see
@@ -98,13 +103,18 @@ function OverviewPage() {
           one, in the order of `order-*`. */}
       <div className="flex flex-col gap-4 lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(20rem,24rem)] lg:items-start">
         <div className="contents lg:flex lg:flex-col lg:gap-4">
-          <SpentCard overview={overview} className="order-1 lg:order-none" />
+          <SpentCard
+            overview={overview}
+            pickedCurrency={pickedCurrency}
+            onCurrencyChange={setCurrency}
+            className="order-1 lg:order-none"
+          />
           <CategoriesCard overview={overview} className="order-4 lg:order-none" />
           <RecentCard overview={overview} className="order-6 lg:order-none" />
         </div>
         <div className="contents lg:flex lg:flex-col lg:gap-4">
           <CashFlowCard overview={overview} className="order-2 lg:order-none" />
-          <AtAGlanceCard overview={overview} className="order-3 lg:order-none" />
+          <TransactionsOverviewCard overview={overview} className="order-3 lg:order-none" />
           <AccountsCard overview={overview} className="order-5 lg:order-none" />
           <IncomeSpendingCard overview={overview} className="order-7 lg:order-none" />
         </div>
@@ -116,8 +126,6 @@ function OverviewPage() {
           overview.lastImport !== null &&
             `last import ${formatDay(localDate(new Date(overview.lastImport * 1000)))}`,
           `amounts in ${overview.currency}, converted where noted`,
-          overview.summary.unconverted > 0 &&
-            `${overview.summary.unconverted.toLocaleString("en-US")} in other currencies left out`,
         ]
           .filter(Boolean)
           .join(" · ")}

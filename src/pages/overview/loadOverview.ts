@@ -5,12 +5,14 @@ import {
   LIST_ACCOUNT_ACTIVITY,
   LIST_CATEGORY_PARENTS,
   LIST_CATEGORY_SPENDING,
+  LIST_CURRENCIES,
   LIST_DAILY_SPENDING,
   LIST_MONTHLY_TOTALS,
   LIST_RECENT_TRANSACTIONS,
   type AccountActivity,
   type CategoryParent,
   type CategorySpending,
+  type CurrencyUse,
   type DailySpending,
   type MonthlyTotals,
   type OverviewMeta,
@@ -45,8 +47,10 @@ export type MonthTotals = MonthlyTotals & { inPeriod: boolean };
 
 export type Overview = {
   period: Period;
-  /** The currency totals are in. */
+  /** The display currency the overview is in: the one asked for, or else the most used. */
   currency: string;
+  /** Every display currency with an overview, the most used first. */
+  currencies: string[];
   /** Unix seconds. */
   lastImport: number | null;
   summary: PeriodSummary;
@@ -66,20 +70,35 @@ export type Overview = {
 const rowsOf = <T>(rows: Record<string, unknown>[]) => rows as T[];
 
 /**
- * Everything the overview shows for `choice`, on `today`. Null when there
- * are no transactions at all.
+ * The currency an overview asked to be in `currency` is in: that one if it
+ * has an overview, or else the most used. Undefined without any.
+ */
+export function overviewCurrency(currency: string | null, currencies: readonly string[]) {
+  return currency !== null && currencies.includes(currency) ? currency : currencies[0];
+}
+
+/**
+ * Everything the overview shows for `choice`, on `today`, in `currency`.
+ * Without one, or when it has no overview (any more), it's in the most used
+ * currency. Null when there are no transactions at all.
  */
 export async function loadOverview(
   database: Database,
   choice: PeriodChoice,
+  currency: string | null,
   today: NaiveDate,
 ): Promise<Overview | null> {
-  const [meta] = rowsOf<OverviewMeta>(await database.query(GET_OVERVIEW_META));
-  if (!meta || meta.base_currency === null) return null;
+  const [[meta], currencies] = await Promise.all([
+    database.query(GET_OVERVIEW_META).then(rowsOf<OverviewMeta>),
+    database
+      .query(LIST_CURRENCIES)
+      .then((rows) => rowsOf<CurrencyUse>(rows).map(({ currency }) => currency)),
+  ]);
+  const display = overviewCurrency(currency, currencies);
+  if (!meta || display === undefined) return null;
 
   const period = resolvePeriod(choice, today, { first: meta.first_date, last: meta.last_date });
-  const base = meta.base_currency;
-  const binds = ({ from, to }: DateRange) => ({ $base: base, $from: from, $to: to });
+  const binds = ({ from, to }: DateRange) => ({ $display: display, $from: from, $to: to });
   const months = monthsEnding(period.to, CHART_MONTHS);
 
   const [summary, previous, daily, spending, parents, accounts, monthly, recent] =
@@ -101,7 +120,7 @@ export async function loadOverview(
         .then(rowsOf<MonthlyTotals>),
       database
         .query(LIST_RECENT_TRANSACTIONS, {
-          $base: base,
+          $display: display,
           $from: period.from,
           $to: period.to,
           $limit: RECENT_COUNT,
@@ -112,7 +131,8 @@ export async function loadOverview(
   const periodMonths = { from: startOfMonth(period.from), to: period.to };
   return {
     period,
-    currency: base,
+    currency: display,
+    currencies,
     lastImport: meta.last_import,
     summary: summary[0]!,
     previousSpent: previous?.[0]?.spent ?? null,

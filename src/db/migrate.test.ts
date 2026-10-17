@@ -220,7 +220,7 @@ describe("schema", () => {
 
   it.each([
     ["an account's name", "INSERT INTO accounts VALUES ('', 'SGD', 'Bank', NULL)"],
-    ["an account's default currency", "INSERT INTO accounts VALUES ('cash', '', 'Bank', NULL)"],
+    ["an account's display currency", "INSERT INTO accounts VALUES ('cash', '', 'Bank', NULL)"],
     ["an account's type", "INSERT INTO accounts VALUES ('cash', 'SGD', '', NULL)"],
     ["an account's identifier", "INSERT INTO accounts VALUES ('cash', 'SGD', 'Bank', '')"],
     ["a category's name", "INSERT INTO categories VALUES ('', NULL)"],
@@ -249,10 +249,10 @@ describe("schema", () => {
     expect(db.selectValue("SELECT identifier FROM accounts WHERE name = 'cash'")).toBeNull();
   });
 
-  it("allows an account without a default currency", () => {
+  it("allows an account without a display currency", () => {
     db.exec("INSERT INTO accounts VALUES ('cash', NULL, 'Bank', NULL)");
 
-    expect(db.selectValue("SELECT default_currency FROM accounts WHERE name = 'cash'")).toBeNull();
+    expect(db.selectValue("SELECT display_currency FROM accounts WHERE name = 'cash'")).toBeNull();
   });
 
   it.each([31, 33])("rejects a source hash of %i bytes", (length) => {

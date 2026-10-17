@@ -14,7 +14,8 @@ function CategoriesCard({ overview, className = "" }: { overview: Overview; clas
   const colors = categoryColors(categories);
   const colorOf = (name: string | null) =>
     name === null ? UNCATEGORIZED_COLOR : colors.get(name)!;
-  const most = categories[0]?.spent ?? 0;
+  // Uncategorized comes last, but can be the most.
+  const most = Math.max(0, ...categories.map(({ spent }) => spent));
   const named = categories.filter(({ name }) => name !== null).length;
 
   return (

@@ -50,6 +50,12 @@ const countText = await text({
 if (isCancel(countText)) onCancel();
 const count = Number(countText);
 
+const brokerage = await confirm({
+  message: "Add a brokerage account trading in USD, EUR, GBP and JPY?",
+  initialValue: true,
+});
+if (isCancel(brokerage)) onCancel();
+
 const existing = await request(endpoint, token);
 if (existing.status === 401) fail("The session has ended, run npm run init-session again");
 if (existing.status !== 404 && !existing.ok)
@@ -58,7 +64,7 @@ const currentEtag = existing.ok ? existing.headers.get("ETag") : null;
 if (currentEtag !== null) {
   const overwrite = await confirm({
     message: `${username} already has a database. Replace it with generated data?`,
-    initialValue: false,
+    initialValue: true,
   });
   if (isCancel(overwrite) || !overwrite) onCancel();
 }
@@ -77,7 +83,7 @@ const migrations = migrationsFromFiles(
 );
 migrate(db, migrations);
 configureConnection(db);
-generateTestData(db, count);
+generateTestData(db, count, { brokerage });
 const bytes = sqlite3.capi.sqlite3_js_db_export(db);
 db.close();
 

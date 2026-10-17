@@ -69,19 +69,20 @@ function RecentCard({ overview, className = "" }: { overview: Overview; classNam
                     { signed: true },
                   )}
                 </span>
-                {transaction.base_numerator !== null && transaction.base_denominator !== null && (
-                  <span className="text-[11px] text-ink-muted">
-                    ≈{" "}
-                    {formatMoney(
-                      {
-                        numerator: transaction.base_numerator,
-                        denominator: transaction.base_denominator,
-                      },
-                      currency,
-                      { signed: true },
-                    )}
-                  </span>
-                )}
+                {transaction.display_numerator !== null &&
+                  transaction.display_denominator !== null && (
+                    <span className="text-[11px] text-ink-muted">
+                      ≈{" "}
+                      {formatMoney(
+                        {
+                          numerator: transaction.display_numerator,
+                          denominator: transaction.display_denominator,
+                        },
+                        currency,
+                        { signed: true },
+                      )}
+                    </span>
+                  )}
               </div>
             </li>
           ))}

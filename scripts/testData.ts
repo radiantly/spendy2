@@ -4,7 +4,11 @@
  */
 import { createHash } from "node:crypto";
 import type { Database } from "@sqlite.org/sqlite-wasm";
+import { currencyDecimals } from "../src/lib/money.ts";
 import { reduce } from "../src/lib/rational.ts";
+
+/** As the accounts table has it; `currency` is the display currency. */
+type Account = { name: string; currency: string | null; type: string; identifier: string | null };
 
 const ACCOUNTS = [
   { name: "Everyday Checking", currency: "USD", type: "Bank", identifier: "••4821" },
@@ -12,7 +16,23 @@ const ACCOUNTS = [
   { name: "High-Yield Savings", currency: "USD", type: "Bank", identifier: "••1190" },
   { name: "Travel Card", currency: "EUR", type: "Card", identifier: "••5512" },
   { name: "India Savings", currency: "INR", type: "Bank", identifier: null },
-];
+] as const satisfies readonly Account[];
+
+/** Trades in several currencies, so has no display currency. */
+const BROKERAGE: Account = {
+  name: "Global Brokerage",
+  currency: null,
+  type: "Brokerage",
+  identifier: "••7730",
+};
+
+/** What the brokerage trades in each currency, and about how much of it a dollar buys. */
+const MARKETS = [
+  { currency: "USD", perDollar: 1, tickers: ["AAPL", "MSFT", "VTI"] },
+  { currency: "EUR", perDollar: 0.92, tickers: ["ASML", "SAP", "VWCE"] },
+  { currency: "GBP", perDollar: 0.79, tickers: ["HSBA", "ULVR", "VUSA"] },
+  { currency: "JPY", perDollar: 150, tickers: ["7203.T", "6758.T"] },
+] as const;
 
 /** Spending categories, each with typical counterparties and amounts. */
 const SPENDING = [
@@ -85,25 +105,40 @@ function random(seed: number) {
   };
 }
 
+export type TestDataOptions = {
+  /**
+   * Also a brokerage account trading in USD, EUR, GBP and JPY, with about
+   * 3% of the transactions. Without it, the data is as it always was.
+   */
+  brokerage?: boolean;
+};
+
 /** Fills a migrated, empty database with `count` realistic transactions. */
-export function generateTestData(db: Database, count: number) {
+export function generateTestData(
+  db: Database,
+  count: number,
+  { brokerage = false }: TestDataOptions = {},
+) {
   const rand = random(42);
   const pick = <T>(items: readonly T[]) => items[Math.floor(rand() * items.length)]!;
   const between = (min: number, max: number) => min + rand() * (max - min);
-  /** To the cent, as the fraction the schema stores. */
-  const amount = (value: number) => {
-    const { numerator, denominator } = reduce(Math.round(value * 100), 100)!;
+  /** To the currency's smallest unit (the cent, or the yen), as the fraction the schema stores. */
+  const amount = (value: number, currency: string) => {
+    const units = 10 ** currencyDecimals(currency);
+    const { numerator, denominator } = reduce(Math.round(value * units), units)!;
     return [numerator, denominator];
   };
 
   db.transaction(() => {
-    for (const account of ACCOUNTS)
+    for (const account of brokerage ? [...ACCOUNTS, BROKERAGE] : ACCOUNTS)
       db.exec({
         sql: "INSERT INTO accounts VALUES (?, ?, ?, ?)",
         bind: [account.name, account.currency, account.type, account.identifier],
       });
 
-    const parents = [...new Set([...SPENDING.map((c) => c.parent), "Income"])];
+    const parents = [
+      ...new Set([...SPENDING.map((c) => c.parent), "Income", ...(brokerage ? ["Investing"] : [])]),
+    ];
     for (const parent of parents)
       db.exec({ sql: "INSERT INTO categories VALUES (?, NULL)", bind: [parent] });
     for (const { parent, name } of SPENDING)
@@ -113,6 +148,13 @@ export function generateTestData(db: Database, count: number) {
         sql: "INSERT INTO categories VALUES (?, ?)",
         bind: [name, name === "Rent" ? "Housing" : "Income"],
       });
+    if (brokerage)
+      for (const [name, parent] of [
+        ["Trades", "Investing"],
+        ["Fees", "Investing"],
+        ["Dividends", "Income"],
+      ])
+        db.exec({ sql: "INSERT INTO categories VALUES (?, ?)", bind: [name, parent] });
 
     const insert = db.prepare(`
       INSERT INTO transactions (seq, id, source, account_name, transfer_account, amount_numerator,
@@ -138,7 +180,8 @@ export function generateTestData(db: Database, count: number) {
 
         const kind = rand();
         let row: {
-          account: (typeof ACCOUNTS)[number];
+          account: Account;
+          currency: string;
           transfer?: string;
           value: number;
           counterparty: string;
@@ -146,38 +189,38 @@ export function generateTestData(db: Database, count: number) {
         };
         if (kind < 0.02) {
           row = {
-            account: ACCOUNTS[0]!,
+            account: ACCOUNTS[0],
+            currency: ACCOUNTS[0].currency,
             value: between(2000, 4000),
             counterparty: "Acme Corp Payroll",
             category: "Salary",
           };
         } else if (kind < 0.03) {
           row = {
-            account: ACCOUNTS[0]!,
+            account: ACCOUNTS[0],
+            currency: ACCOUNTS[0].currency,
             value: -between(1200, 1400),
             counterparty: "Parkside Apartments",
             category: "Rent",
           };
         } else if (kind < 0.05) {
           row = {
-            account: ACCOUNTS[0]!,
-            transfer: ACCOUNTS[2]!.name,
+            account: ACCOUNTS[0],
+            currency: ACCOUNTS[0].currency,
+            transfer: ACCOUNTS[2].name,
             value: -between(100, 500),
             counterparty: "Transfer to High-Yield Savings",
             category: null,
           };
+        } else if (brokerage && kind < 0.08) {
+          row = brokerageActivity();
         } else {
           const spending = pick(SPENDING);
-          const account = pick([
-            ACCOUNTS[0]!,
-            ACCOUNTS[1]!,
-            ACCOUNTS[1]!,
-            ACCOUNTS[3]!,
-            ACCOUNTS[4]!,
-          ]);
+          const account = pick([ACCOUNTS[0], ACCOUNTS[1], ACCOUNTS[1], ACCOUNTS[3], ACCOUNTS[4]]);
           const scale = account.currency === "INR" ? 80 : 1;
           row = {
             account,
+            currency: account.currency,
             value: -between(spending.range[0], spending.range[1]) * scale,
             counterparty: pick(spending.counterparties),
             // A few left for the user to categorise.
@@ -193,8 +236,8 @@ export function generateTestData(db: Database, count: number) {
             source,
             row.account.name,
             row.transfer ?? null,
-            ...amount(row.value),
-            row.account.currency,
+            ...amount(row.value, row.currency),
+            row.currency,
             row.counterparty,
             row.category,
             date,
@@ -202,7 +245,7 @@ export function generateTestData(db: Database, count: number) {
           ])
           .stepReset();
         if (row.account.currency === "EUR")
-          insertConversion.bind([id, "USD", ...amount(row.value * 1.09)]).stepReset();
+          insertConversion.bind([id, "USD", ...amount(row.value * 1.09, "USD")]).stepReset();
       }
     } finally {
       insert.finalize();
@@ -210,4 +253,48 @@ export function generateTestData(db: Database, count: number) {
       insertSource.finalize();
     }
   });
+
+  /** A trade, dividend, fee or deposit in the brokerage account. */
+  function brokerageActivity() {
+    const { currency, perDollar, tickers } = pick(MARKETS);
+    const ticker = pick(tickers);
+    const activity = rand();
+    const inCurrency = (dollars: number) => ({ currency, value: dollars * perDollar });
+    if (activity < 0.05)
+      return {
+        account: BROKERAGE,
+        currency: "USD",
+        transfer: ACCOUNTS[0].name,
+        value: between(500, 5000),
+        counterparty: "Transfer from Everyday Checking",
+        category: null,
+      };
+    if (activity < 0.4)
+      return {
+        account: BROKERAGE,
+        ...inCurrency(-between(200, 5000)),
+        counterparty: `Buy ${ticker}`,
+        category: "Trades",
+      };
+    if (activity < 0.65)
+      return {
+        account: BROKERAGE,
+        ...inCurrency(between(200, 5000)),
+        counterparty: `Sell ${ticker}`,
+        category: "Trades",
+      };
+    if (activity < 0.9)
+      return {
+        account: BROKERAGE,
+        ...inCurrency(between(5, 150)),
+        counterparty: `${ticker} dividend`,
+        category: "Dividends",
+      };
+    return {
+      account: BROKERAGE,
+      ...inCurrency(-between(1, 15)),
+      counterparty: pick(["Commission", "FX conversion fee", "Custody fee"]),
+      category: "Fees",
+    };
+  }
 }
