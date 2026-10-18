@@ -1,4 +1,4 @@
-import type { DateRange } from "./period.ts";
+import type { DateRange } from "../../lib/period.ts";
 
 type CustomRangeInputsProps = {
   range: DateRange;

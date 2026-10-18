@@ -4,7 +4,7 @@ import { formatMoney } from "../../lib/money.ts";
 import { Card, cardLinkClass } from "./Card.tsx";
 import type { Overview } from "./loadOverview.ts";
 import { categoryColors, UNCATEGORIZED_COLOR } from "./palette.ts";
-import { formatDay } from "./period.ts";
+import { formatDay } from "../../lib/period.ts";
 
 /** The period's latest transactions. */
 function RecentCard({ overview, className = "" }: { overview: Overview; className?: string }) {

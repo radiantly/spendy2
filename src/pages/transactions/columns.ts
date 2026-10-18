@@ -17,6 +17,7 @@ import {
   type ParseResult,
 } from "./fields.ts";
 import type { MenuConfig } from "./menu.ts";
+import type { MenuColumn } from "./view.ts";
 
 /**
  * What a cell shows. `prefix` is shown but not edited, like the currency in
@@ -53,6 +54,8 @@ export type TransactionColumnMeta = {
   display: (row: TransactionRow) => CellDisplay;
   /** Absent for read-only columns. */
   editor?: CellEditor;
+  /** For a column the transactions can be sorted or filtered by: its header's menu. */
+  headerMenu?: MenuColumn;
 };
 
 export const features = tableFeatures({ columnMeta: {} as TransactionColumnMeta });
@@ -65,6 +68,7 @@ export const columns = helper.columns([
     meta: {
       track: "minmax(6.5rem, 7rem)",
       mono: true,
+      headerMenu: "date",
       display: (row) => ({ text: row.naive_date }),
       editor: {
         field: "naive_date",
@@ -77,6 +81,7 @@ export const columns = helper.columns([
     header: "Account",
     meta: {
       track: "minmax(7rem, 1.2fr)",
+      headerMenu: "account",
       display: (row) => ({ text: row.account_name }),
       editor: {
         field: "account_name",
@@ -91,6 +96,7 @@ export const columns = helper.columns([
     header: "Counterparty",
     meta: {
       track: "minmax(8rem, 2fr)",
+      headerMenu: "counterparty",
       display: (row) => ({ text: row.counterparty }),
       editor: {
         field: "counterparty",
@@ -103,6 +109,7 @@ export const columns = helper.columns([
     header: "Category",
     meta: {
       track: "minmax(7rem, 1.2fr)",
+      headerMenu: "category",
       display: (row) => ({ text: row.category ?? "" }),
       editor: {
         field: "category",
@@ -124,6 +131,7 @@ export const columns = helper.columns([
       track: "minmax(8rem, 1fr)",
       align: "end",
       mono: true,
+      headerMenu: "amount",
       display: (row) => ({
         prefix: `${row.currency} `,
         text: formatAmountValue(row, row.currency),

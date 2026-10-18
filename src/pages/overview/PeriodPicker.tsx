@@ -1,6 +1,6 @@
 import { FaCaretDown } from "react-icons/fa6";
 import ActivePill from "../../components/ActivePill.tsx";
-import { PRESETS, type DateRange, type PeriodChoice } from "./period.ts";
+import { PRESETS, type DateRange, type PeriodChoice } from "../../lib/period.ts";
 
 type PeriodPickerProps = {
   choice: PeriodChoice;

@@ -100,6 +100,19 @@ export function findName(names: readonly string[], text: string): string | undef
   );
 }
 
+/** `findName` for many texts: looks each up rather than searching `names` for it. */
+export function nameFinder(names: readonly string[]): (text: string) => string | undefined {
+  const exact = new Set(names);
+  const folded = new Map<string, string>();
+  // The first of several folding the same, as findName finds.
+  for (const name of names)
+    if (!folded.has(name.toLowerCase())) folded.set(name.toLowerCase(), name);
+  return (text) => {
+    const value = text.trim();
+    return exact.has(value) ? value : folded.get(value.toLowerCase());
+  };
+}
+
 /**
  * Empty clears the category. Otherwise it must name one of `categories`
  * (ignoring case), or, with `create`, a new category is accepted as typed.

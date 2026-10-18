@@ -30,7 +30,7 @@ import {
   type NaiveDate,
   type Period,
   type PeriodChoice,
-} from "./period.ts";
+} from "../../lib/period.ts";
 import {
   cumulativeSpending,
   monthlyTotals,
@@ -138,7 +138,7 @@ export async function loadOverview(
     lastImport: meta.last_import,
     summary: summary[0]!,
     previousSpent: previous?.[0]?.spent ?? null,
-    cumulative: cumulativeSpending(daily, period),
+    cumulative: cumulativeSpending(daily, period, today),
     categories: spendingByTopCategory(spending, parents),
     topCategoryOf: topCategoryOf(parents),
     accounts,

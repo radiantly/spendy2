@@ -70,11 +70,11 @@ describe("monthsEnding", () => {
 });
 
 describe("resolvePeriod", () => {
-  it("shows this month up to today, against the same days last month", () => {
+  it("shows all of this month, against as many days of last month", () => {
     expect(resolve({ kind: "this-month" })).toEqual({
       from: "2026-10-01",
-      to: "2026-10-09",
-      span: "Oct 1 – 9, 2026",
+      to: "2026-10-31",
+      span: "October 2026",
       name: "October",
       previous: { from: "2026-09-01", to: "2026-09-09", label: "vs Sep 1 – 9" },
     });
@@ -105,11 +105,11 @@ describe("resolvePeriod", () => {
     });
   });
 
-  it("shows the last 3 months from the start of the first, against the 3 before", () => {
+  it("shows the last 3 months, to the end of this one, against as many days of the 3 before", () => {
     expect(resolve({ kind: "last-3-months" })).toEqual({
       from: "2026-08-01",
-      to: "2026-10-09",
-      span: "Aug 1 – Oct 9, 2026",
+      to: "2026-10-31",
+      span: "Aug – Oct 2026",
       name: "3 months",
       previous: { from: "2026-05-01", to: "2026-07-09", label: "vs prior 3 months" },
     });
@@ -118,16 +118,16 @@ describe("resolvePeriod", () => {
   it("shows the last 6 months", () => {
     expect(resolve({ kind: "last-6-months" })).toMatchObject({
       from: "2026-05-01",
-      to: "2026-10-09",
+      to: "2026-10-31",
       name: "6 months",
     });
   });
 
-  it("shows the last 12 months as last year", () => {
-    expect(resolve({ kind: "last-year" })).toMatchObject({
+  it("shows the last 12 months", () => {
+    expect(resolve({ kind: "last-12-months" })).toMatchObject({
       from: "2025-11-01",
-      to: "2026-10-09",
-      span: "Nov 1, 2025 – Oct 9, 2026",
+      to: "2026-10-31",
+      span: "Nov 2025 – Oct 2026",
       name: "12 months",
       previous: { from: "2024-11-01", to: "2025-10-09", label: "vs prior 12 months" },
     });

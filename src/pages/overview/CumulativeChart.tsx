@@ -1,7 +1,7 @@
 import { area, line } from "d3-shape";
 import { scaleLinear } from "d3-scale";
 import { formatMoney } from "../../lib/money.ts";
-import { daysIn, formatDay, formatMonth } from "./period.ts";
+import { daysIn, formatDay, formatMonth } from "../../lib/period.ts";
 import type { CumulativePoint } from "./shape.ts";
 
 const HEIGHT = 180;

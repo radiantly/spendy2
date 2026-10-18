@@ -1,7 +1,7 @@
 import { formatMoney } from "../../lib/money.ts";
 import { Card } from "./Card.tsx";
 import { CHART_MONTHS, type Overview } from "./loadOverview.ts";
-import { monthLabel } from "./period.ts";
+import { monthLabel } from "../../lib/period.ts";
 import { percent } from "./shape.ts";
 
 const BARS_HEIGHT = 190;

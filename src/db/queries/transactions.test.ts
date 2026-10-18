@@ -69,6 +69,7 @@ describe("LIST_TRANSACTIONS", () => {
     expect(listed(LIST_TRANSACTIONS)).toEqual([
       {
         id,
+        seq: 1,
         naive_date: "2026-10-05",
         account_name: "Travel",
         counterparty: "Café Sol",

@@ -3,6 +3,7 @@ import {
   amountEditText,
   findName,
   formatAmount,
+  nameFinder,
   parseAccount,
   parseAmount,
   parseCategory,
@@ -179,6 +180,30 @@ describe("findName", () => {
   // SQLite's NOCASE only folds A-Z, so these can both exist.
   it("prefers the exact name when several differ only in case", () => {
     expect(findName(["épicerie", "Épicerie"], "Épicerie")).toBe("Épicerie");
+  });
+});
+
+describe("nameFinder", () => {
+  // The same cases as findName's, which it stands in for.
+  it("finds a name typed in another case", () => {
+    expect(nameFinder(["Groceries"])(" groceries ")).toBe("Groceries");
+  });
+
+  it("prefers the exact name when several differ only in case", () => {
+    const find = nameFinder(["épicerie", "Épicerie"]);
+
+    expect(find("Épicerie")).toBe("Épicerie");
+    expect(find("épicerie")).toBe("épicerie");
+  });
+
+  it("finds the first of several differing only in case, as findName does", () => {
+    const names = ["épicerie", "Épicerie"];
+
+    expect(nameFinder(names)("ÉPICERIE")).toBe(findName(names, "ÉPICERIE"));
+  });
+
+  it("finds nothing for a name that isn't there", () => {
+    expect(nameFinder(["Groceries"])("Rent")).toBeUndefined();
   });
 });
 

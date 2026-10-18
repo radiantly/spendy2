@@ -107,6 +107,7 @@ const REMARKS = 5;
 const grid = () => page.getByRole("grid");
 const activeCell = () =>
   document.getElementById(grid().element().getAttribute("aria-activedescendant") ?? "");
+const headers = () => page.getByRole("columnheader").elements();
 const selectedCells = () => [
   ...document.querySelectorAll('[role="gridcell"][aria-selected="true"]'),
 ];
@@ -526,12 +527,13 @@ describe("TransactionsTable", () => {
       expect(activeCell()?.textContent).toBe("2026-10-10");
     });
 
-    it("doesn't select a cell when a column header is clicked", async () => {
+    it("makes a column header active, not a cell, when it's clicked", async () => {
       await renderTable();
 
       await userEvent.click(page.getByRole("columnheader").first());
 
-      expect(activeCell()).toBeNull();
+      expect(activeCell()).toBe(headers()[DATE]);
+      expect(selectedCells()).toEqual([]);
     });
 
     it("moves the active cell with the arrow keys", async () => {
@@ -547,9 +549,66 @@ describe("TransactionsTable", () => {
     it("stops at the edges", async () => {
       await activate("Corner Market", DATE);
 
-      await userEvent.keyboard("{ArrowUp}{ArrowLeft}");
+      await userEvent.keyboard("{ArrowLeft}{Control>}{ArrowUp}{/Control}");
 
       expect(activeCell()).toBe(cellOf("Corner Market", DATE).element());
+    });
+
+    it("goes up from the first row to its column's header", async () => {
+      await activate("Corner Market", COUNTERPARTY);
+
+      await userEvent.keyboard("{ArrowUp}");
+
+      expect(activeCell()).toBe(headers()[COUNTERPARTY]);
+      expect(selectedCells()).toEqual([]);
+    });
+
+    it("moves along the headers, stopping at the ends", async () => {
+      await activate("Corner Market", DATE);
+
+      await userEvent.keyboard("{ArrowUp}{ArrowLeft}");
+      expect(activeCell()).toBe(headers()[DATE]);
+      await userEvent.keyboard("{ArrowRight}{ArrowRight}");
+      expect(activeCell()).toBe(headers()[COUNTERPARTY]);
+      await userEvent.keyboard("{End}{ArrowRight}");
+      expect(activeCell()).toBe(headers()[REMARKS]);
+      await userEvent.keyboard("{Home}");
+      expect(activeCell()).toBe(headers()[DATE]);
+    });
+
+    it("goes back down from a header to its column's first cell", async () => {
+      await activate("Corner Market", DATE);
+
+      await userEvent.keyboard("{ArrowUp}{ArrowRight}{ArrowDown}");
+
+      expect(activeCell()).toBe(cellOf("Corner Market", ACCOUNT).element());
+    });
+
+    it("doesn't edit or clear from a header", async () => {
+      await activate("Corner Market", COUNTERPARTY);
+
+      await userEvent.keyboard("{ArrowUp}a{Delete}{F2}");
+
+      expect(input().query()).toBeNull();
+      expect(onCommit).not.toHaveBeenCalled();
+    });
+
+    it("starts at the first header when a grid without rows is tabbed into", async () => {
+      await render(
+        <TransactionsTable
+          rows={[]}
+          categories={CATEGORIES}
+          accounts={ACCOUNTS}
+          onCommit={onCommit}
+          lastUndoOrRedo={null}
+          onUndoOrRedo={onUndoOrRedo}
+        />,
+      );
+
+      await userEvent.tab();
+
+      await expect.element(grid()).toHaveFocus();
+      expect(activeCell()).toBe(headers()[DATE]);
     });
 
     it("starts editing with F2, caret at the end", async () => {

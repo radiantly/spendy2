@@ -11,7 +11,7 @@ import {
   hasPatch,
   INSERT_CATEGORY,
   LIST_ACCOUNTS,
-  LIST_CATEGORY_NAMES,
+  LIST_CATEGORIES,
   LIST_TRANSACTIONS,
   listedTransactions,
   patchFrom,
@@ -22,6 +22,7 @@ import {
   type ListedTransaction,
   type TransactionPatch,
 } from "./queries/transactions.ts";
+import type { CategoryParent } from "./queries/overview.ts";
 import { databaseKey } from "./queryClient.ts";
 import { ClosedError } from "./rpc.ts";
 
@@ -29,8 +30,8 @@ export type Transactions = {
   rows: ListedTransaction[];
   /** Each row's position in `rows`, by id. Rows keep their positions. */
   positions: ReadonlyMap<string, number>;
-  /** In the order the cell menus list them (see the queries). */
-  categories: readonly string[];
+  /** With their parents, in the order the cell menus list them (see the queries). */
+  categories: readonly CategoryParent[];
   accounts: readonly AccountCurrency[];
 };
 
@@ -41,9 +42,10 @@ export type TransactionUpdate = {
   patch: TransactionPatch;
 };
 
-/** The names from a `SELECT name …` query. */
-function namesOf(rows: Record<string, unknown>[]) {
-  return rows.map(({ name }) => String(name));
+/** The categories from a `LIST_CATEGORIES` query. */
+function categoriesOf(rows: Record<string, unknown>[]) {
+  // The query's columns match the type, and the schema guarantees their types.
+  return rows as CategoryParent[];
 }
 
 /** `database`'s transactions, read once and then updated in place. */
@@ -53,14 +55,14 @@ export function transactionsQuery(database: Database) {
     queryFn: async (): Promise<Transactions> => {
       const [transactions, categories, accounts] = await Promise.all([
         database.query(LIST_TRANSACTIONS),
-        database.query(LIST_CATEGORY_NAMES),
+        database.query(LIST_CATEGORIES),
         database.query(LIST_ACCOUNTS),
       ]);
       const rows = listedTransactions(transactions);
       return {
         rows,
         positions: new Map(rows.map((row, position) => [row.id, position])),
-        categories: namesOf(categories),
+        categories: categoriesOf(categories),
         // The query's columns match the row type, and the schema guarantees their types.
         accounts: accounts as AccountCurrency[],
       };
@@ -108,7 +110,7 @@ function replaced(current: Transactions, stored: readonly ListedTransaction[]): 
 }
 
 async function refreshCategories(queryClient: QueryClient, database: Database) {
-  const categories = namesOf(await database.query(LIST_CATEGORY_NAMES));
+  const categories = categoriesOf(await database.query(LIST_CATEGORIES));
   update(queryClient, database, (current) => ({ ...current, categories }));
 }
 
@@ -203,13 +205,13 @@ export function keepTransactionsInSync(
     const ids = [...new Set(moved.step.about.cells.map(({ id }) => id))];
     Promise.all([
       database.query(GET_TRANSACTIONS, [JSON.stringify(ids)]),
-      database.query(LIST_CATEGORY_NAMES),
+      database.query(LIST_CATEGORIES),
     ]).then(
       ([transactions, categories]) => {
         const stored = listedTransactions(transactions);
         update(queryClient, database, (current) => ({
           ...replaced(current, stored),
-          categories: namesOf(categories),
+          categories: categoriesOf(categories),
         }));
       },
       (error: unknown) => {

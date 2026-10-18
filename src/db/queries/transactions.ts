@@ -22,10 +22,12 @@ export type TransactionRow = {
 };
 
 /**
- * A transaction as the page loads it: its row, and what the list on narrow
- * screens also shows, which no edit changes.
+ * A transaction as the page loads it: its row, and what no edit changes:
+ * what the list on narrow screens also shows, and its order of import.
  */
 export type ListedTransaction = TransactionRow & {
+  /** Its place in import order, for ordering the transactions on a day. */
+  seq: number;
   transfer_account: string | null;
   duplicate_of: string | null;
   /** Its amount in other currencies: `{ USD: { amount: -1090, decimals: 2 } }`. */
@@ -46,7 +48,7 @@ export function conversionTo(
  * columns into JavaScript takes several times as long for many rows.
  */
 const LISTED_JSON = `json_object(
-  'id', transactions.id, 'naive_date', transactions.naive_date,
+  'id', transactions.id, 'seq', transactions.seq, 'naive_date', transactions.naive_date,
   'account_name', transactions.account_name, 'counterparty', transactions.counterparty,
   'category', transactions.category, 'amount', transactions.amount,
   'decimals', currencies.stored_decimals, 'currency', transactions.currency,
@@ -96,8 +98,16 @@ export function listedTransactions(result: readonly Record<string, unknown>[]) {
   return JSON.parse(String(result[0]!.transactions)) as ListedTransaction[];
 }
 
-/** Alphabetical, ignoring case (the names are `COLLATE NOCASE`). */
-export const LIST_CATEGORY_NAMES = `SELECT name FROM categories ORDER BY name`;
+/**
+ * Every category with its parent, as the categories table spells both,
+ * alphabetical, ignoring case (the names are `COLLATE NOCASE`). Read the result
+ * as `CategoryParent`s.
+ */
+export const LIST_CATEGORIES = `
+  SELECT category.name, parent.name AS parent
+  FROM categories AS category LEFT JOIN categories AS parent ON parent.name = category.parent
+  ORDER BY category.name
+`;
 
 export type AccountCurrency = { name: string; display_currency: string | null };
 

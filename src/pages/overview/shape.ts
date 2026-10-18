@@ -8,7 +8,7 @@ import type {
   DailySpending,
   MonthlyTotals,
 } from "../../db/queries/overview.ts";
-import { addDays, type DateRange } from "./period.ts";
+import { addDays, type DateRange, type NaiveDate } from "../../lib/period.ts";
 
 export type SubcategorySpending = {
   /** null for spending on the top-level category itself. */
@@ -96,16 +96,22 @@ export type CumulativePoint = { date: string; total: number };
 
 /**
  * The running total of spending at the end of each day in `range`, after a
- * starting point of 0 the day before it.
+ * starting point of 0 the day before it. It stops at `today`, or the last
+ * day spent on if that's later: a period can end after today (this month
+ * does), and the days still to come have nothing to show. It has at least
+ * the range's first day, though.
  */
 export function cumulativeSpending(
   days: readonly DailySpending[],
   range: DateRange,
+  today: NaiveDate,
 ): CumulativePoint[] {
   const spentOn = new Map(days.map(({ date, spent }) => [date, spent]));
+  const last = days.reduce((latest, { date }) => (date > latest ? date : latest), today);
+  const to = last < range.to ? (last > range.from ? last : range.from) : range.to;
   const points = [{ date: addDays(range.from, -1), total: 0 }];
   let total = 0;
-  for (let date = range.from; date <= range.to; date = addDays(date, 1)) {
+  for (let date = range.from; date <= to; date = addDays(date, 1)) {
     total += spentOn.get(date) ?? 0;
     points.push({ date, total });
   }

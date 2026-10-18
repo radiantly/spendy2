@@ -14,8 +14,8 @@ vi.mock("../../api/database.ts", () => ({
   uploadDatabase: vi.fn(),
 }));
 // A fixed today; faking Date itself stops expect.element's retries.
-vi.mock("./period.ts", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./period.ts")>()),
+vi.mock("../../lib/period.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../lib/period.ts")>()),
   today: () => "2026-10-09",
 }));
 
@@ -120,12 +120,12 @@ function colorOfClass(className: string) {
 const range = (text: string) => new RegExp(text.replaceAll(" – ", "\\s–\\s"));
 
 describe("OverviewPage", () => {
-  it("shows this month so far", async () => {
+  it("shows this month", async () => {
     await opened();
 
     await expect
       .element(page.getByRole("heading", { level: 1 }))
-      .toMatchTextContent(range("Oct 1 – 9, 2026"));
+      .toMatchTextContent("October 2026");
     await expect
       .element(page.getByRole("button", { name: "This month" }))
       .toHaveAttribute("aria-pressed", "true");
@@ -616,7 +616,7 @@ describe("OverviewPage", () => {
     });
 
     describe("the pill", () => {
-      /** Picks Last month, the pill having been under This month. */
+      /** Picks last month, the pill having been under this month's button. */
       async function pickLastMonth() {
         await opened();
         const group = page.getByRole("group", { name: "Choose period" });
@@ -675,13 +675,13 @@ describe("OverviewPage", () => {
       await userEvent.click(page.getByRole("button", { name: "Custom" }));
       const from = page.getByLabelText("From");
       await expect.element(from).toHaveValue("2026-10-01");
-      await expect.element(page.getByLabelText("To")).toHaveValue("2026-10-09");
+      await expect.element(page.getByLabelText("To")).toHaveValue("2026-10-31");
 
       await userEvent.fill(from, "2026-09-01");
 
       await expect
         .element(page.getByRole("heading", { level: 1 }))
-        .toMatchTextContent(range("Sep 1 – Oct 9, 2026"));
+        .toMatchTextContent(range("Sep 1 – Oct 31, 2026"));
       await expect.element(region("Spent")).toMatchTextContent(/\$2,947/);
     });
 
@@ -749,7 +749,7 @@ describe("OverviewPage", () => {
         await userEvent.selectOptions(dropdown(), "Custom");
 
         await expect.element(page.getByLabelText("From")).toHaveValue("2026-10-01");
-        await expect.element(page.getByLabelText("To")).toHaveValue("2026-10-09");
+        await expect.element(page.getByLabelText("To")).toHaveValue("2026-10-31");
       });
     });
 

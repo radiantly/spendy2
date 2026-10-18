@@ -129,6 +129,7 @@ describe("cumulativeSpending", () => {
           { date: "2026-10-03", spent: 5 },
         ],
         { from: "2026-10-01", to: "2026-10-04" },
+        "2026-10-09",
       ),
     ).toEqual([
       { date: "2026-09-30", total: 0 },
@@ -137,6 +138,31 @@ describe("cumulativeSpending", () => {
       { date: "2026-10-03", total: 15 },
       { date: "2026-10-04", total: 15 },
     ]);
+  });
+
+  const dates = (points: { date: string }[]) => points.slice(1).map(({ date }) => date);
+  const OCTOBER = { from: "2026-10-01", to: "2026-10-31" };
+
+  it("stops at today in a period that ends later", () => {
+    expect(
+      dates(cumulativeSpending([{ date: "2026-10-01", spent: 10 }], OCTOBER, "2026-10-03")),
+    ).toEqual(["2026-10-01", "2026-10-02", "2026-10-03"]);
+  });
+
+  it("goes on to spending dated after today", () => {
+    expect(
+      dates(cumulativeSpending([{ date: "2026-10-05", spent: 10 }], OCTOBER, "2026-10-03")).at(-1),
+    ).toBe("2026-10-05");
+  });
+
+  it("doesn't go past the period", () => {
+    expect(
+      dates(cumulativeSpending([{ date: "2026-11-02", spent: 10 }], OCTOBER, "2026-12-01")).at(-1),
+    ).toBe("2026-10-31");
+  });
+
+  it("has the period's first day when it starts after today", () => {
+    expect(dates(cumulativeSpending([], OCTOBER, "2026-09-20"))).toEqual(["2026-10-01"]);
   });
 });
 

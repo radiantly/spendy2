@@ -8,7 +8,7 @@ import CashFlowCard from "./CashFlowCard.tsx";
 import CategoriesCard from "./CategoriesCard.tsx";
 import IncomeSpendingCard from "./IncomeSpendingCard.tsx";
 import { overviewCurrency, overviewQuery } from "./loadOverview.ts";
-import { formatDay, localDate, today, type PeriodChoice } from "./period.ts";
+import { formatDay, localDate, today, type PeriodChoice } from "../../lib/period.ts";
 import PeriodPicker from "./PeriodPicker.tsx";
 import RecentCard from "./RecentCard.tsx";
 import SpentCard from "./SpentCard.tsx";

@@ -15,6 +15,7 @@ function transaction(overrides: Partial<ListedTransaction> = {}): ListedTransact
   ids++;
   return {
     id: `t${ids}`,
+    seq: ids,
     naive_date: "2020-10-10",
     account_name: "Everyday Checking",
     counterparty: "Aldi",

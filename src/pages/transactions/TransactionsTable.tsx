@@ -6,6 +6,7 @@ import {
   useState,
   type KeyboardEvent,
   type MouseEvent,
+  type ReactNode,
 } from "react";
 import { useTable } from "@tanstack/react-table";
 import { defaultRangeExtractor, useWindowVirtualizer, type Range } from "@tanstack/react-virtual";
@@ -39,10 +40,14 @@ import {
   type GridSelection,
   type Motion,
 } from "./grid.ts";
+import type { HeaderMenuHandle, HeaderProps } from "./HeaderMenu.tsx";
 import { useMouseDrag, type Point } from "./useMouseDrag.ts";
+import type { MenuColumn, Sort } from "./view.ts";
 
 /** Rows have a fixed height, so the virtualizer never has to measure them. */
 export const ROW_HEIGHT = 28;
+/** A row and the line above it, so the header has the same space inside as a row. */
+export const HEADER_HEIGHT = ROW_HEIGHT + 1;
 
 const GRID_TEMPLATE = columns.map((column) => column.meta!.track).join(" ");
 
@@ -120,6 +125,15 @@ type TransactionsTableProps = {
   lastUndoOrRedo: Moved<Edit> | null;
   /** Undo or redo asked for from a cell being edited (see EditableCell). */
   onUndoOrRedo: (direction: HistoryDirection) => void;
+  /**
+   * The headers' menus, for sorting and filtering by their columns (see the
+   * columns' `headerMenu`): `sort` is how the rows are sorted, and `render`
+   * renders a header's menu. Without, the headers are plain labels.
+   */
+  menus?: {
+    sort: Sort;
+    render: (column: MenuColumn, header: HeaderProps) => ReactNode;
+  };
 };
 
 /**
@@ -136,6 +150,7 @@ function TransactionsTable({
   onEditingChange,
   lastUndoOrRedo,
   onUndoOrRedo,
+  menus,
 }: TransactionsTableProps) {
   // The table and virtualizer are mutable objects that return new results
   // from the same instance, so the React Compiler would memoize reads of
@@ -143,9 +158,12 @@ function TransactionsTable({
   // component out keeps the rest of the app compiled.
   "use no memo";
 
+  // Only its columns and headers are read: the rows are drawn straight from
+  // `rows`, as building its row model for every transaction took about as
+  // long as sorting them, on each change of the rows (an edit too).
   const table = useTable({ features, columns, data: rows });
-  const tableRows = table.getRowModel().rows;
-  const size = { rows: tableRows.length, columns: columns.length };
+  const leafColumns = table.getAllLeafColumns();
+  const size = { rows: rows.length, columns: columns.length };
   // The rows can change under the selection, so it's kept to the cells there are.
   const [unclamped, setSelection] = useState<GridSelection | null>(null);
   const selection = unclamped && clampSelection(unclamped, size);
@@ -159,13 +177,20 @@ function TransactionsTable({
     // Also when the table goes away mid-edit.
     return () => onEditingChange?.(false);
   }, [isEditing, onEditingChange]);
+  // The column whose header is active, while no cell is: from the keyboard,
+  // Up from the first row reaches the headers, where their menus open.
+  const [headerColumn, setHeaderColumn] = useState<number | null>(null);
+  const activeHeader = selection === null ? headerColumn : null;
   const gridId = useId();
   const cellId = (cell: CellPosition) => `${gridId}-${cell.row}-${cell.column}`;
+  const headerId = (column: number) => `${gridId}-header-${column}`;
 
   const gridRef = useRef<HTMLDivElement>(null);
   const headerRowRef = useRef<HTMLDivElement>(null);
   // The input of the cell being edited.
   const inputRef = useRef<HTMLInputElement>(null);
+  // The menus of the headers with them, by column.
+  const menusRef = useRef<(HeaderMenuHandle | null)[]>([]);
   const dragRef = useRef<Drag | null>(null);
 
   // The virtualizer measures scroll positions from the top of the page; it
@@ -177,12 +202,12 @@ function TransactionsTable({
   }, []);
 
   const virtualizer = useWindowVirtualizer({
-    count: tableRows.length,
+    count: rows.length,
     estimateSize: () => ROW_HEIGHT,
     overscan: 10,
     scrollMargin,
     // Scrolling a row into view stops below the sticky header.
-    scrollPaddingStart: ROW_HEIGHT,
+    scrollPaddingStart: HEADER_HEIGHT,
     // Keep the active cell's row rendered when it scrolls out of view, so
     // the grid can still point at the cell, and the input of an edit in it
     // (always the active cell) isn't thrown away. In order, so its row is
@@ -201,7 +226,10 @@ function TransactionsTable({
 
   /** How many rows Page Up and Page Down move: as many as fit below the header. */
   function pageRows() {
-    return Math.max(1, Math.floor(document.documentElement.clientHeight / ROW_HEIGHT) - 1);
+    return Math.max(
+      1,
+      Math.floor((document.documentElement.clientHeight - HEADER_HEIGHT) / ROW_HEIGHT),
+    );
   }
 
   /**
@@ -213,15 +241,35 @@ function TransactionsTable({
     const offset = (virtualizer.scrollOffset ?? window.scrollY) + rows * ROW_HEIGHT;
     const top = scrollMargin + cell.row * ROW_HEIGHT;
     const visible =
-      top >= offset + ROW_HEIGHT &&
+      top >= offset + HEADER_HEIGHT &&
       top + ROW_HEIGHT <= offset + document.documentElement.clientHeight;
     if (rows !== 0 && visible) virtualizer.scrollToOffset(offset);
     else virtualizer.scrollToIndex(cell.row, { align: "auto" });
+    revealColumn(cell.column);
+  }
+
+  /** Scrolls the page sideways, if it has to, so `column` is in view. */
+  function revealColumn(column: number) {
     // The header cells are always rendered, and line up with the column's.
-    const column = headerRowRef.current!.children[cell.column]!.getBoundingClientRect();
+    const box = headerRowRef.current!.children[column]!.getBoundingClientRect();
     const width = document.documentElement.clientWidth;
-    if (column.left < 0) window.scrollBy(column.left, 0);
-    else if (column.right > width) window.scrollBy(column.right - width, 0);
+    if (box.left < 0) window.scrollBy(box.left, 0);
+    else if (box.right > width) window.scrollBy(box.right - width, 0);
+  }
+
+  /** Moves on from `column`'s header to its first cell, if there are rows. */
+  function leaveHeader(column: number) {
+    focusGrid();
+    if (size.rows === 0) return;
+    const cell = { row: 0, column };
+    select(collapsed(cell), cell);
+  }
+
+  /** Makes `column`'s header active, in place of any cell. */
+  function activateHeader(column: number) {
+    setSelection(null);
+    setHeaderColumn(column);
+    revealColumn(column);
   }
 
   function select(next: GridSelection, show: CellPosition, scrollRows = 0) {
@@ -237,7 +285,7 @@ function TransactionsTable({
 
   /** Whether `cell` can be edited and has nothing in it. */
   function isEmpty(cell: CellPosition) {
-    return editorOf(cell.column)?.editText(tableRows[cell.row]!.original) === "";
+    return editorOf(cell.column)?.editText(rows[cell.row]!) === "";
   }
 
   /**
@@ -296,10 +344,10 @@ function TransactionsTable({
       const editor = editorOf(column);
       if (!editor) continue;
       for (let index = area.top; index <= area.bottom; index++) {
-        const row = tableRows[index]!;
-        const cleared = clearedValue(editor, row.original);
-        if (cleared.ok && !hasPatch(row.original, cleared.value))
-          changes.push({ rowIndex: row.index, field: editor.field, patch: cleared.value });
+        const row = rows[index]!;
+        const cleared = clearedValue(editor, row);
+        if (cleared.ok && !hasPatch(row, cleared.value))
+          changes.push({ rowIndex: index, field: editor.field, patch: cleared.value });
       }
     }
     if (changes.length > 0) onCommit(changes);
@@ -324,14 +372,62 @@ function TransactionsTable({
   });
 
   function handleKeyDown(event: KeyboardEvent) {
-    // Keys typed into a cell's input are the input's.
-    if (event.target !== event.currentTarget || selection === null) return;
+    // Keys typed into a cell's input, or a header's menu, are theirs.
+    if (event.target !== event.currentTarget) return;
+    if (activeHeader !== null) handleHeaderKey(event, activeHeader);
+    else if (selection !== null) handleCellKey(event, selection);
+  }
+
+  /**
+   * Keys on an active header: Left and Right (and Home and End) move along
+   * the headers, Down goes back to the first row, and Enter, Space or
+   * Alt+Down open the column's menu, if it has one.
+   */
+  function handleHeaderKey(event: KeyboardEvent, column: number) {
+    const last = columns.length - 1;
+    const along: Record<string, number> = {
+      ArrowLeft: column - 1,
+      ArrowRight: column + 1,
+      Home: 0,
+      End: last,
+    };
+    if (Object.hasOwn(along, event.key)) {
+      event.preventDefault();
+      const next = Math.min(Math.max(along[event.key]!, 0), last);
+      setHeaderColumn(next);
+      revealColumn(next);
+    } else if (
+      event.key === "Enter" ||
+      event.key === " " ||
+      (event.key === "ArrowDown" && event.altKey)
+    ) {
+      const menu = menusRef.current[column];
+      if (!menu) return;
+      event.preventDefault();
+      menu.open();
+    } else if (event.key === "ArrowDown") {
+      event.preventDefault();
+      leaveHeader(column);
+    }
+  }
+
+  function handleCellKey(event: KeyboardEvent, selection: GridSelection) {
     const { active } = selection;
     const motion = motionFor(event, pageRows());
     const editor = editorOf(active.column);
 
     if (motion) {
       event.preventDefault();
+      // Up from the first row goes on to the column's header.
+      if (
+        motion.kind === "step" &&
+        motion.direction === "up" &&
+        !event.shiftKey &&
+        active.row === 0
+      ) {
+        activateHeader(active.column);
+        return;
+      }
       const next = event.shiftKey ? extend(selection, motion, size) : move(selection, motion, size);
       select(
         next,
@@ -353,7 +449,7 @@ function TransactionsTable({
       else if (!editor) return;
       // Delete clears a cell that can be empty. Otherwise it, and Backspace
       // always, start an edit of empty text.
-      else if (event.key === "Delete" && clearedValue(editor, tableRows[active.row]!.original).ok)
+      else if (event.key === "Delete" && clearedValue(editor, rows[active.row]!).ok)
         clearCells(bounds(selection));
       else {
         reveal(active);
@@ -365,7 +461,7 @@ function TransactionsTable({
     } else if (editor && event.key === "F2") {
       event.preventDefault();
       reveal(active);
-      startEditing(active, editor.editText(tableRows[active.row]!.original).length);
+      startEditing(active, editor.editText(rows[active.row]!).length);
     } else if (editor && isTypedCharacter(event)) {
       event.preventDefault();
       reveal(active);
@@ -409,6 +505,16 @@ function TransactionsTable({
         (header) => header.getBoundingClientRect().left,
       ),
     };
+  }
+
+  /** A press on a header makes it active; on its button, the browser also opens its menu. */
+  function handleHeaderPress(column: number, event: MouseEvent) {
+    if (event.button !== 0) return;
+    // Focus stays on the grid, so the keyboard carries on from the header.
+    event.preventDefault();
+    // Moving focus here first ends any edit, submitting it.
+    focusGrid();
+    activateHeader(column);
   }
 
   function handlePress(cell: CellPosition, event: MouseEvent, offset: number | null) {
@@ -461,20 +567,29 @@ function TransactionsTable({
       ref={gridRef}
       role="grid"
       tabIndex={0}
-      aria-rowcount={tableRows.length + 1}
+      aria-rowcount={rows.length + 1}
       aria-multiselectable
-      aria-activedescendant={selection ? cellId(selection.active) : undefined}
+      aria-activedescendant={
+        selection
+          ? cellId(selection.active)
+          : activeHeader !== null
+            ? headerId(activeHeader)
+            : undefined
+      }
       onKeyDown={handleKeyDown}
       onFocus={(event) => {
-        // Tabbing into the grid starts at its first cell. A click focuses it
-        // too, but one on a cell selects that cell, and one elsewhere (a
-        // column header) selects nothing.
+        // Tabbing into the grid starts at its first cell, or without rows,
+        // its first header. A click focuses it too, but one on a cell or a
+        // header makes that active, and one elsewhere, nothing.
         if (
-          event.target === event.currentTarget &&
-          selection === null &&
-          event.currentTarget.matches(":focus-visible")
+          event.target !== event.currentTarget ||
+          selection !== null ||
+          activeHeader !== null ||
+          !event.currentTarget.matches(":focus-visible")
         )
-          setSelection(collapsed({ row: 0, column: 0 }));
+          return;
+        if (size.rows > 0) setSelection(collapsed({ row: 0, column: 0 }));
+        else activateHeader(0);
       }}
       className="cursor-default text-sm outline-none"
     >
@@ -486,19 +601,38 @@ function TransactionsTable({
             role="row"
             aria-rowindex={1}
             className="grid border-y border-line"
-            style={{ gridTemplateColumns: GRID_TEMPLATE, height: ROW_HEIGHT }}
+            style={{ gridTemplateColumns: GRID_TEMPLATE, height: HEADER_HEIGHT }}
           >
-            {group.headers.map((header) => (
-              <div
-                key={header.id}
-                role="columnheader"
-                className={`flex items-center truncate border-r border-line px-2 font-mono text-xs tracking-widest text-ink-muted uppercase last:border-r-0 ${
-                  header.column.columnDef.meta!.align === "end" ? "justify-end" : ""
-                }`}
-              >
-                <table.FlexRender header={header} />
-              </div>
-            ))}
+            {group.headers.map((header, column) => {
+              const { headerMenu } = header.column.columnDef.meta!;
+              const label = <table.FlexRender header={header} />;
+              return (
+                <div
+                  key={header.id}
+                  id={headerId(column)}
+                  role="columnheader"
+                  aria-sort={
+                    headerMenu && menus?.sort.column === headerMenu
+                      ? menus.sort.direction
+                      : undefined
+                  }
+                  onMouseDown={(event) => handleHeaderPress(column, event)}
+                  className={`flex items-center truncate border-r border-line font-mono text-xs tracking-widest text-ink-muted uppercase last:border-r-0 ${
+                    headerMenu && menus ? "" : "px-2"
+                  } ${activeHeader === column ? "outline-2 -outline-offset-2 outline-focus" : ""}`}
+                >
+                  {headerMenu && menus
+                    ? menus.render(headerMenu, {
+                        label,
+                        menuRef: (menu) => {
+                          menusRef.current[column] = menu;
+                        },
+                        onDone: () => leaveHeader(column),
+                      })
+                    : label}
+                </div>
+              );
+            })}
           </div>
         ))}
       </div>
@@ -510,11 +644,11 @@ function TransactionsTable({
         style={{ height: virtualizer.getTotalSize() }}
       >
         {virtualizer.getVirtualItems().map((item) => {
-          const row = tableRows[item.index]!;
+          const row = rows[item.index]!;
           const isEditingRow = editing?.cell.row === item.index;
           return (
             <div
-              key={row.id}
+              key={item.key}
               role="row"
               aria-rowindex={item.index + 2}
               className="absolute inset-x-0 grid leading-7"
@@ -527,18 +661,18 @@ function TransactionsTable({
                 top: item.start - scrollMargin,
               }}
             >
-              {row.getAllCells().map((cell, column) => {
-                const meta = cell.column.columnDef.meta!;
+              {leafColumns.map((leafColumn, column) => {
+                const meta = leafColumn.columnDef.meta!;
                 const editor = meta.editor;
                 const position = { row: item.index, column };
                 const selected = area !== null && contains(area, position);
                 const isEditing = isEditingRow && editing.cell.column === column;
-                const editText = editor?.editText(row.original);
+                const editText = editor?.editText(row);
                 return (
                   <EditableCell
-                    key={cell.id}
+                    key={leafColumn.id}
                     id={cellId(position)}
-                    display={meta.display(row.original)}
+                    display={meta.display(row)}
                     align={meta.align}
                     mono={meta.mono}
                     editText={editText}
@@ -554,9 +688,7 @@ function TransactionsTable({
                             menu: editor.menu?.({ categories, accounts }),
                             paused: ranged,
                             inputRef,
-                            // row.index is the position in `rows`, item.index in the rendered order.
-                            submit: (text, create) =>
-                              submit(row.original, row.index, editor, text, create),
+                            submit: (text, create) => submit(row, item.index, editor, text, create),
                             finish: (how) => finishEditing(position, how),
                             history: onUndoOrRedo,
                           }

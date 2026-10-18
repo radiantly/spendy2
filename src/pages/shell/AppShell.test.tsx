@@ -4,7 +4,7 @@ import { toast } from "sonner";
 import { downloadDatabase, downloadDatabaseIfChanged, uploadDatabase } from "../../api/database.ts";
 import { Database, openDatabase } from "../../db/database.ts";
 import { GET_OVERVIEW_META } from "../../db/queries/overview.ts";
-import { LIST_CATEGORY_NAMES, LIST_TRANSACTIONS } from "../../db/queries/transactions.ts";
+import { LIST_CATEGORIES, LIST_TRANSACTIONS } from "../../db/queries/transactions.ts";
 import { ClosedError } from "../../db/rpc.ts";
 import { loadSession } from "../../lib/session.ts";
 import { itFailsInFirefox } from "../../test/browsers.ts";
@@ -436,7 +436,7 @@ describe("TransactionsPage", () => {
     const market = await cellOf("Corner Market", CATEGORY);
     const cafe = await cellOf("Café Lumen", CATEGORY);
     // The menus keep listing Groceries after it's deleted.
-    const refresh = holdNextQuery((sql) => sql === LIST_CATEGORY_NAMES);
+    const refresh = holdNextQuery((sql) => sql === LIST_CATEGORIES);
     const showError = vi.spyOn(toast, "error");
 
     await userEvent.dblClick(market);
@@ -494,6 +494,78 @@ describe("TransactionsPage", () => {
     expect(
       await queryUploaded(blob, `SELECT account_name FROM transactions WHERE id = '${NEWER}'`),
     ).toEqual([{ account_name: "Savings" }]);
+  });
+
+  describe("sorting and filtering", () => {
+    const counterparties = () =>
+      page
+        .getByRole("row")
+        .elements()
+        .slice(1)
+        .map((row) => row.children[COUNTERPARTY]!.textContent);
+    const headerButton = (name: string) =>
+      page.getByRole("button", { name: new RegExp(`^${name}`) });
+
+    async function pick(header: string, role: "radio" | "checkbox", name: string) {
+      await userEvent.click(headerButton(header));
+      await userEvent.click(page.getByRole(role, { name }));
+      await userEvent.keyboard("{Escape}");
+    }
+
+    it("sorts the table from a header's menu", async () => {
+      await opened();
+
+      await pick("Counterparty", "radio", "A to Z");
+
+      await expect.poll(counterparties).toEqual(["Café Lumen", "Corner Market"]);
+    });
+
+    it("filters the table from a header's menu", async () => {
+      await opened();
+
+      await pick("Category", "checkbox", "Groceries");
+
+      await expect.poll(counterparties).toEqual(["Café Lumen"]);
+    });
+
+    it("keeps the headers when every transaction is filtered out", async () => {
+      await opened();
+
+      await pick("Account", "checkbox", "All accounts");
+
+      await expect.poll(counterparties).toEqual([]);
+      await expect.element(headerButton("Account")).toBeVisible();
+      await expect.element(page.getByText("No transactions yet.").shown()).not.toBeInTheDocument();
+    });
+
+    it("keeps an edited row where it is until the view changes", async () => {
+      await opened();
+      await pick("Counterparty", "radio", "A to Z");
+      await expect.poll(counterparties).toEqual(["Café Lumen", "Corner Market"]);
+
+      await editCounterparty("Café Lumen", "Zest Café");
+      await expect.poll(counterparties).toEqual(["Zest Café", "Corner Market"]);
+
+      await pick("Counterparty", "radio", "Z to A");
+      await pick("Counterparty", "radio", "A to Z");
+      await expect.poll(counterparties).toEqual(["Corner Market", "Zest Café"]);
+    });
+
+    it("keeps an edited row the filters would hide until the view changes", async () => {
+      await opened();
+      await pick("Category", "checkbox", "(no category)");
+      await expect.poll(counterparties).toEqual(["Corner Market"]);
+
+      await userEvent.click(await cellOf("Corner Market", CATEGORY));
+      await userEvent.keyboard("{Delete}");
+      await expect
+        .poll(async () => (await cellOf("Corner Market", CATEGORY)).element().textContent)
+        .toBe("");
+      expect(counterparties()).toEqual(["Corner Market"]);
+
+      await pick("Counterparty", "radio", "A to Z");
+      await expect.poll(counterparties).toEqual([]);
+    });
   });
 
   describe("clearing a range", () => {
@@ -723,7 +795,8 @@ describe("switching pages", () => {
   const tab = (name: string) => page.getByRole("link", { name });
   const period = (name: string) => page.getByRole("button", { name, exact: true });
   // The overview lists the same transactions, hidden or not.
-  const inTable = (text: string) => page.getByRole("grid").getByText(text);
+  // In the cells: the header menus list some of the same names.
+  const inTable = (text: string) => page.getByRole("gridcell").getByText(text);
 
   async function showAllTime() {
     await userEvent.click(period("All"));
@@ -1022,7 +1095,8 @@ describe("a session the server no longer accepts", () => {
 describe("undo and redo on the transactions page", () => {
   const undo = () => userEvent.keyboard("{Control>}z{/Control}");
   const redo = () => userEvent.keyboard("{Control>}y{/Control}");
-  const inTable = (text: string) => page.getByRole("grid").getByText(text, { exact: true });
+  // In the cells: the header menus list some of the same names.
+  const inTable = (text: string) => page.getByRole("gridcell").getByText(text, { exact: true });
   /** Groceries inside Food, used only by Corner Market. */
   const WITH_PARENT = `${TWO_TRANSACTIONS};
     INSERT INTO categories VALUES ('Food', NULL);

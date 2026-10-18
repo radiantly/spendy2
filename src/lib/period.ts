@@ -1,6 +1,7 @@
 /**
- * The periods the overview can show, on local dates as the schema stores
- * them (`YYYY-MM-DD`, no time zone). Date maths runs on UTC midnights so
+ * The periods the overview can show, and the transactions' dates can be
+ * filtered to, on local dates as the schema stores them (`YYYY-MM-DD`, no
+ * time zone). Date maths runs on UTC midnights so
  * daylight saving never shifts a day.
  */
 
@@ -9,12 +10,17 @@ export type NaiveDate = string;
 /** Inclusive at both ends. */
 export type DateRange = { from: NaiveDate; to: NaiveDate };
 
+/**
+ * Whole months: a month, or the last 3, 6 or 12 up to the end of this one.
+ * Or everything.
+ */
 export const PRESETS = [
   { id: "this-month", label: "This month" },
   { id: "last-month", label: "Last month" },
   { id: "last-3-months", label: "Last 3 months" },
   { id: "last-6-months", label: "Last 6 months" },
-  { id: "last-year", label: "Last year" },
+  // "Last 12 months" wouldn't leave room beside a custom range's dates.
+  { id: "last-12-months", label: "Last year" },
   { id: "all", label: "All" },
 ] as const;
 
@@ -23,7 +29,7 @@ export type Preset = (typeof PRESETS)[number]["id"];
 export type PeriodChoice = { kind: Preset } | ({ kind: "custom" } & DateRange);
 
 export type Period = DateRange & {
-  /** The whole period, e.g. "Oct 1 – 9, 2026" or "September 2026". */
+  /** The whole period, e.g. "October 2026", "Aug – Oct 2026" or "Aug 15 – Oct 9, 2026". */
   span: string;
   /** A short name, e.g. "October" or "3 months". */
   name: string;
@@ -98,10 +104,12 @@ export function formatDay(date: NaiveDate, { year = true } = {}) {
   return (year ? DAY : DAY_NO_YEAR).format(toDate(date));
 }
 
-/** The last `count` months, from the `count - 1`th month before `date`'s up to the day. */
+/** The last `count` months, from the `count - 1`th month before `date`'s to the end of `date`'s. */
 function lastMonths(date: NaiveDate, count: number): DateRange {
-  return { from: startOfMonth(addMonths(date, -(count - 1))), to: date };
+  return { from: startOfMonth(addMonths(date, -(count - 1))), to: endOfMonth(date) };
 }
+
+const LAST_MONTHS = { "last-3-months": 3, "last-6-months": 6, "last-12-months": 12 } as const;
 
 /**
  * Where `choice` starts and ends on `today`. "All" spans the transactions
@@ -114,11 +122,13 @@ export function resolvePeriod(
 ): Period {
   switch (choice.kind) {
     case "this-month": {
-      const range = { from: startOfMonth(today), to: today };
-      const previous = { from: addMonths(range.from, -1), to: addMonths(today, -1) };
+      const from = startOfMonth(today);
+      // The same days of last month as have gone by of this one.
+      const previous = { from: addMonths(from, -1), to: addMonths(today, -1) };
       return {
-        ...range,
-        span: formatRange(range),
+        from,
+        to: endOfMonth(today),
+        span: MONTH_YEAR.format(toDate(today)),
         name: MONTH.format(toDate(today)),
         previous: { ...previous, label: `vs ${formatRange(previous, { year: false })}` },
       };
@@ -140,16 +150,17 @@ export function resolvePeriod(
     }
     case "last-3-months":
     case "last-6-months":
-    case "last-year": {
-      const months = { "last-3-months": 3, "last-6-months": 6, "last-year": 12 }[choice.kind];
+    case "last-12-months": {
+      const months = LAST_MONTHS[choice.kind];
       const range = lastMonths(today, months);
       return {
         ...range,
-        span: formatRange(range),
+        span: SHORT_MONTH_YEAR.formatRange(toDate(range.from), toDate(range.to)),
         name: `${months} months`,
+        // As many days before as have gone by of these.
         previous: {
           from: addMonths(range.from, -months),
-          to: addMonths(range.to, -months),
+          to: addMonths(today, -months),
           label: `vs prior ${months} months`,
         },
       };
