@@ -1,6 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import * as opaque from "@serenity-kit/opaque";
-import { databaseBlobSchema, toSha256Schema, type DatabasePutPrecondition } from "../schemas.ts";
+import { databaseBlobSchema, toSha256Schema } from "../schemas.ts";
 
 // Maximum BLOB size for durable object is 2MB. Thus DB is stored in 1MiB chunks
 export const DATABASE_CHUNK_BYTES = 1024 * 1024;
@@ -119,8 +119,8 @@ export class UserStore extends DurableObject<Env> {
 
   async uploadDatabase(
     sessionId: string,
-    precondition: DatabasePutPrecondition,
     stream: ReadableStream<Uint8Array>,
+    current_hash: string | null,
   ): Promise<UploadDatabaseResponse> {
     const sessions = this.getKv("ACTIVE_SESSIONS") ?? new Set();
     if (!sessions.has(sessionId)) return { success: false, code: "UNAUTHORIZED" };
@@ -137,12 +137,8 @@ export class UserStore extends DurableObject<Env> {
     }
     const sha256 = await toSha256Schema.decodeAsync(body);
 
-    const current = this.getKv("DATABASE_SHA256");
-    const precondition_satisfied =
-      "if-none-match" in precondition
-        ? current === undefined
-        : current === precondition["if-match"];
-    if (!precondition_satisfied) return { success: false, code: "PRECONDITION_FAILED" };
+    if ((this.getKv("DATABASE_SHA256") ?? null) !== current_hash)
+      return { success: false, code: "PRECONDITION_FAILED" };
 
     this.ctx.storage.transactionSync(() => {
       const { sql } = this.ctx.storage;
@@ -168,14 +164,14 @@ export class UserStore extends DurableObject<Env> {
 
   async downloadDatabase(
     sessionId: string,
-    ifNoneMatch?: string,
+    current_hash: string | null,
   ): Promise<DownloadDatabaseResponse> {
     const sessions = this.getKv("ACTIVE_SESSIONS") ?? new Set();
     if (!sessions.has(sessionId)) return { success: false, code: "UNAUTHORIZED" };
 
     const current = this.getKv("DATABASE_SHA256");
     if (current === undefined) return { success: false, code: "NOT_FOUND" };
-    if (current === ifNoneMatch) return { success: true, modified: false, sha256: current };
+    if (current === current_hash) return { success: true, modified: false, sha256: current };
 
     const chunks = this.ctx.storage.sql
       .exec<{ data: ArrayBuffer }>("SELECT data FROM database_chunks ORDER BY seq")

@@ -1,12 +1,11 @@
-import { Hono } from "hono";
-import { sValidator } from "@hono/standard-validator";
+import { OpenAPIHono } from "@hono/zod-openapi";
 import * as opaque from "@serenity-kit/opaque";
 import { z } from "zod";
 import { usernameSchema } from "../../schemas.ts";
+import { createApiRoute, fixedResponse } from "../../openapi.ts";
 import database from "./database.ts";
-import type { ContentfulStatusCode } from "hono/utils/http-status";
 
-const users = new Hono<{ Bindings: Env }>();
+const users = new OpenAPIHono<{ Bindings: Env }>();
 users.route("/me/database", database);
 
 const UserRegistrationStartBody = z.strictObject({
@@ -21,7 +20,31 @@ const UserRegistrationFinishBody = z.strictObject({
 
 const UserRegistrationBody = z.union([UserRegistrationStartBody, UserRegistrationFinishBody]);
 
-users.post("/", sValidator("json", UserRegistrationBody), async (c) => {
+const registerUser = createApiRoute({
+  method: "post",
+  path: "/",
+  tags: ["Users"],
+  summary: "Register a user",
+  description:
+    "Registers a user with OPAQUE in two requests: a registrationRequest returns the " +
+    "registrationResponse, then the registrationRecord creates the user.",
+  request: {
+    body: { required: true, content: { "application/json": { schema: UserRegistrationBody } } },
+  },
+  errors: ["INVALID_REGISTRATION_REQUEST", "USER_ALREADY_EXISTS"],
+  responses: {
+    200: {
+      description: "The server's OPAQUE registration response",
+      content: { "application/json": { schema: z.object({ registrationResponse: z.string() }) } },
+    },
+    201: {
+      description: "The user was created",
+      content: { "application/json": { schema: z.object({ success: z.string() }) } },
+    },
+  },
+});
+
+users.openapi(registerUser, async (c) => {
   const body = c.req.valid("json");
 
   // registration start
@@ -36,9 +59,9 @@ users.post("/", sValidator("json", UserRegistrationBody), async (c) => {
         userIdentifier: username,
         registrationRequest,
       });
-      return c.json({ registrationResponse });
+      return c.json({ registrationResponse }, 200);
     } catch {
-      return c.json({ error: "INVALID_REGISTRATION_REQUEST" }, 400);
+      return fixedResponse(c, "INVALID_REGISTRATION_REQUEST");
     }
   }
 
@@ -46,12 +69,7 @@ users.post("/", sValidator("json", UserRegistrationBody), async (c) => {
 
   const userStore = c.env.USER.getByName(username);
   const result = await userStore.registerNewUser(registrationRecord);
-  if (!result.success) {
-    const STATUS: Record<typeof result.code, ContentfulStatusCode> = {
-      USER_ALREADY_EXISTS: 409,
-    };
-    return c.json({ error: result.code }, STATUS[result.code]);
-  }
+  if (!result.success) return fixedResponse(c, result.code);
 
   return c.json({ success: `User ${username} was successfully created` }, 201);
 });

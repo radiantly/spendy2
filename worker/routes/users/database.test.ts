@@ -256,6 +256,15 @@ describe("PUT /api/users/me/database", () => {
       expect(await response.text()).toBe("Payload Too Large");
       expect(await downloaded(token)).toBe(404);
     });
+
+    it("checks the size before the precondition", async () => {
+      const token = await newUser();
+      const body = largeDatabaseBlob(env.MAX_DATABASE_UPLOAD_BYTES + 1);
+
+      const response = await putDatabase(token, body);
+
+      expect(response.status).toBe(413);
+    });
   });
 
   it("lets only one of two concurrent uploads with the same If-Match win", async () => {

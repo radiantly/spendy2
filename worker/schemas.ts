@@ -37,30 +37,24 @@ export const databaseEtagSchema = z.codec(z.string().regex(/^".{64}"$/), z.hash(
   encode: (hash) => `"${hash}"`,
 });
 
-export const databasePutPreconditionSchema = z.union([
-  z.object({
-    "if-match": databaseEtagSchema,
-    "if-none-match": z.never().optional(),
-  }),
-  z.object({
-    "if-match": z.never().optional(),
-    "if-none-match": z.literal("*"),
-  }),
-]);
-
-export type DatabasePutPrecondition = z.infer<typeof databasePutPreconditionSchema>;
-
-/** A database upload's headers: its precondition, and how long it is. */
-export const databasePutHeadersSchema = z.intersection(
-  databasePutPreconditionSchema,
-  z.object({
+/** A database upload's headers: exactly one precondition, and how long it is. */
+export const databasePutHeadersSchema = z
+  .object({
+    "if-match": databaseEtagSchema
+      .optional()
+      .meta({ description: "The ETag of the stored database this upload replaces" }),
+    "if-none-match": z.literal("*").optional().meta({ description: "`*` for the first upload" }),
     "content-length": z.string().regex(/^\d+$/),
-    "transfer-encoding": z.never().optional(),
-  }),
-);
+  })
+  .refine(
+    (headers) => (headers["if-match"] === undefined) !== (headers["if-none-match"] === undefined),
+    { error: "Needs exactly one of If-Match and If-None-Match" },
+  );
 
 export const databaseGetPreconditionSchema = z.object({
-  "if-none-match": databaseEtagSchema.optional(),
+  "if-none-match": databaseEtagSchema
+    .optional()
+    .meta({ description: "The ETag of a database the client already has" }),
 });
 
 // Body format: SPENDY + version byte + ?

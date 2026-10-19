@@ -25,6 +25,7 @@
     "@fontsource-variable/geist-mono": "^5.3.0",
     "@fontsource/gloria-hallelujah": "^5.3.0",
     "@hono/standard-validator": "^0.4.0",
+    "@hono/zod-openapi": "^1.6.3",
     "@serenity-kit/opaque": "file:../opaque/build/ristretto",
     "@sqlite.org/sqlite-wasm": "^3.53.4-build2",
     "@tailwindcss/vite": "^4.3.3",

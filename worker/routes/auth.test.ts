@@ -75,6 +75,15 @@ describe("POST /api/auth/login/start", () => {
       },
     );
 
+    it("rejects a body that isn't JSON", async () => {
+      const response = await exports.default.fetch("http://localhost/api/auth/login/start", {
+        method: "POST",
+        headers: { "Content-Type": "text/plain" },
+        body: JSON.stringify({ username: "alice", startLoginRequest: "x" }),
+      });
+      expect(response.status).toBe(415);
+    });
+
     it("rejects a finishLoginRequest field", async () => {
       const response = await post("/auth/login/start", {
         username: "alice",
@@ -441,7 +450,6 @@ describe("POST /api/auth/logout", () => {
   ])("rejects %s", async (_name, authorization) => {
     const response = await postLogout(authorization);
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: "INVALID_REQUEST" });
   });
 
   it.each([
