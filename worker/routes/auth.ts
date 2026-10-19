@@ -16,20 +16,20 @@ const LoginFinishBody = z.strictObject({
   finishLoginRequest: z.string().max(4096),
 });
 
-const LoginBody = z.union([LoginStartBody, LoginFinishBody]);
-
-auth.post("/login", sValidator("json", LoginBody), async (c) => {
+auth.post("/login/start", sValidator("json", LoginStartBody), async (c) => {
   const body = c.req.valid("json");
   const userStore = c.env.USER.getByName(body.username);
 
-  // login start
-  if ("startLoginRequest" in body) {
-    const result = await userStore.startLoginRatelimited(body.startLoginRequest);
-    if (!result.success)
-      return c.json({ error: result.code }, result.code === "RATE_LIMITED" ? 429 : 400);
+  const result = await userStore.startLoginRatelimited(body.startLoginRequest);
+  if (!result.success)
+    return c.json({ error: result.code }, result.code === "RATE_LIMITED" ? 429 : 400);
 
-    return c.json({ loginResponse: result.loginResponse });
-  }
+  return c.json({ loginResponse: result.loginResponse });
+});
+
+auth.post("/login/finish", sValidator("json", LoginFinishBody), async (c) => {
+  const body = c.req.valid("json");
+  const userStore = c.env.USER.getByName(body.username);
 
   const result = await userStore.finishLogin(body.finishLoginRequest);
   if (!result.success) return c.json({ error: result.code }, 401);

@@ -14,8 +14,8 @@ export type LoginErrorCode = "INVALID_LOGIN" | "RATE_LIMITED" | "LOGIN_FAILED";
 const LoginStartResponse = z.object({ loginResponse: z.string() });
 const LoginFinishResponse = z.object({ token: z.string() });
 
-function postLogin(body: object) {
-  return fetch("/api/auth/login", {
+function postLogin(step: "start" | "finish", body: object) {
+  return fetch(`/api/auth/login/${step}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -32,7 +32,7 @@ export async function loginUser(username: string, password: string): Promise<Log
 
   const { clientLoginState, startLoginRequest } = opaque.client.startLogin({ password });
 
-  const startRes = await postLogin({ username, startLoginRequest });
+  const startRes = await postLogin("start", { username, startLoginRequest });
   if (startRes.status === 429) {
     return { success: false, code: "RATE_LIMITED" };
   }
@@ -47,7 +47,7 @@ export async function loginUser(username: string, password: string): Promise<Log
     return { success: false, code: "INVALID_LOGIN" };
   }
 
-  const finishRes = await postLogin({
+  const finishRes = await postLogin("finish", {
     username,
     finishLoginRequest: loginResult.finishLoginRequest,
   });

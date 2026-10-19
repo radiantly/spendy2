@@ -55,7 +55,7 @@ async function login(
   const { clientLoginState, startLoginRequest } = opaque.client.startLogin({
     password,
   });
-  const startResponse = await post(endpoint, "/auth/login", {
+  const startResponse = await post(endpoint, "/auth/login/start", {
     username,
     startLoginRequest,
   });
@@ -73,7 +73,7 @@ async function login(
   });
   if (result === undefined) return;
 
-  const finishResponse = await post(endpoint, "/auth/login", {
+  const finishResponse = await post(endpoint, "/auth/login/finish", {
     username,
     finishLoginRequest: result.finishLoginRequest,
   });

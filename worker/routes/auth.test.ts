@@ -62,12 +62,12 @@ function getSessionIds(username: string) {
   ]);
 }
 
-describe("POST /api/auth/login", () => {
+describe("POST /api/auth/login/start", () => {
   describe("validation", () => {
     it.each(["Alice", "ab", "a".repeat(33), "al ice", "al-ice"])(
       "rejects username %j",
       async (username) => {
-        const response = await post("/auth/login", {
+        const response = await post("/auth/login/start", {
           username,
           startLoginRequest: "x",
         });
@@ -75,8 +75,8 @@ describe("POST /api/auth/login", () => {
       },
     );
 
-    it("rejects a body with both start and finish fields", async () => {
-      const response = await post("/auth/login", {
+    it("rejects a finishLoginRequest field", async () => {
+      const response = await post("/auth/login/start", {
         username: "alice",
         startLoginRequest: "x",
         finishLoginRequest: "x",
@@ -85,7 +85,7 @@ describe("POST /api/auth/login", () => {
     });
 
     it("rejects unknown fields", async () => {
-      const response = await post("/auth/login", {
+      const response = await post("/auth/login/start", {
         username: "alice",
         startLoginRequest: "x",
         extra: true,
@@ -93,17 +93,17 @@ describe("POST /api/auth/login", () => {
       expect(response.status).toBe(400);
     });
 
-    it("rejects oversized fields", async () => {
-      const response = await post("/auth/login", {
+    it("rejects an oversized start request", async () => {
+      const response = await post("/auth/login/start", {
         username: "alice",
-        finishLoginRequest: "x".repeat(4097),
+        startLoginRequest: "x".repeat(4097),
       });
       expect(response.status).toBe(400);
     });
 
     it("rejects a malformed login start request", async () => {
       await registerUser("alice");
-      const response = await post("/auth/login", {
+      const response = await post("/auth/login/start", {
         username: "alice",
         startLoginRequest: "not-a-login-request",
       });
@@ -113,7 +113,7 @@ describe("POST /api/auth/login", () => {
 
     it("does not rate limit after a malformed login start request", async () => {
       await registerUser("alice");
-      await post("/auth/login", {
+      await post("/auth/login/start", {
         username: "alice",
         startLoginRequest: "not-a-login-request",
       });
@@ -122,15 +122,13 @@ describe("POST /api/auth/login", () => {
     });
   });
 
-  describe("login start", () => {
-    it("returns a login response", async () => {
-      await registerUser("alice");
-      const { response } = await startLogin("alice");
+  it("returns a login response", async () => {
+    await registerUser("alice");
+    const { response } = await startLogin("alice");
 
-      expect(response.status).toBe(200);
-      expect(await response.json()).toEqual({
-        loginResponse: expect.any(String),
-      });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      loginResponse: expect.any(String),
     });
   });
 
@@ -232,129 +230,159 @@ describe("POST /api/auth/login", () => {
       expect(await statuses("nobody")).toEqual(expected);
     });
   });
+});
 
-  describe("login finish", () => {
-    it("returns a token for a new session", async () => {
-      await registerUser("alice");
-      const response = await login("alice");
+describe("POST /api/auth/login/finish", () => {
+  describe("validation", () => {
+    it.each(["Alice", "ab", "a".repeat(33), "al ice", "al-ice"])(
+      "rejects username %j",
+      async (username) => {
+        const response = await post("/auth/login/finish", {
+          username,
+          finishLoginRequest: "x",
+        });
+        expect(response.status).toBe(400);
+      },
+    );
 
-      expect(response.status).toBe(200);
-      const { token } = await response.json<{ token: string }>();
-      const { username, sessionId } = decodeToken(token);
-      expect(username).toBe("alice");
-      expect(sessionId).toMatch(UUID_REGEX);
-      expect(await getSessionIds("alice")).toEqual([sessionId]);
-    });
-
-    it("rejects a wrong password", async () => {
-      await registerUser("alice");
-      const { response, clientLoginState } = await startLogin("alice", "wrong password");
-      const { loginResponse } = await response.json<{
-        loginResponse: string;
-      }>();
-
-      // the client detects the wrong password itself, so it never gets a
-      // finishLoginRequest to send
-      expect(
-        opaque.client.finishLogin({
-          clientLoginState,
-          loginResponse,
-          password: "wrong password",
-        }),
-      ).toBeUndefined();
-    });
-
-    it("rejects a finish request that belongs to another login", async () => {
-      const finishLoginRequest = await foreignFinishLoginRequest();
-      await registerUser("alice");
-      await startLogin("alice");
-
-      const response = await post("/auth/login", {
+    it("rejects a startLoginRequest field", async () => {
+      const response = await post("/auth/login/finish", {
         username: "alice",
-        finishLoginRequest,
+        startLoginRequest: "x",
+        finishLoginRequest: "x",
       });
-      expect(response.status).toBe(401);
-      expect(await response.json()).toEqual({ error: "INVALID_LOGIN" });
-      expect(await getSessionIds("alice")).toEqual([]);
+      expect(response.status).toBe(400);
     });
 
-    it("rejects a malformed finish request", async () => {
-      await registerUser("alice");
-      await startLogin("alice");
-
-      const response = await post("/auth/login", {
+    it("rejects an oversized finish request", async () => {
+      const response = await post("/auth/login/finish", {
         username: "alice",
-        finishLoginRequest: "not-a-finish-request",
+        finishLoginRequest: "x".repeat(4097),
       });
-      expect(response.status).toBe(401);
-      expect(await response.json()).toEqual({ error: "INVALID_LOGIN" });
+      expect(response.status).toBe(400);
     });
+  });
 
-    it("rejects a finish without a start", async () => {
-      const finishLoginRequest = await foreignFinishLoginRequest();
-      await registerUser("alice");
+  it("returns a token for a new session", async () => {
+    await registerUser("alice");
+    const response = await login("alice");
 
-      const response = await post("/auth/login", {
-        username: "alice",
-        finishLoginRequest,
-      });
-      expect(response.status).toBe(401);
-      expect(await response.json()).toEqual({
-        error: "INVALID_LOGIN_OR_TIMED_OUT",
-      });
-    });
+    expect(response.status).toBe(200);
+    const { token } = await response.json<{ token: string }>();
+    const { username, sessionId } = decodeToken(token);
+    expect(username).toBe("alice");
+    expect(sessionId).toMatch(UUID_REGEX);
+    expect(await getSessionIds("alice")).toEqual([sessionId]);
+  });
 
-    it("rejects a finish for an unknown user", async () => {
-      const finishLoginRequest = await foreignFinishLoginRequest();
-      await startLogin("nobody");
+  it("rejects a wrong password", async () => {
+    await registerUser("alice");
+    const { response, clientLoginState } = await startLogin("alice", "wrong password");
+    const { loginResponse } = await response.json<{
+      loginResponse: string;
+    }>();
 
-      const response = await post("/auth/login", {
-        username: "nobody",
-        finishLoginRequest,
-      });
-      expect(response.status).toBe(401);
-      expect(await response.json()).toEqual({ error: "INVALID_LOGIN" });
-    });
-
-    it("allows a login state to be used only once", async () => {
-      await registerUser("alice");
-      const { response, clientLoginState } = await startLogin("alice");
-      const { loginResponse } = await response.json<{
-        loginResponse: string;
-      }>();
-      const { finishLoginRequest } = opaque.client.finishLogin({
+    // the client detects the wrong password itself, so it never gets a
+    // finishLoginRequest to send
+    expect(
+      opaque.client.finishLogin({
         clientLoginState,
         loginResponse,
-        password: PASSWORD,
-      })!;
+        password: "wrong password",
+      }),
+    ).toBeUndefined();
+  });
 
-      await post("/auth/login", {
-        username: "alice",
-        finishLoginRequest: "not-a-finish-request",
-      });
-      const replay = await post("/auth/login", {
-        username: "alice",
-        finishLoginRequest,
-      });
-      expect(replay.status).toBe(401);
+  it("rejects a finish request that belongs to another login", async () => {
+    const finishLoginRequest = await foreignFinishLoginRequest();
+    await registerUser("alice");
+    await startLogin("alice");
+
+    const response = await post("/auth/login/finish", {
+      username: "alice",
+      finishLoginRequest,
     });
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({ error: "INVALID_LOGIN" });
+    expect(await getSessionIds("alice")).toEqual([]);
+  });
 
-    it("evicts the oldest session beyond the session limit", async () => {
-      await registerUser("alice");
+  it("rejects a malformed finish request", async () => {
+    await registerUser("alice");
+    await startLogin("alice");
 
-      const sessionIds: string[] = [];
-      for (let i = 0; i <= env.MAX_SESSIONS_PER_USER; i++) {
-        const response = await login("alice");
-        expect(response.status).toBe(200);
-        const { token } = await response.json<{ token: string }>();
-        sessionIds.push(decodeToken(token).sessionId);
-      }
-
-      const stored = await getSessionIds("alice");
-      expect(stored).toHaveLength(env.MAX_SESSIONS_PER_USER);
-      expect(stored).not.toContain(sessionIds[0]);
-      expect(stored).toEqual(expect.arrayContaining(sessionIds.slice(1)));
+    const response = await post("/auth/login/finish", {
+      username: "alice",
+      finishLoginRequest: "not-a-finish-request",
     });
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({ error: "INVALID_LOGIN" });
+  });
+
+  it("rejects a finish without a start", async () => {
+    const finishLoginRequest = await foreignFinishLoginRequest();
+    await registerUser("alice");
+
+    const response = await post("/auth/login/finish", {
+      username: "alice",
+      finishLoginRequest,
+    });
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({
+      error: "INVALID_LOGIN_OR_TIMED_OUT",
+    });
+  });
+
+  it("rejects a finish for an unknown user", async () => {
+    const finishLoginRequest = await foreignFinishLoginRequest();
+    await startLogin("nobody");
+
+    const response = await post("/auth/login/finish", {
+      username: "nobody",
+      finishLoginRequest,
+    });
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({ error: "INVALID_LOGIN" });
+  });
+
+  it("allows a login state to be used only once", async () => {
+    await registerUser("alice");
+    const { response, clientLoginState } = await startLogin("alice");
+    const { loginResponse } = await response.json<{
+      loginResponse: string;
+    }>();
+    const { finishLoginRequest } = opaque.client.finishLogin({
+      clientLoginState,
+      loginResponse,
+      password: PASSWORD,
+    })!;
+
+    await post("/auth/login/finish", {
+      username: "alice",
+      finishLoginRequest: "not-a-finish-request",
+    });
+    const replay = await post("/auth/login/finish", {
+      username: "alice",
+      finishLoginRequest,
+    });
+    expect(replay.status).toBe(401);
+  });
+
+  it("evicts the oldest session beyond the session limit", async () => {
+    await registerUser("alice");
+
+    const sessionIds: string[] = [];
+    for (let i = 0; i <= env.MAX_SESSIONS_PER_USER; i++) {
+      const response = await login("alice");
+      expect(response.status).toBe(200);
+      const { token } = await response.json<{ token: string }>();
+      sessionIds.push(decodeToken(token).sessionId);
+    }
+
+    const stored = await getSessionIds("alice");
+    expect(stored).toHaveLength(env.MAX_SESSIONS_PER_USER);
+    expect(stored).not.toContain(sessionIds[0]);
+    expect(stored).toEqual(expect.arrayContaining(sessionIds.slice(1)));
   });
 });
 

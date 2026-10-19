@@ -55,7 +55,7 @@ export async function startLogin(username: string, password = PASSWORD) {
   const { clientLoginState, startLoginRequest } = opaque.client.startLogin({
     password,
   });
-  const response = await post("/auth/login", { username, startLoginRequest });
+  const response = await post("/auth/login/start", { username, startLoginRequest });
   return { response, clientLoginState };
 }
 
@@ -72,7 +72,7 @@ export async function login(username: string, password = PASSWORD) {
   });
   expect(result).toBeDefined();
 
-  return post("/auth/login", {
+  return post("/auth/login/finish", {
     username,
     finishLoginRequest: result!.finishLoginRequest,
   });
