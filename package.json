@@ -76,7 +76,7 @@
     "npm": ">=11.19.0"
   },
   "allowScripts": {
-    "workerd@1.20261006.1": true,
-    "esbuild@0.28.2": true
+    "esbuild": true,
+    "workerd": true
   }
 }

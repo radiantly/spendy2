@@ -3,33 +3,44 @@ import type { OpenAPIHono } from "@hono/zod-openapi";
 import { normalizePath, runnerImport, type Plugin } from "vite";
 
 interface OpenAPIOptions {
-  /** The module whose default export is the app to document. */
+  /** The app's module; see generateOpenAPIDocument. */
   app: string;
   /** The document's file name, and its path on the site. */
   fileName: string;
-  /** What the document says besides the app's routes and its OpenAPI version. */
-  document: Omit<Parameters<OpenAPIHono["getOpenAPI31Document"]>[0], "openapi">;
+}
+
+interface AppModule {
+  default: OpenAPIHono;
+  openAPIDocument: Omit<Parameters<OpenAPIHono["getOpenAPI31Document"]>[0], "openapi">;
 }
 
 /**
- * Serves the app's OpenAPI document in dev, and adds it to the client build.
- * The app is loaded in Node, so its modules must not import `cloudflare:*`.
+ * The OpenAPI document of `app`, a module, resolved against `root`, whose
+ * default export is the app to document, and whose `openAPIDocument` export
+ * is what the document says besides the routes. Also returns the files it
+ * was generated from. The app is loaded in Node, so its modules must not
+ * import `cloudflare:*`.
  */
-export function openapi({ app, fileName, document }: OpenAPIOptions): Plugin {
+export async function generateOpenAPIDocument(app: string, root: string) {
+  const appPath = normalizePath(path.resolve(root, app));
+  const { module, dependencies } = await runnerImport<AppModule>(appPath, { root });
+  // the generator only copies `openapi` into the document; it's 3.1 for getOpenAPI31Document
+  const document = { ...module.openAPIDocument, openapi: "3.1.0" };
+  return {
+    document: module.default.getOpenAPI31Document(document),
+    // the dependencies leave out the module itself
+    files: new Set([appPath, ...dependencies]),
+  };
+}
+
+/** Serves the app's OpenAPI document in dev, and adds it to the client build. */
+export function openapi({ app, fileName }: OpenAPIOptions): Plugin {
   let root = process.cwd();
 
-  /** The document, and the files it was generated from. */
+  /** The document as JSON, and the files it was generated from. */
   async function generate() {
-    const appPath = normalizePath(path.resolve(root, app));
-    const { module, dependencies } = await runnerImport<{ default: OpenAPIHono }>(appPath, {
-      root,
-    });
-    return {
-      // the generator only copies `openapi` into the document; it's 3.1 for getOpenAPI31Document
-      json: JSON.stringify(module.default.getOpenAPI31Document({ ...document, openapi: "3.1.0" })),
-      // the dependencies leave out the module itself
-      files: new Set([appPath, ...dependencies]),
-    };
+    const { document, files } = await generateOpenAPIDocument(app, root);
+    return { json: JSON.stringify(document), files };
   }
 
   return {
