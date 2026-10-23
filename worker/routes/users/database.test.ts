@@ -253,7 +253,7 @@ describe("PUT /api/users/me/database", () => {
       const response = await putDatabase(token, body, { "If-None-Match": "*" });
 
       expect(response.status).toBe(413);
-      expect(await response.text()).toBe("Payload Too Large");
+      expect(await response.json()).toEqual({ error: "DATABASE_TOO_LARGE" });
       expect(await downloaded(token)).toBe(404);
     });
 
@@ -261,7 +261,8 @@ describe("PUT /api/users/me/database", () => {
       const token = await newUser();
       const body = largeDatabaseBlob(env.MAX_DATABASE_UPLOAD_BYTES + 1);
 
-      const response = await putDatabase(token, body);
+      // fails the precondition too: there's no database to match
+      const response = await putDatabase(token, body, { "If-Match": `"${"0".repeat(64)}"` });
 
       expect(response.status).toBe(413);
     });

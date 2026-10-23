@@ -38,11 +38,19 @@ export class DatabaseTooNewError extends Error {
  * its own transaction so a failure leaves the database at the last good
  * version. Returns the version before and after.
  *
- * Foreign keys are off while migrating, as SQLite requires for rebuilding a
- * table (create, copy, drop, rename): with them on, the drop would cascade
- * to the rows referencing it. A migration can't turn them off itself, since
- * the pragma is ignored inside a transaction. Instead, each migration must
- * leave no dangling references, and the setting is restored afterwards.
+ * Foreign keys are off while migrating, so a migration can rebuild a table:
+ * with them on, dropping it would cascade to the rows referencing it. A
+ * migration can't turn them off itself, since the pragma is ignored inside a
+ * transaction. Instead, each migration must leave no dangling references,
+ * and the setting is restored afterwards.
+ *
+ * A table is rebuilt without renaming it: create a temporary table, copy the
+ * rows into it, drop the table, create it again with its own name, copy the
+ * rows back and drop the temporary table. Then recreate the table's indexes
+ * and triggers, which were dropped with it. Renaming a table rewrites every
+ * reference to it, quoting the name, and the rename fails while a view or
+ * trigger refers to a dropped table. Without one, what refers to the table
+ * finds it again by name, and the API docs show its statement as written.
  */
 export function migrate(db: Database, migrations: readonly Migration[]) {
   const from = Number(db.selectValue("PRAGMA user_version"));

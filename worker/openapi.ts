@@ -25,6 +25,7 @@ export const FIXED_RESPONSES = {
   NOT_FOUND: 404,
   USER_ALREADY_EXISTS: 409,
   PRECONDITION_FAILED: 412,
+  DATABASE_TOO_LARGE: 413,
   RATE_LIMITED: 429,
 } as const satisfies Record<string, ContentlessStatusCode | ClientErrorStatusCode>;
 

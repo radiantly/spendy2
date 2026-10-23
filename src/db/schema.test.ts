@@ -50,18 +50,4 @@ describe("tableStatements", () => {
 
     expect(tableStatements(db)).toEqual(["CREATE TABLE a (x, y TEXT)"]);
   });
-
-  // a rebuild, as migrate.ts describes: create, copy, drop, rename
-  it("names a rebuilt table the way the other tables are named", () => {
-    db.exec(`
-      CREATE TABLE a (x);
-      CREATE TABLE a_new (x, y);
-      INSERT INTO a_new (x) SELECT x FROM a;
-      DROP TABLE a;
-      ALTER TABLE a_new RENAME TO a;
-    `);
-
-    // SQLite rewrites the stored name on rename, quoted: CREATE TABLE "a" (x, y)
-    expect(tableStatements(db)).toEqual(["CREATE TABLE a (x, y)"]);
-  });
 });

@@ -1,6 +1,4 @@
 import { OpenAPIHono } from "@hono/zod-openapi";
-import { bodyLimit } from "hono/body-limit";
-import { createMiddleware } from "hono/factory";
 import { endTime, startTime, timing } from "hono/timing";
 import { z } from "zod";
 import { createAuthenticatedRoute } from "../../middleware/requireAuth.ts";
@@ -24,11 +22,6 @@ export function databaseTag(tables: string[]) {
       `\`\`\`sql\n${tables.map((sql) => `${sql};`).join("\n\n")}\n\`\`\``,
   };
 }
-
-/** bodyLimit at the configured maximum, which only the request's env has. */
-const databaseBodyLimit = createMiddleware<{ Bindings: Env }>((c, next) =>
-  bodyLimit({ maxSize: c.env.MAX_DATABASE_UPLOAD_BYTES })(c, next),
-);
 
 const databasePutHeadersSchema = z
   .object({
@@ -61,22 +54,28 @@ const uploadDatabase = createAuthenticatedRoute({
   summary: "Upload the database",
   description:
     "Upload a new version of the database.",
-  middleware: [timing(), databaseBodyLimit],
+  middleware: [timing()],
   request: {
     headers: databasePutHeadersSchema,
     body: { required: true, content: { "application/octet-stream": { schema: databaseBlobBody } } },
   },
-  errors: ["MISSING_SPENDY_MAGIC", "INVALID_VERSION_BYTE", "PRECONDITION_FAILED"],
+  errors: [
+    "MISSING_SPENDY_MAGIC",
+    "INVALID_VERSION_BYTE",
+    "PRECONDITION_FAILED",
+    "DATABASE_TOO_LARGE",
+  ],
   responses: {
     204: { description: "The upload is now the stored database", headers: etagHeaders },
-    413: {
-      description: "The upload is larger than the maximum allowed.",
-      content: { "text/plain": { schema: z.literal("Payload Too Large") } },
-    },
   },
 });
 
 database.openapi(uploadDatabase, async (c) => {
+  const headers = c.req.valid("header");
+  // checked before reading the body, which can't be longer than its Content-Length
+  if (Number(headers["content-length"]) > c.env.MAX_DATABASE_UPLOAD_BYTES)
+    return fixedResponse(c, "DATABASE_TOO_LARGE");
+
   const body = c.req.raw.body;
   if (body === null) return fixedResponse(c, "MISSING_SPENDY_MAGIC");
 
@@ -84,11 +83,7 @@ database.openapi(uploadDatabase, async (c) => {
 
   // the body is streamed to the user store as it arrives
   startTime(c, "store", "Receiving and storing it");
-  const result = await userStore.uploadDatabase(
-    c.var.sessionId,
-    body,
-    c.req.valid("header")["if-match"] ?? null,
-  );
+  const result = await userStore.uploadDatabase(c.var.sessionId, body, headers["if-match"] ?? null);
   endTime(c, "store");
 
   if (!result.success) return fixedResponse(c, result.code);

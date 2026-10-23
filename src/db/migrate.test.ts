@@ -18,6 +18,17 @@ afterEach(() => db.close());
 const userVersion = () => db.selectValue("PRAGMA user_version");
 const tables = () =>
   db.selectValues("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name");
+/**
+ * A comment, a string or a double-quoted name. Matched from the left, so a
+ * quote inside one of them doesn't start another.
+ */
+const SQL_TOKEN = /--.*|\/\*[\s\S]*?\*\/|'(?:[^']|'')*'|"(?:[^"]|"")*"/g;
+/** The double-quoted names in the stored statements. */
+const quotedNames = () =>
+  db
+    .selectValues("SELECT sql FROM sqlite_schema WHERE sql IS NOT NULL")
+    .flatMap((sql) => [...String(sql).matchAll(SQL_TOKEN)].map(([token]) => token))
+    .filter((token) => token.startsWith('"'));
 
 describe("migrationsFromFiles", () => {
   it("sorts by the number in the file name, not as text", () => {
@@ -101,16 +112,23 @@ describe("migrate", () => {
       sql: `
         CREATE TABLE parent (id INTEGER PRIMARY KEY);
         CREATE TABLE child (parent_id INTEGER NOT NULL REFERENCES parent(id) ON DELETE CASCADE);
+        CREATE VIEW parent_ids AS SELECT id FROM parent;
+        CREATE TRIGGER delete_parent_with_child AFTER DELETE ON child
+        BEGIN
+          DELETE FROM parent WHERE id = OLD.parent_id;
+        END;
       `,
     };
-    /** SQLite's documented way to change a table: create, copy, drop, rename. */
+    /** Changes a table the way migrate() describes, without renaming it. */
     const rebuildParent: Migration = {
       version: 2,
       sql: `
-        CREATE TABLE new_parent (id INTEGER PRIMARY KEY, name TEXT);
-        INSERT INTO new_parent (id) SELECT id FROM parent;
+        CREATE TABLE parent_copy (id INTEGER PRIMARY KEY, name TEXT);
+        INSERT INTO parent_copy (id) SELECT id FROM parent;
         DROP TABLE parent;
-        ALTER TABLE new_parent RENAME TO parent;
+        CREATE TABLE parent (id INTEGER PRIMARY KEY, name TEXT);
+        INSERT INTO parent SELECT * FROM parent_copy;
+        DROP TABLE parent_copy;
       `,
     };
 
@@ -123,6 +141,22 @@ describe("migrate", () => {
       migrate(db, [parentAndChild, rebuildParent]);
 
       expect(db.selectValue("SELECT count(*) FROM child")).toBe(1);
+    });
+
+    it("keeps the views and triggers that refer to a rebuilt table working", () => {
+      migrate(db, [parentAndChild, rebuildParent]);
+
+      expect(db.selectValues("SELECT id FROM parent_ids")).toEqual([1]);
+      db.exec("DELETE FROM child");
+      expect(db.selectValue("SELECT count(*) FROM parent")).toBe(0);
+    });
+
+    it("stores a rebuilt table's statement as written", () => {
+      migrate(db, [parentAndChild, rebuildParent]);
+
+      expect(db.selectValue("SELECT sql FROM sqlite_schema WHERE name = 'parent'")).toBe(
+        "CREATE TABLE parent (id INTEGER PRIMARY KEY, name TEXT)",
+      );
     });
 
     it("leaves foreign keys on afterwards", () => {
@@ -179,6 +213,24 @@ describe("schema", () => {
       "sources",
       "transactions",
     ]);
+  });
+
+  // renaming a table quotes its name everywhere; migrate() describes a rebuild without one
+  it("quotes no names, so no migration renamed a table", () => {
+    expect(quotedNames()).toEqual([]);
+  });
+
+  it("would see a renamed table's name, but not quotes in comments or strings", () => {
+    db.exec(`
+      CREATE TABLE renamed (
+        -- the "x" column, it's checked
+        x TEXT CHECK (x <> '"')
+      );
+      CREATE INDEX renamed_x ON renamed(x);
+      ALTER TABLE renamed RENAME TO later;
+    `);
+
+    expect(quotedNames()).toEqual(['"later"', '"later"']);
   });
 
   it("accepts a valid transaction", () => {
