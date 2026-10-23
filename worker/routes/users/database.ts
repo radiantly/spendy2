@@ -12,12 +12,18 @@ import { fixedResponse } from "../../openapi.ts";
 
 const database = new OpenAPIHono<{ Bindings: Env }>();
 
-// TODO: grab the sqlite table schema and put it in here during build time
-export const databaseTag = {
-  name: "Database",
-  description:
-    "All of the user data is stored in a single encrypted, compressed SQLite database.", // with the following table schema:
-};
+export const DATABASE_TAG = "Database";
+
+/** The Database tag, which shows the database's tables by their CREATE TABLE statements. */
+export function databaseTag(tables: string[]) {
+  return {
+    name: DATABASE_TAG,
+    description:
+      "All of the user data is stored in a single encrypted, compressed SQLite database " +
+      "with the following table schema:\n\n" +
+      `\`\`\`sql\n${tables.map((sql) => `${sql};`).join("\n\n")}\n\`\`\``,
+  };
+}
 
 /** bodyLimit at the configured maximum, which only the request's env has. */
 const databaseBodyLimit = createMiddleware<{ Bindings: Env }>((c, next) =>
@@ -51,7 +57,7 @@ const etagHeaders = z.object({
 const uploadDatabase = createAuthenticatedRoute({
   method: "put",
   path: "/",
-  tags: [databaseTag.name],
+  tags: [DATABASE_TAG],
   summary: "Upload the database",
   description:
     "Upload a new version of the database.",
@@ -98,7 +104,7 @@ export const databaseGetPreconditionSchema = z.object({
 const downloadDatabase = createAuthenticatedRoute({
   method: "get",
   path: "/",
-  tags: [databaseTag.name],
+  tags: [DATABASE_TAG],
   summary: "Download the database",
   description:
     "Downloads the stored database. With `If-None-Match` set to its ETag, responds 304 " +

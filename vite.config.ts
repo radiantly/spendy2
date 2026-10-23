@@ -11,7 +11,7 @@ export default defineConfig({
     react(),
     tailwindcss(),
     babel({ presets: [reactCompilerPreset()] }),
-    openapi({ app: "./worker/app.ts", fileName: "openapi.json" }),
+    openapi({ app: "./worker/document.ts", fileName: "openapi.json" }),
     cloudflare(),
   ],
   worker: { format: "es" },

@@ -1,9 +1,15 @@
--- Amounts are stored as integers in their currency's stored_decimals: 1234 is
--- 12.34 in a currency stored with 2. That can be finer than the currency is
--- usually shown with (4 for hundredths of a cent). Changing it doesn't
--- rescale the amounts already stored.
 CREATE TABLE currencies (
+  -- This table stores the currencies used in the database, along with how many decimals each
+  -- currency is to store. Common currencies are already added to this table (think USD, EUR, etc).
+  -- Exotic currencies will need to be added (think BTC).
+
+  -- Currency code. Example: USD, EUR, BTC, etc.
   code              TEXT NOT NULL PRIMARY KEY CHECK (code <> ''),
+
+  -- Number of stored decimals. Any amount that uses this currency will be multiplied by these many
+  -- decimal places. For example, this value is 2 for USD (two decimal places). The amount $16.79
+  -- will be stored as 1679.
+  -- Note that if this value is updated, all existing amounts must also be updated.
   stored_decimals   INTEGER NOT NULL CHECK (stored_decimals >= 0)
 ) STRICT;
 
@@ -28,57 +34,86 @@ INSERT INTO currencies VALUES
   ('XAF', 0), ('XCD', 2), ('XCG', 2), ('XDR', 2), ('XOF', 0), ('XPF', 0), ('XSU', 2), ('YER', 2), ('ZAR', 2), ('ZMW', 2),
   ('ZWG', 2), ('ZWL', 2);
 
--- Account and category names ignore case: "Groceries" and "groceries" are the
--- same name. Columns referring to them do too, so comparisons agree.
 CREATE TABLE accounts (
+  -- Account details. All transactions must be linked to an account in this table.
+
+  -- Account name.
   name              TEXT NOT NULL COLLATE NOCASE PRIMARY KEY CHECK (name <> ''),
-  -- The currency the account's amounts are shown in: a transaction in another
-  -- currency counts through its conversion to it, and one without a conversion
-  -- is left out (and flagged). NULL: each transaction in its own currency.
+
+  -- The currency that this account's amounts are shown in. If a transaction linked to this account
+  -- is made in a different currency, it will not be taken into account if it is not converted into
+  -- this currency. If this value is NULL, conversions are not required and the UI will show a
+  -- dropdown to see spends in all currencies that transactions are made in.
   display_currency  TEXT REFERENCES currencies(code),
-  type              TEXT NOT NULL CHECK (type <> ''), -- e.g. "Bank" or "Card"
-  identifier        TEXT CHECK (identifier <> '') -- e.g. a masked account or card number, like ••4821
+
+  -- Account type. Example: "Bank" or "Card"
+  type              TEXT NOT NULL CHECK (type <> ''),
+
+  -- Account identifier. Usually masked. Example: "••4821"
+  identifier        TEXT CHECK (identifier <> '')
 ) STRICT;
 
 CREATE TABLE sources (
-  -- SHA-256
+  -- Every transaction is required to be linked to a "source"
+  -- In the case of file imports, hash can store the file hash, while remarks can store the file
+  -- name or description.
+  -- In other cases, it is up to the importer to fill the various details. The sources table exists
+  -- to easily remove bulk transactions that may be incorrectly imported. A popular option is to
+  -- set hash to sha256(date) - assuming that no better alternative exists.
   hash              BLOB NOT NULL PRIMARY KEY CHECK (length(hash) = 32),
   remarks           TEXT NOT NULL CHECK (remarks <> ''),
   import_timestamp  INTEGER NOT NULL DEFAULT (unixepoch())
 ) STRICT;
 
 CREATE TABLE categories (
+  -- Stores the various categories that transactions can be categorized under.
+
+  -- Category name.
   name              TEXT NOT NULL COLLATE NOCASE PRIMARY KEY CHECK (name <> ''),
+
+  -- A category can be listed under an existing category.
   parent            TEXT COLLATE NOCASE REFERENCES categories(name) ON UPDATE CASCADE ON DELETE SET NULL,
   CONSTRAINT no_self_parent CHECK (name <> parent)
 ) STRICT;
 
--- if timestamp is NULL, transactions will be ordered by (naive_date, seq).
 CREATE TABLE transactions (
-  seq               INTEGER NOT NULL UNIQUE,
-  -- a lowercase UUIDv4
+  -- Store all transactions made.
+
+  -- A transaction id. Lowercase uuid4. Importers can generate this per transaction.
   id                TEXT NOT NULL PRIMARY KEY CHECK (id GLOB '[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-4[0-9a-f][0-9a-f][0-9a-f]-[89ab][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]'),
+
   source            BLOB NOT NULL REFERENCES sources(hash) ON UPDATE CASCADE ON DELETE CASCADE,
   account_name      TEXT NOT NULL COLLATE NOCASE REFERENCES accounts(name) ON UPDATE CASCADE ON DELETE CASCADE,
 
-  -- if the counterparty is an existing account
+  -- Indicates if the transaction is made from/to an existing account
   transfer_account  TEXT COLLATE NOCASE REFERENCES accounts(name) ON UPDATE CASCADE ON DELETE SET NULL,
 
-  amount            INTEGER NOT NULL, -- in the currency's stored_decimals
   currency          TEXT NOT NULL REFERENCES currencies(code),
+
+  -- Amount. This is the actual amount multiplied the pow(10, currency's stored decimal places).
+  amount            INTEGER NOT NULL,
+
   counterparty      TEXT NOT NULL CHECK (counterparty <> ''),
   category          TEXT COLLATE NOCASE REFERENCES categories(name) ON UPDATE CASCADE ON DELETE SET NULL,
+
+  -- It is quite possible that two sources list the same transaction. In that case, set one of the
+  -- transactions as duplicate of the other.
   duplicate_of      TEXT REFERENCES transactions(id) ON UPDATE CASCADE ON DELETE SET NULL,
-  -- local date, not utc, not timezone aware
+
+  -- Local date, not utc, not timezone aware.
   naive_date        TEXT NOT NULL CHECK (naive_date IS date(naive_date)),
+
+  -- if timestamp is NULL, transactions will be ordered by (naive_date, seq).
+  seq               INTEGER NOT NULL UNIQUE,
+  
   timestamp         INTEGER,
   remarks           TEXT CHECK (remarks <> ''),
   CONSTRAINT no_self_duplicate CHECK (id <> duplicate_of),
   CONSTRAINT no_self_transfer CHECK (account_name <> transfer_account)
 ) STRICT;
 
--- A transaction's amount in other currencies, at most one per currency.
 CREATE TABLE conversions (
+  -- A transaction's amount in other currencies, at most one per currency.
   transaction_id    TEXT NOT NULL REFERENCES transactions(id) ON UPDATE CASCADE ON DELETE CASCADE,
   currency          TEXT NOT NULL REFERENCES currencies(code),
   amount            INTEGER NOT NULL, -- in the currency's stored_decimals

@@ -1,7 +1,8 @@
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { describe, expect, it } from "vitest";
-import app, { openAPIDocument } from "./app.ts";
+import app, { openAPIDocumentFor } from "./app.ts";
 import { createApiRoute, fixedResponse } from "./openapi.ts";
+import { DATABASE_TAG } from "./routes/users/database.ts";
 
 describe("createApiRoute", () => {
   it("documents a response per status, naming the codes sent with it", () => {
@@ -73,7 +74,8 @@ describe("fixedResponse", () => {
 });
 
 describe("the OpenAPI document", () => {
-  const document = app.getOpenAPI31Document({ ...openAPIDocument, openapi: "3.1.0" });
+  const tables = ["CREATE TABLE a (x)", "CREATE TABLE b (y)"];
+  const document = app.getOpenAPI31Document({ ...openAPIDocumentFor(tables), openapi: "3.1.0" });
 
   it("documents every route", () => {
     const documented = Object.entries(document.paths ?? {}).flatMap(([path, operations]) =>
@@ -95,5 +97,11 @@ describe("the OpenAPI document", () => {
 
     expect(document.tags?.map(({ name }) => name).toSorted()).toEqual([...used].toSorted());
     for (const tag of document.tags ?? []) expect(tag.description).toBeTruthy();
+  });
+
+  it("shows the database's tables in the Database tag", () => {
+    const tag = document.tags?.find(({ name }) => name === DATABASE_TAG);
+
+    expect(tag?.description).toContain("```sql\nCREATE TABLE a (x);\n\nCREATE TABLE b (y);\n```");
   });
 });
