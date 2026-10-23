@@ -5,6 +5,7 @@ import {
   useState,
   type ComponentProps,
   type CSSProperties,
+  type FocusEvent,
   type KeyboardEvent,
   type MouseEvent,
   type RefObject,
@@ -15,6 +16,7 @@ import { mapOffset, textOffsetAtPoint } from "./caret.ts";
 import type { Edges } from "./grid.ts";
 import { historyKey, type HistoryDirection } from "../../lib/historyKey.ts";
 import { defaultHighlight, menuItems, type MenuConfig, type MenuItem } from "./menu.ts";
+import { splitChange, type Part } from "./prefix.ts";
 
 /** The outcome of submitting an edit: accepted, or why not. */
 export type SubmitResult = { ok: true } | { ok: false; error: string };
@@ -26,12 +28,22 @@ export type SubmitResult = { ok: true } | { ok: false; error: string };
  */
 export type FinishHow = "stay" | "down" | "up" | "next" | "previous" | "away";
 
+/** Where an edit starts: in which part's input, with what selected there (a caret where both ends are the same). */
+export type EditStart = { part: Part; selection: readonly [number, number] };
+
 export type CellEditing = {
   /** The text the input starts with. */
   text: string;
-  /** Where the caret starts. */
-  caret: number;
-  /** Whether the text was typed, rather than the cell's own: the menu lists only matches. */
+  /** The input's label: its column's name. */
+  label: string;
+  /**
+   * For a cell with an editable prefix, like the currency in `USD 10.00`:
+   * the prefix its own input starts with, and that input's label (see
+   * prefix.ts).
+   */
+  prefix?: { text: string; label: string };
+  start: EditStart;
+  /** Whether the edit was started by typing, rather than with the cell's own: the menu lists only matches. */
   typed: boolean;
   /** Makes the input a combobox with this menu of options. */
   menu?: MenuConfig;
@@ -41,8 +53,11 @@ export type CellEditing = {
    */
   paused: boolean;
   inputRef: RefObject<HTMLInputElement | null>;
-  /** `create` is set when the user picked the menu's create item. */
-  submit: (text: string, create: boolean) => SubmitResult;
+  /**
+   * `create` is set when the user picked the menu's create item. `prefix`
+   * is the prefix as edited, for a cell with one.
+   */
+  submit: (text: string, create: boolean, prefix?: string) => SubmitResult;
   finish: (how: FinishHow) => void;
   /** Undoes or redoes the table's last change, once the edit has finished. */
   history: (direction: HistoryDirection) => void;
@@ -55,6 +70,8 @@ type EditableCellProps = {
   mono?: boolean;
   /** The text an edit starts with. Absent for read-only cells. */
   editText?: string;
+  /** The prefix an edit starts with, for a cell whose prefix is edited too. */
+  editPrefix?: string;
   active: boolean;
   selected: boolean;
   /** For a cell in a range of several: which of its sides are on the range's outline. */
@@ -62,10 +79,11 @@ type EditableCellProps = {
   /** Set while the cell is being edited. */
   editing?: CellEditing;
   /**
-   * The mouse went down on the cell. `offset` is where in the edit text it
-   * was pressed, for an editable cell that isn't being edited yet.
+   * The mouse went down on the cell. `at` is where in the edit text (or
+   * the prefix) it was pressed, for an editable cell that isn't being
+   * edited yet.
    */
-  onPress: (event: MouseEvent, offset: number | null) => void;
+  onPress: (event: MouseEvent, at: { part: Part; offset: number } | null) => void;
 };
 
 /** The outline of a range, drawn inside its outer cells. */
@@ -91,28 +109,39 @@ function EditableCell({
   align,
   mono,
   editText,
+  editPrefix,
   active,
   selected,
   rangeEdges,
   editing,
   onPress,
 }: EditableCellProps) {
+  const prefixRef = useRef<HTMLSpanElement>(null);
   const valueRef = useRef<HTMLSpanElement>(null);
+
+  /** Where in `edited` the press was, by where it was in `element`'s `displayed` text. */
+  const offsetIn = (element: HTMLElement, displayed: string, edited: string, event: MouseEvent) =>
+    mapOffset(displayed, textOffsetAtPoint(element, event.clientX, event.clientY), edited);
 
   function handleMouseDown(event: MouseEvent) {
     if (event.button !== 0) return;
     // The grid places the caret and selects text itself, so it can carry
     // on doing so when a drag leaves the cell and comes back.
     event.preventDefault();
-    const offset =
+    const prefix = prefixRef.current;
+    const at =
       editText === undefined || editing
         ? null
-        : mapOffset(
-            display.text,
-            textOffsetAtPoint(valueRef.current!, event.clientX, event.clientY),
-            editText,
-          );
-    onPress(event, offset);
+        : editPrefix !== undefined && prefix?.contains(event.target as Node)
+          ? {
+              part: "prefix" as const,
+              offset: offsetIn(prefix, display.prefix!, editPrefix, event),
+            }
+          : {
+              part: "text" as const,
+              offset: offsetIn(valueRef.current!, display.text, editText, event),
+            };
+    onPress(event, at);
   }
 
   return (
@@ -131,7 +160,11 @@ function EditableCell({
         <CellInput {...editing} align={align} />
       ) : (
         <div className="truncate">
-          {display.prefix && <span className="text-ink-muted">{display.prefix}</span>}
+          {display.prefix && (
+            <span ref={prefixRef} className="text-ink-muted">
+              {display.prefix}
+            </span>
+          )}
           <span ref={valueRef}>{display.text}</span>
         </div>
       )}
@@ -153,6 +186,17 @@ function stopPress(event: MouseEvent) {
 type CellInputProps = CellEditing & { align?: "end" };
 
 /**
+ * The width of an input of a cell with a prefix: only as wide as `value`,
+ * so the prefix and the text sit together, as the cell shows them. Those
+ * cells (amounts) are monospaced: a `ch` a character. And a pixel for the
+ * caret after the last one, without which WebKit scrolls the text to fit
+ * it; the inputs' margins take it back, so the text stays put.
+ */
+function fittedWidth(value: string) {
+  return `calc(${Math.max([...value].length, 1)}ch + 1px)`;
+}
+
+/**
  * The input a cell turns into. Enter submits and moves down (Shift+Enter, up);
  * Escape cancels,
  * keeping the cell active; Tab submits and moves on. Undo and redo (Ctrl+Z,
@@ -162,10 +206,19 @@ type CellInputProps = CellEditing & { align?: "end" };
  * submits too, but can't show an error there, so an invalid value is undone
  * instead. With a `menu`, it's a combobox: up and down move through the
  * options, and Enter, Tab or leaving picks the highlighted one.
+ *
+ * With a `prefix`, it has an input of its own before the text's: typing
+ * either's characters into the other switches to it, cleared, and both
+ * inputs edit the cell, with the same keys (see prefix.ts).
  */
 function CellInput({
   text: initialText,
-  caret,
+  label,
+  prefix: initialPrefix,
+  start: {
+    part: startPart,
+    selection: [selectionStart, selectionEnd],
+  },
   typed,
   menu,
   paused,
@@ -176,6 +229,9 @@ function CellInput({
   align,
 }: CellInputProps) {
   const [text, setText] = useState(initialText);
+  const hasPrefix = initialPrefix !== undefined;
+  const [prefix, setPrefix] = useState(initialPrefix?.text ?? "");
+  const prefixRef = useRef<HTMLInputElement>(null);
   const [error, setError] = useState<string | null>(null);
   // Until the user types, the menu lists every option.
   const [filtering, setFiltering] = useState(typed);
@@ -195,10 +251,47 @@ function CellInput({
   const errorId = useId();
 
   useLayoutEffect(() => {
-    const input = inputRef.current!;
+    const input = (startPart === "prefix" ? prefixRef : inputRef).current!;
     input.focus();
-    input.setSelectionRange(caret, caret);
-  }, [inputRef, caret]);
+    input.setSelectionRange(selectionStart, selectionEnd);
+  }, [inputRef, startPart, selectionStart, selectionEnd]);
+
+  const inputOf = (part: Part) => (part === "prefix" ? prefixRef : inputRef).current!;
+
+  function setPart(part: Part, value: string) {
+    if (part === "text") handleChange(value);
+    else {
+      setPrefix(value);
+      setError(null);
+    }
+  }
+
+  /**
+   * A change to `part`'s input, of a cell with a prefix: what's put in for
+   * the other part replaces its value, and if it came last, typing carries
+   * on there (see prefix.ts). Every way of changing them (typing, pasting,
+   * an input method) ends up here.
+   *
+   * The inputs are given their values straight away: React only sets an
+   * input's value when its state changes, so where it stays the same, it
+   * would put back the one from before the change itself, losing the
+   * selection.
+   */
+  function handlePartChange(part: Part, input: HTMLInputElement) {
+    const before = part === "prefix" ? prefix : text;
+    const change = splitChange(part, before, input.value, input.selectionStart!);
+    if (input.value !== change.value) input.value = change.value;
+    input.setSelectionRange(...change.selection);
+    setPart(part, change.value);
+    if (change.other === "") return;
+    const other: Part = part === "prefix" ? "text" : "prefix";
+    setPart(other, change.other);
+    if (!change.switches) return;
+    const otherInput = inputOf(other);
+    otherInput.focus();
+    otherInput.value = change.other;
+    otherInput.setSelectionRange(change.other.length, change.other.length);
+  }
 
   function done(how: FinishHow) {
     finishedRef.current = true;
@@ -206,7 +299,7 @@ function CellInput({
   }
 
   function trySubmit(value: string, create: boolean, how: FinishHow) {
-    const result = submit(value, create);
+    const result = submit(value, create, hasPrefix ? prefix : undefined);
     if (result.ok) done(how);
     else setError(result.error);
   }
@@ -233,7 +326,7 @@ function CellInput({
 
   function handleKeyDown(event: KeyboardEvent<HTMLInputElement>) {
     const direction = historyKey(event);
-    if (direction && !typed && text === initialText) {
+    if (direction && !typed && text === initialText && prefix === (initialPrefix?.text ?? "")) {
       event.preventDefault();
       done("stay");
       history(direction);
@@ -253,12 +346,18 @@ function CellInput({
     }
   }
 
-  function handleBlur() {
-    if (finishedRef.current) return;
+  function handleBlur(event: FocusEvent<HTMLInputElement>) {
+    // Moving to the cell's other input, in the same frame, doesn't leave it.
+    const frame = event.currentTarget.parentElement!;
+    if (finishedRef.current || frame.contains(event.relatedTarget as Node | null)) return;
     // Leaving picks a highlighted option, but never creates one: that takes
     // Enter or a click on the create item.
     const item = items[highlight];
-    const result = submit(item?.kind === "option" ? item.value : text, false);
+    const result = submit(
+      item?.kind === "option" ? item.value : text,
+      false,
+      hasPrefix ? prefix : undefined,
+    );
     // There's no cell left to show the error on, so say why it was undone.
     if (!result.ok) toast.error(`${result.error}. The change was undone.`);
     done("away");
@@ -269,28 +368,61 @@ function CellInput({
     menu !== undefined && !paused && error === null && (items.length > 0 || text.trim() !== "");
   const showError = error !== null && !paused;
 
+  const invalid = {
+    "aria-invalid": error !== null || undefined,
+    "aria-errormessage": showError ? errorId : undefined,
+  };
+  const inputClass = `min-w-0 cursor-text bg-transparent outline-none ${
+    paused ? "caret-transparent selection:bg-transparent" : ""
+  }`;
+
   return (
     <>
-      <input
-        ref={inputRef}
-        value={text}
-        onChange={(event) => handleChange(event.target.value)}
-        onKeyDown={handleKeyDown}
-        onBlur={handleBlur}
-        role={menu ? "combobox" : undefined}
-        aria-autocomplete={menu ? "list" : undefined}
-        aria-expanded={menu ? showMenu && items.length > 0 : undefined}
-        aria-controls={menu ? menuId : undefined}
-        aria-activedescendant={showMenu && highlight >= 0 ? `${menuId}-${highlight}` : undefined}
-        aria-invalid={error !== null || undefined}
-        aria-errormessage={showError ? errorId : undefined}
+      <div
         style={{ anchorName: EDITED_CELL }}
-        className={`absolute inset-0 w-full cursor-text bg-surface px-2 outline-2 -outline-offset-2 ${
+        className={`absolute inset-0 flex cursor-text bg-surface px-2 outline-2 -outline-offset-2 ${
           error !== null ? "outline-danger" : "outline-focus"
-        } ${paused ? "caret-transparent selection:bg-transparent" : ""} ${
-          align === "end" ? "text-right" : ""
-        }`}
-      />
+        } ${align === "end" ? "justify-end" : ""}`}
+      >
+        {initialPrefix && (
+          <input
+            ref={prefixRef}
+            value={prefix}
+            aria-label={initialPrefix.label}
+            onChange={(event) => handlePartChange("prefix", event.target)}
+            onKeyDown={handleKeyDown}
+            onBlur={handleBlur}
+            // Its caret and selection are the browser's, not placed by the grid.
+            onMouseDown={(event) => event.stopPropagation()}
+            {...invalid}
+            style={{ width: fittedWidth(prefix) }}
+            // A space before the text, less the caret's pixel.
+            className={`mr-[calc(1ch-1px)] text-ink-muted focus:text-ink ${inputClass}`}
+          />
+        )}
+        <input
+          ref={inputRef}
+          value={text}
+          aria-label={label}
+          onChange={(event) =>
+            hasPrefix ? handlePartChange("text", event.target) : handleChange(event.target.value)
+          }
+          onKeyDown={handleKeyDown}
+          onBlur={handleBlur}
+          role={menu ? "combobox" : undefined}
+          aria-autocomplete={menu ? "list" : undefined}
+          aria-expanded={menu ? showMenu && items.length > 0 : undefined}
+          aria-controls={menu ? menuId : undefined}
+          aria-activedescendant={showMenu && highlight >= 0 ? `${menuId}-${highlight}` : undefined}
+          {...invalid}
+          style={hasPrefix ? { width: fittedWidth(text) } : undefined}
+          // With a prefix, the input fits its text, and its caret's pixel
+          // goes into the cell's padding.
+          className={`${inputClass} ${hasPrefix ? "-mr-px" : "flex-1"} ${
+            align === "end" && !hasPrefix ? "text-right" : ""
+          }`}
+        />
+      </div>
       {showMenu && (
         <Menu
           id={menuId}

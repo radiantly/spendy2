@@ -14,13 +14,18 @@ import type { Moved } from "../../db/editHistory.ts";
 import type { Edit } from "../../db/databaseContext.ts";
 import {
   hasPatch,
+  type Currency,
   type TransactionPatch,
   type TransactionRow,
 } from "../../db/queries/transactions.ts";
 import type { HistoryDirection } from "../../lib/historyKey.ts";
 import { columns, features, type CellEditor } from "./columns.ts";
 import { selectBetween, selectionAnchor, textOffsetAtPoint, wordAt } from "./caret.ts";
-import EditableCell, { type FinishHow, type SubmitResult } from "./EditableCell.tsx";
+import EditableCell, {
+  type EditStart,
+  type FinishHow,
+  type SubmitResult,
+} from "./EditableCell.tsx";
 import {
   bounds,
   cellAtPoint,
@@ -41,6 +46,7 @@ import {
   type Motion,
 } from "./grid.ts";
 import type { HeaderMenuHandle, HeaderProps } from "./HeaderMenu.tsx";
+import { partFor } from "./prefix.ts";
 import { useMouseDrag, type Point } from "./useMouseDrag.ts";
 import type { MenuColumn, Sort } from "./view.ts";
 
@@ -78,8 +84,16 @@ type Editing = {
   cell: CellPosition;
   /** Replaces the cell's text, when the edit was started by typing it. */
   text?: string;
-  caret: number;
+  /** Replaces the cell's editable prefix, when the edit was started by typing it. */
+  prefix?: string;
+  start: EditStart;
 };
+
+/** An edit starting with the caret at `offset` in `part`. */
+const caretIn = (part: EditStart["part"], offset: number): EditStart => ({
+  part,
+  selection: [offset, offset],
+});
 
 /** A press on a cell, followed until the mouse button is released. */
 type Drag = {
@@ -114,6 +128,7 @@ type TransactionsTableProps = {
   rows: TransactionRow[];
   categories: readonly string[];
   accounts: readonly string[];
+  currencies: readonly Currency[];
   /** Changes to store; several at once when a range is cleared. */
   onCommit: (changes: TransactionChange[]) => void;
   /** Called when a cell starts being edited, and when it stops. */
@@ -146,6 +161,7 @@ function TransactionsTable({
   rows,
   categories,
   accounts,
+  currencies,
   onCommit,
   onEditingChange,
   lastUndoOrRedo,
@@ -157,6 +173,8 @@ function TransactionsTable({
   // them and render stale rows. They are only read here, so opting this
   // component out keeps the rest of the app compiled.
   "use no memo";
+
+  const context = { categories, accounts, currencies };
 
   // Only its columns and headers are read: the rows are drawn straight from
   // `rows`, as building its row model for every transaction took about as
@@ -277,10 +295,10 @@ function TransactionsTable({
     reveal(show, scrollRows);
   }
 
-  /** Starts editing `cell`, with the caret at `caret`; with `text`, replacing what's there. */
-  function startEditing(cell: CellPosition, caret: number, text?: string) {
+  /** Starts editing `cell` as `start` says (see Editing). */
+  function startEditing(cell: CellPosition, start: Omit<Editing, "cell">) {
     setSelection(collapsed(cell));
-    setEditing({ cell, caret, text });
+    setEditing({ cell, ...start });
   }
 
   /** Whether `cell` can be edited and has nothing in it. */
@@ -296,7 +314,8 @@ function TransactionsTable({
   function enter(cell: CellPosition, up: boolean) {
     const next = move(collapsed(cell), { kind: "step", direction: up ? "up" : "down" }, size);
     reveal(next.active);
-    if (!samePosition(next.active, cell) && isEmpty(next.active)) startEditing(next.active, 0);
+    if (!samePosition(next.active, cell) && isEmpty(next.active))
+      startEditing(next.active, { start: caretIn("text", 0) });
     else setSelection(next);
   }
 
@@ -320,11 +339,16 @@ function TransactionsTable({
     editor: CellEditor,
     text: string,
     create: boolean,
+    prefix: string | undefined,
   ): SubmitResult {
     // Unchanged text is never parsed, so a stored value the parser wouldn't
     // accept can still be left as it is.
-    if (text === editor.editText(row)) return { ok: true };
-    const result = editor.parse(text, row, { categories, accounts, create });
+    if (
+      text === editor.editText(row) &&
+      (prefix === undefined || prefix === editor.prefix?.editText(row))
+    )
+      return { ok: true };
+    const result = editor.parse(text, row, { ...context, create, prefix });
     if (!result.ok) return result;
     // Typed differently but the same value, like `1234.5` for `1234.50`.
     if (hasPatch(row, result.value)) return { ok: true };
@@ -334,7 +358,7 @@ function TransactionsTable({
 
   /** What `row`'s emptied cell stores, or why it can't be empty. */
   function clearedValue(editor: CellEditor, row: TransactionRow) {
-    return editor.parse("", row, { categories, accounts, create: false });
+    return editor.parse("", row, { ...context, create: false });
   }
 
   /** Empties the cells in `area` that can be empty, leaving the rest. */
@@ -453,7 +477,7 @@ function TransactionsTable({
         clearCells(bounds(selection));
       else {
         reveal(active);
-        startEditing(active, 0, "");
+        startEditing(active, { text: "", start: caretIn("text", 0) });
       }
     } else if (event.key === "Enter") {
       event.preventDefault();
@@ -461,11 +485,14 @@ function TransactionsTable({
     } else if (editor && event.key === "F2") {
       event.preventDefault();
       reveal(active);
-      startEditing(active, editor.editText(rows[active.row]!).length);
+      startEditing(active, { start: caretIn("text", editor.editText(rows[active.row]!).length) });
     } else if (editor && isTypedCharacter(event)) {
       event.preventDefault();
       reveal(active);
-      startEditing(active, event.key.length, event.key);
+      // What's typed replaces what's there: a letter, an editable prefix.
+      if (editor.prefix && partFor(event.key) === "prefix")
+        startEditing(active, { prefix: event.key, start: caretIn("prefix", event.key.length) });
+      else startEditing(active, { text: event.key, start: caretIn("text", event.key.length) });
     }
   }
 
@@ -517,7 +544,11 @@ function TransactionsTable({
     activateHeader(column);
   }
 
-  function handlePress(cell: CellPosition, event: MouseEvent, offset: number | null) {
+  function handlePress(
+    cell: CellPosition,
+    event: MouseEvent,
+    at: { part: EditStart["part"]; offset: number } | null,
+  ) {
     const point: Point = { x: event.clientX, y: event.clientY };
     const input = inputRef.current;
     const isEditing = editing !== null && samePosition(editing.cell, cell) && input !== null;
@@ -532,29 +563,31 @@ function TransactionsTable({
         ranging: !samePosition(cell, selection.active),
       };
     } else if (isEditing) {
-      // Pressing inside the input: place the caret or select text, like the
-      // browser would.
-      const at = textOffsetAtPoint(input, point.x, point.y);
+      // Pressing inside the text's input (a prefix's input takes its own
+      // presses): place the caret or select text, like the browser would.
+      input.focus();
+      const offset = textOffsetAtPoint(input, point.x, point.y);
       let textAnchor: number | null = null;
-      if (event.detail === 2) input.setSelectionRange(...wordAt(input.value, at));
+      if (event.detail === 2) input.setSelectionRange(...wordAt(input.value, offset));
       else if (event.detail >= 3) input.select();
       else {
-        textAnchor = event.shiftKey ? selectionAnchor(input) : at;
-        selectBetween(input, textAnchor, at);
+        textAnchor = event.shiftKey ? selectionAnchor(input) : offset;
+        selectBetween(input, textAnchor, offset);
       }
       dragRef.current = { origin: cell, textAnchor, ranging: false };
     } else {
       // An empty cell has nothing to select, so pressing it edits it. Others
       // are edited by pressing again once active (so a double-click edits).
       const edits =
-        offset !== null &&
+        at !== null &&
         (isEmpty(cell) ||
           (selection !== null && !isRange(selection) && samePosition(selection.active, cell)));
       // Moving focus here first ends any other edit, submitting it.
       focusGrid();
-      if (edits) startEditing(cell, offset);
+      if (edits) startEditing(cell, { start: caretIn(at.part, at.offset) });
       else setSelection(collapsed(cell));
-      dragRef.current = { origin: cell, textAnchor: edits ? offset : null, ranging: false };
+      const textAnchor = edits && at.part === "text" ? at.offset : null;
+      dragRef.current = { origin: cell, textAnchor, ranging: false };
     }
     drag(point);
   }
@@ -668,6 +701,7 @@ function TransactionsTable({
                 const selected = area !== null && contains(area, position);
                 const isEditing = isEditingRow && editing.cell.column === column;
                 const editText = editor?.editText(row);
+                const editPrefix = editor?.prefix?.editText(row);
                 return (
                   <EditableCell
                     key={leafColumn.id}
@@ -676,6 +710,7 @@ function TransactionsTable({
                     align={meta.align}
                     mono={meta.mono}
                     editText={editText}
+                    editPrefix={editPrefix}
                     active={selection !== null && samePosition(selection.active, position)}
                     selected={selected}
                     rangeEdges={ranged && selected ? edges(area!, position) : undefined}
@@ -683,12 +718,18 @@ function TransactionsTable({
                       isEditing && editor
                         ? {
                             text: editing.text ?? editText!,
-                            caret: editing.caret,
-                            typed: editing.text !== undefined,
-                            menu: editor.menu?.({ categories, accounts }),
+                            label: String(leafColumn.columnDef.header),
+                            prefix: editor.prefix && {
+                              text: editing.prefix ?? editPrefix!,
+                              label: editor.prefix.label,
+                            },
+                            start: editing.start,
+                            typed: editing.text !== undefined || editing.prefix !== undefined,
+                            menu: editor.menu?.(context),
                             paused: ranged,
                             inputRef,
-                            submit: (text, create) => submit(row, item.index, editor, text, create),
+                            submit: (text, create, prefix) =>
+                              submit(row, item.index, editor, text, create, prefix),
                             finish: (how) => finishEditing(position, how),
                             history: onUndoOrRedo,
                           }

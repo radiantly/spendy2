@@ -4,6 +4,7 @@
  * show on the cell.
  */
 
+import type { Currency } from "../../db/queries/transactions.ts";
 import { currencyDecimals, decimalString, formattable, type Amount } from "../../lib/money.ts";
 
 export type ParseResult<T> = { ok: true; value: T } | { ok: false; error: string };
@@ -31,12 +32,17 @@ export function formatAmount(amount: Amount, currency: string) {
 }
 
 /**
- * For editing: just the number, without the currency or grouping
- * (`1234.50`). Exactly as stored, even with more decimals than the currency
- * is usually shown with, so editing it doesn't round it.
+ * For editing: just the number, without the currency (`1,234.50`). Grouped
+ * as the cell shows it, so the number doesn't move when an edit starts;
+ * typing doesn't regroup it, and `parseAmount` ignores the commas. Exactly
+ * as stored, even with more decimals than the currency is usually shown
+ * with, so editing it doesn't round it.
  */
 export function amountEditText(amount: Amount) {
-  return decimalString(amount);
+  return new Intl.NumberFormat("en-US", {
+    minimumFractionDigits: amount.decimals,
+    maximumFractionDigits: amount.decimals,
+  }).format(decimalString(amount));
 }
 
 const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER);
@@ -44,9 +50,10 @@ const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER);
 /**
  * Parses `-1,234.5` into an amount stored with `decimals`: -123450 with 2.
  * More decimals than that are rounded, half away from zero, as the display
- * rounds.
+ * rounds. Empty is 0, so an amount can be cleared.
  */
 export function parseAmount(text: string, decimals: number): ParseResult<number> {
+  if (text.trim() === "") return ok(0);
   const match = /^([+-]?)(\d*)(?:\.(\d*))?$/.exec(text.replaceAll(",", "").trim());
   if (!match || (match[2] === "" && !match[3])) return fail("Enter a number, like -12.50");
 
@@ -127,6 +134,21 @@ export function parseCategory(
   const existing = findName(categories, value);
   if (existing !== undefined) return ok(existing);
   return create ? ok(value) : fail(`There's no category named “${value}”`);
+}
+
+/** Must be the code of one of `currencies`, ignoring case. */
+export function parseCurrency(
+  text: string,
+  currencies: readonly Currency[],
+): ParseResult<Currency> {
+  const value = text.trim();
+  if (value === "") return fail("Enter a currency, like USD");
+  const code = findName(
+    currencies.map(({ code }) => code),
+    value,
+  );
+  const currency = currencies.find((currency) => currency.code === code);
+  return currency !== undefined ? ok(currency) : fail(`There's no currency “${value}”`);
 }
 
 /** Must name one of `accounts`, ignoring case. */

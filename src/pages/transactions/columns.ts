@@ -1,5 +1,6 @@
 import { createColumnHelper, tableFeatures } from "@tanstack/react-table";
 import type {
+  Currency,
   EditableTransactionField,
   TransactionPatch,
   TransactionRow,
@@ -12,6 +13,7 @@ import {
   parseAmount,
   parseCategory,
   parseCounterparty,
+  parseCurrency,
   parseNaiveDate,
   parseRemarks,
   type ParseResult,
@@ -30,20 +32,55 @@ export type CellEditor = {
   /** The text the input starts with. */
   editText: (row: TransactionRow) => string;
   /**
+   * Makes the cell's prefix editable too, like the currency in `USD 10.00`,
+   * in an input of its own (see prefix.ts): the prefix an edit starts with,
+   * and the input's label.
+   */
+  prefix?: { editText: (row: TransactionRow) => string; label: string };
+  /**
    * The columns to store for the text typed into `row`'s cell, or why it
    * can't be. `create` is set when the user picked the menu's create item.
+   * `prefix` is the prefix as edited; without it, the cell's own is kept.
    */
   parse: (
     text: string,
     row: TransactionRow,
-    context: EditContext & { create: boolean },
+    context: EditContext & { create: boolean; prefix?: string },
   ) => ParseResult<TransactionPatch>;
   /** Makes the cell a combobox: an input with a menu of options. */
   menu?: (context: EditContext) => MenuConfig;
 };
 
 /** Data the editors need from outside the row. */
-export type EditContext = { categories: readonly string[]; accounts: readonly string[] };
+export type EditContext = {
+  categories: readonly string[];
+  accounts: readonly string[];
+  currencies: readonly Currency[];
+};
+
+/**
+ * `row`'s amount as typed, in the currency whose code is `code`, or the
+ * row's own if there's none (or it's empty). The row's own currency keeps
+ * the decimals its amount is stored with.
+ */
+function parseAmountIn(
+  text: string,
+  code: string | undefined,
+  row: TransactionRow,
+  currencies: readonly Currency[],
+): ParseResult<TransactionPatch> {
+  let currency: Currency = { code: row.currency, stored_decimals: row.decimals };
+  if (code !== undefined && code.trim() !== "") {
+    const parsed = parseCurrency(code, currencies);
+    if (!parsed.ok) return parsed;
+    if (parsed.value.code !== row.currency) currency = parsed.value;
+  }
+  return mapResult(parseAmount(text, currency.stored_decimals), (amount) => ({
+    currency: currency.code,
+    amount,
+    decimals: currency.stored_decimals,
+  }));
+}
 
 export type TransactionColumnMeta = {
   /** The column's CSS grid track. */
@@ -138,9 +175,10 @@ export const columns = helper.columns([
       }),
       editor: {
         field: "amount",
-        // Without the currency, so only the number is edited.
+        // The number; the currency is the prefix.
         editText: (row) => amountEditText(row),
-        parse: (text, row) => mapResult(parseAmount(text, row.decimals), (amount) => ({ amount })),
+        prefix: { editText: (row) => row.currency, label: "Currency" },
+        parse: (text, row, { currencies, prefix }) => parseAmountIn(text, prefix, row, currencies),
       },
     },
   }),

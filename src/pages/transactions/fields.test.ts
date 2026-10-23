@@ -8,6 +8,7 @@ import {
   parseAmount,
   parseCategory,
   parseCounterparty,
+  parseCurrency,
   parseNaiveDate,
   parseRemarks,
 } from "./fields.ts";
@@ -52,21 +53,25 @@ describe("formatAmount", () => {
 describe("amountEditText", () => {
   it.each([
     [a(1000, 2), "10.00"],
-    [a(-123_450, 2), "-1234.50"],
-    [a(1500, 0), "1500"],
+    [a(-123_450, 2), "-1,234.50"],
+    [a(1500, 0), "1,500"],
     [a(5, 2), "0.05"],
     [a(-5, 3), "-0.005"],
     [a(0, 2), "0.00"],
-  ])("edits %o as %s", (amount, expected) => {
+  ])("edits %o as %s, grouped as the cell shows it", (amount, expected) => {
     expect(amountEditText(amount)).toBe(expected);
   });
 
   it("keeps decimals the currency isn't usually shown with, so editing doesn't round them", () => {
-    expect(amountEditText(a(123_456, 4))).toBe("12.3456");
+    expect(amountEditText(a(123_456_789, 4))).toBe("12,345.6789");
+  });
+
+  it("keeps every digit of the largest amounts", () => {
+    expect(amountEditText(a(9_007_199_254_740_991, 2))).toBe("90,071,992,547,409.91");
   });
 
   it("round-trips through parseAmount", () => {
-    for (const amount of [0, 1, -1, 9_999, -987_654_321])
+    for (const amount of [0, 1, -1, 9_999, -987_654_321, 9_007_199_254_740_991])
       expect(parseAmount(amountEditText(a(amount, 2)), 2)).toEqual({ ok: true, value: amount });
   });
 });
@@ -105,7 +110,11 @@ describe("parseAmount", () => {
     expect(parseAmount("1.5", 4)).toEqual({ ok: true, value: 15_000 });
   });
 
-  it.each(["", "abc", "1.2.3", "--1", "1e3", ".", "USD 10", "1 000", "1/3"])(
+  it.each(["", "   "])("reads %j as 0", (text) => {
+    expect(parseAmount(text, 2)).toEqual({ ok: true, value: 0 });
+  });
+
+  it.each(["abc", "1.2.3", "--1", "1e3", ".", "-", ",", "USD 10", "1 000", "1/3"])(
     "rejects %j",
     (text) => {
       expect(parseAmount(text, 2).ok).toBe(false);
@@ -237,6 +246,32 @@ describe("parseCategory", () => {
     expect(parseCategory("GROCERIES", categories, true)).toEqual({
       ok: true,
       value: "Groceries",
+    });
+  });
+});
+
+describe("parseCurrency", () => {
+  const EUR = { code: "EUR", stored_decimals: 2 };
+  const CURRENCIES = [EUR, { code: "JPY", stored_decimals: 0 }];
+
+  it.each(["EUR", " eur ", "Eur"])(
+    "finds the currency %j is the code of, ignoring case",
+    (text) => {
+      expect(parseCurrency(text, CURRENCIES)).toEqual({ ok: true, value: EUR });
+    },
+  );
+
+  it("rejects a code that isn't a currency's", () => {
+    expect(parseCurrency("XYZ", CURRENCIES)).toEqual({
+      ok: false,
+      error: "There's no currency “XYZ”",
+    });
+  });
+
+  it("rejects an empty code", () => {
+    expect(parseCurrency("  ", CURRENCIES)).toEqual({
+      ok: false,
+      error: "Enter a currency, like USD",
     });
   });
 });

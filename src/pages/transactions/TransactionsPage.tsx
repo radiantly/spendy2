@@ -70,6 +70,7 @@ function TransactionsPage() {
   const accounts = loaded.accounts.map(({ name }) => name);
   const categories = loaded.categories.map(({ name }) => name);
   const names = { accounts, categories };
+  const { currencies } = loaded;
   // Edits keep the rows' positions: only reading them again makes new ones.
   const current =
     shown !== null && shown.view === view && shown.positions === loaded.positions ? shown : null;
@@ -87,7 +88,7 @@ function TransactionsPage() {
       patch,
     }));
     // Described as the rows are before it.
-    const description = describeEdit(changes, rows, categories);
+    const description = describeEdit(changes, rows, { ...names, currencies });
     commitTransactions(queryClient, database, history, updates, description).catch(
       (error: unknown) => {
         toast.error(
@@ -111,6 +112,7 @@ function TransactionsPage() {
           rows={rows}
           categories={categories}
           accounts={accounts}
+          currencies={currencies}
           onCommit={commit}
           onEditingChange={setEditing}
           lastUndoOrRedo={moved}

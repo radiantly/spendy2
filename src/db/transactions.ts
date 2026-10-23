@@ -7,17 +7,20 @@ import { queryOptions, type QueryClient } from "@tanstack/react-query";
 import type { Database } from "./database.ts";
 import type { DatabaseHistory, TransactionEdit } from "./databaseContext.ts";
 import {
+  DELETE_CONVERSION,
   GET_TRANSACTIONS,
   hasPatch,
   INSERT_CATEGORY,
   LIST_ACCOUNTS,
   LIST_CATEGORIES,
+  LIST_CURRENCIES,
   LIST_TRANSACTIONS,
   listedTransactions,
   patchFrom,
   UPDATE_TRANSACTION,
   updateBinds,
   type AccountCurrency,
+  type Currency,
   type EditableTransactionField,
   type ListedTransaction,
   type TransactionPatch,
@@ -33,6 +36,7 @@ export type Transactions = {
   /** With their parents, in the order the cell menus list them (see the queries). */
   categories: readonly CategoryParent[];
   accounts: readonly AccountCurrency[];
+  currencies: readonly Currency[];
 };
 
 /** A field of a transaction to set, as the columns it sets. */
@@ -53,18 +57,20 @@ export function transactionsQuery(database: Database) {
   return queryOptions({
     queryKey: [...databaseKey(database), "transactions"],
     queryFn: async (): Promise<Transactions> => {
-      const [transactions, categories, accounts] = await Promise.all([
+      const [transactions, categories, accounts, currencies] = await Promise.all([
         database.query(LIST_TRANSACTIONS),
         database.query(LIST_CATEGORIES),
         database.query(LIST_ACCOUNTS),
+        database.query(LIST_CURRENCIES),
       ]);
       const rows = listedTransactions(transactions);
       return {
         rows,
         positions: new Map(rows.map((row, position) => [row.id, position])),
         categories: categoriesOf(categories),
-        // The query's columns match the row type, and the schema guarantees their types.
+        // The queries' columns match the row types, and the schema guarantees their types.
         accounts: accounts as AccountCurrency[],
+        currencies: currencies as Currency[],
       };
     },
     meta: { updatedInPlace: true },
@@ -109,6 +115,24 @@ function replaced(current: Transactions, stored: readonly ListedTransaction[]): 
   return { ...current, rows };
 }
 
+/**
+ * What `patch` changes in `row`: its fields, and setting the currency also
+ * drops the conversion to it (see DELETE_CONVERSION).
+ */
+function changedBy(row: ListedTransaction, patch: TransactionPatch): Partial<ListedTransaction> {
+  if (!("currency" in patch)) return patch;
+  const conversions = Object.entries(row.conversions).filter(
+    ([currency]) => currency !== patch.currency,
+  );
+  return { ...patch, conversions: Object.fromEntries(conversions) };
+}
+
+/** `stored`'s values for what `patch` changes (see `changedBy`), to put them back. */
+function storedFor(stored: ListedTransaction, patch: TransactionPatch): Partial<ListedTransaction> {
+  const fields = patchFrom(stored, patch);
+  return "currency" in patch ? { ...fields, conversions: stored.conversions } : fields;
+}
+
 async function refreshCategories(queryClient: QueryClient, database: Database) {
   const categories = categoriesOf(await database.query(LIST_CATEGORIES));
   update(queryClient, database, (current) => ({ ...current, categories }));
@@ -124,6 +148,8 @@ async function refreshCategories(queryClient: QueryClient, database: Database) {
  * transaction: it may be new, or the schema may have just deleted it as
  * unused while the menus still offered it. Either way the menus can be
  * behind, so after any category change they're refreshed from the database.
+ * Setting a currency also deletes the transaction's conversion to it, if
+ * there is one, as a transaction can't be converted to its own currency.
  *
  * The database runs queries in the order they're sent, so a save started
  * after this includes the changes, and the read after a failure sees every
@@ -140,6 +166,7 @@ export async function commitTransactions(
     ...("category" in patch && patch.category !== null
       ? [{ sql: INSERT_CATEGORY, bind: [patch.category] }]
       : []),
+    ...("currency" in patch ? [{ sql: DELETE_CONVERSION, bind: [id, patch.currency] }] : []),
     { sql: UPDATE_TRANSACTION[field], bind: updateBinds(patch, id) },
   ]);
   const edit: TransactionEdit = {
@@ -148,7 +175,9 @@ export async function commitTransactions(
     description,
   };
 
-  update(queryClient, database, (current) => patched(current, updates, ({ patch }) => patch));
+  update(queryClient, database, (current) =>
+    patched(current, updates, ({ patch }, row) => changedBy(row, patch)),
+  );
   let failure: { error: unknown } | undefined;
   try {
     try {
@@ -171,7 +200,7 @@ export async function commitTransactions(
       // it. A field's columns go back together, so they always match.
       update(queryClient, database, (current) =>
         patched(current, updates, ({ patch }, row) =>
-          hasPatch(row, patch) ? patchFrom(stored.get(row.id)!, patch) : {},
+          hasPatch(row, patch) ? storedFor(stored.get(row.id)!, patch) : {},
         ),
       );
     }

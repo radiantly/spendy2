@@ -5,13 +5,21 @@ import { render } from "vitest-browser-react";
 import { Toaster } from "sonner";
 import type { Edit } from "../../db/databaseContext.ts";
 import type { Moved } from "../../db/editHistory.ts";
-import type { EditedCell, TransactionRow } from "../../db/queries/transactions.ts";
+import type { Currency, EditedCell, TransactionRow } from "../../db/queries/transactions.ts";
 import { mouse, pointIn } from "../../test/mouse.ts";
 import TransactionsTable, { ROW_HEIGHT } from "./TransactionsTable.tsx";
 
 const ROW_COUNT = 100_000;
 const CATEGORIES = ["Dining out", "Groceries"];
 const ACCOUNTS = ["Everyday Checking", "Rewards Credit Card", "Savings"];
+const CURRENCIES: Currency[] = [
+  { code: "EUR", stored_decimals: 2 },
+  { code: "JPY", stored_decimals: 0 },
+  { code: "USD", stored_decimals: 2 },
+];
+
+/** An amount edit's patch, keeping the rows' currency. */
+const usd = (amount: number, decimals = 2) => ({ currency: "USD", amount, decimals });
 
 /**
  * -1,234.50 first, then 0.3333, stored with more decimals than USD is shown
@@ -54,6 +62,7 @@ function table(categories = CATEGORIES) {
         rows={rows}
         categories={categories}
         accounts={ACCOUNTS}
+        currencies={CURRENCIES}
         onCommit={onCommit}
         lastUndoOrRedo={null}
         onUndoOrRedo={onUndoOrRedo}
@@ -85,6 +94,9 @@ async function editAtCharacter(locator: Locator, index: number) {
 }
 
 const input = () => page.getByRole("textbox");
+/** An amount cell has two inputs: the number, named for its column, and the currency. */
+const amountInput = () => page.getByRole("textbox", { name: "Amount" });
+const currencyInput = () => page.getByRole("textbox", { name: "Currency" });
 const combobox = () => page.getByRole("combobox");
 const options = () =>
   page
@@ -229,14 +241,26 @@ describe("TransactionsTable", () => {
       await expect.element(input()).not.toBeInTheDocument();
     });
 
-    it("edits an amount without its currency or grouping", async () => {
+    it("edits an amount's number grouped as shown, with the caret where it was pressed", async () => {
       await renderTable();
 
       // Before the "2" in "-1,234.50".
       await editAtCharacter(page.getByText("-1,234.50"), 3);
 
-      expect(input().element()).toHaveProperty("value", "-1234.50");
-      expect((input().element() as HTMLInputElement).selectionStart).toBe(2);
+      expect(amountInput().element()).toHaveProperty("value", "-1,234.50");
+      expect((amountInput().element() as HTMLInputElement).selectionStart).toBe(3);
+    });
+
+    it("doesn't regroup the number while it's typed", async () => {
+      await activate("Corner Market", AMOUNT);
+
+      await userEvent.keyboard("{F2}{Home}{ArrowRight}{Delete}");
+
+      expect(amountInput().element()).toHaveProperty("value", "-,234.50");
+      await userEvent.keyboard("{Enter}");
+      expect(onCommit).toHaveBeenCalledWith([
+        { rowIndex: 0, field: "amount", patch: usd(-23_450) },
+      ]);
     });
 
     it("commits on Enter", async () => {
@@ -256,11 +280,11 @@ describe("TransactionsTable", () => {
       await renderTable();
       await editAtCharacter(page.getByText("-1,234.50"), 0);
 
-      await input().fill("-2,000.5");
+      await amountInput().fill("-2,000.5");
       await userEvent.keyboard("{Enter}");
 
       expect(onCommit).toHaveBeenCalledWith([
-        { rowIndex: 0, field: "amount", patch: { amount: -200_050 } },
+        { rowIndex: 0, field: "amount", patch: usd(-200_050) },
       ]);
     });
 
@@ -268,11 +292,11 @@ describe("TransactionsTable", () => {
       await renderTable();
       await editAtCharacter(page.getByText("-1,234.50"), 0);
 
-      await input().fill("-2,000.505");
+      await amountInput().fill("-2,000.505");
       await userEvent.keyboard("{Enter}");
 
       expect(onCommit).toHaveBeenCalledWith([
-        { rowIndex: 0, field: "amount", patch: { amount: -200_051 } },
+        { rowIndex: 0, field: "amount", patch: usd(-200_051) },
       ]);
     });
 
@@ -319,7 +343,7 @@ describe("TransactionsTable", () => {
       await renderTable();
       await editAtCharacter(page.getByText("0.33", { exact: true }), 0);
 
-      expect(input().element()).toHaveProperty("value", "0.3333");
+      expect(amountInput().element()).toHaveProperty("value", "0.3333");
       await userEvent.keyboard("{Enter}");
 
       expect(onCommit).not.toHaveBeenCalled();
@@ -329,11 +353,11 @@ describe("TransactionsTable", () => {
       await renderTable();
       await editAtCharacter(page.getByText("0.33", { exact: true }), 0);
 
-      await input().fill("0.33");
+      await amountInput().fill("0.33");
       await userEvent.keyboard("{Enter}");
 
       expect(onCommit).toHaveBeenCalledWith([
-        { rowIndex: 1, field: "amount", patch: { amount: 3300 } },
+        { rowIndex: 1, field: "amount", patch: usd(3300, 4) },
       ]);
     });
 
@@ -343,7 +367,7 @@ describe("TransactionsTable", () => {
         await renderTable();
         await editAtCharacter(page.getByText("-1,234.50"), 0);
 
-        await input().fill(text);
+        await amountInput().fill(text);
         await userEvent.keyboard("{Enter}");
 
         expect(onCommit).not.toHaveBeenCalled();
@@ -360,17 +384,27 @@ describe("TransactionsTable", () => {
       expect(onCommit).not.toHaveBeenCalled();
     });
 
+    it("saves an emptied amount as 0", async () => {
+      await renderTable();
+      await editAtCharacter(page.getByText("-1,234.50"), 0);
+
+      await amountInput().fill("");
+      await userEvent.keyboard("{Enter}");
+
+      expect(onCommit).toHaveBeenCalledWith([{ rowIndex: 0, field: "amount", patch: usd(0) }]);
+    });
+
     it("keeps an invalid value open with the error on Enter", async () => {
       await renderTable();
       await editAtCharacter(page.getByText("-1,234.50"), 0);
 
-      await input().fill("twelve");
+      await amountInput().fill("1.2.3");
       await userEvent.keyboard("{Enter}");
 
       await expect
         .element(page.getByRole("alert"))
         .toHaveTextContent("Enter a number, like -12.50");
-      await expect.element(input()).toHaveAttribute("aria-invalid", "true");
+      await expect.element(amountInput()).toHaveAttribute("aria-invalid", "true");
       expect(onCommit).not.toHaveBeenCalled();
     });
 
@@ -486,11 +520,11 @@ describe("TransactionsTable", () => {
     it("stays on an invalid value after Enter", async () => {
       await renderTable();
       await editAtCharacter(page.getByText("-1,234.50"), 0);
-      await input().fill("twelve");
+      await amountInput().fill("1.2.3");
 
       await userEvent.keyboard("{Enter}");
 
-      await expect.element(input()).toHaveAttribute("aria-invalid", "true");
+      await expect.element(amountInput()).toHaveAttribute("aria-invalid", "true");
       expect(activeCell()).toBe(cellOf("Corner Market", AMOUNT).element());
     });
 
@@ -514,6 +548,171 @@ describe("TransactionsTable", () => {
 
       await expect.element(grid()).toHaveFocus();
       expect(activeCell()).toBe(cellOf("Corner Market", COUNTERPARTY).element());
+    });
+  });
+
+  describe("currency", () => {
+    const currency = () => currencyInput().element() as HTMLInputElement;
+    const amount = () => amountInput().element() as HTMLInputElement;
+    const committed = (patch: { currency: string; amount: number; decimals: number }) =>
+      expect(onCommit).toHaveBeenCalledWith([{ rowIndex: 0, field: "amount", patch }]);
+
+    it("edits the currency in an input of its own, before the number's", async () => {
+      await renderTable();
+
+      await editAtCharacter(page.getByText("-1,234.50"), 0);
+
+      expect(currency().value).toBe("USD");
+      expect(amount().value).toBe("-1,234.50");
+      await expect.element(amountInput()).toHaveFocus();
+    });
+
+    it("keeps the currency and the number where the cell showed them", async () => {
+      await renderTable();
+      const shownCurrency = cellOf("Corner Market", AMOUNT).getByText("USD").element();
+      const shownNumber = page.getByText("-1,234.50", { exact: true }).element();
+      const currencyLeft = shownCurrency.getBoundingClientRect().left;
+      const numberLeft = shownNumber.getBoundingClientRect().left;
+
+      await userEvent.dblClick(shownNumber);
+      await userEvent.keyboard("{End}");
+      await userEvent.click(currencyInput());
+      await userEvent.keyboard("{End}");
+
+      // The inputs' text starts at their left edges.
+      expect(currency().getBoundingClientRect().left).toBeCloseTo(currencyLeft, 0);
+      expect(amount().getBoundingClientRect().left).toBeCloseTo(numberLeft, 0);
+      // A caret at the end fits, without scrolling the text.
+      expect([currency().scrollLeft, amount().scrollLeft]).toEqual([0, 0]);
+    });
+
+    it("switches to the currency, cleared, on a letter typed into the number", async () => {
+      await renderTable();
+      await editAtCharacter(page.getByText("-1,234.50"), 0);
+
+      await userEvent.keyboard("eur");
+
+      await expect.element(currencyInput()).toHaveFocus();
+      expect(currency().value).toBe("eur");
+      expect(amount().value).toBe("-1,234.50");
+      await userEvent.keyboard("{Enter}");
+      committed({ currency: "EUR", amount: -123_450, decimals: 2 });
+    });
+
+    it("switches back to the number, cleared, on a digit typed into the currency", async () => {
+      await activate("Corner Market", AMOUNT);
+
+      await userEvent.keyboard("{F2}JPY12");
+
+      await expect.element(amountInput()).toHaveFocus();
+      expect(currency().value).toBe("JPY");
+      expect(amount().value).toBe("12");
+      await userEvent.keyboard("{Enter}");
+      committed({ currency: "JPY", amount: 12, decimals: 0 });
+    });
+
+    it.each([
+      ["EUR{Enter}", -123_450],
+      ["EUR5{Enter}", 500],
+      ["EUR 5{Enter}", 500],
+      ["EUR {Enter}", -123_450],
+    ])(
+      "starts a new currency on a letter typed into the cell, keeping the amount until a number is typed: %s",
+      async (keys, amount) => {
+        await activate("Corner Market", AMOUNT);
+
+        await userEvent.keyboard(keys);
+
+        committed({ currency: "EUR", amount, decimals: 2 });
+      },
+    );
+
+    it("starts the edit in the currency on a letter typed into the cell", async () => {
+      await activate("Corner Market", AMOUNT);
+
+      await userEvent.keyboard("E");
+
+      await expect.element(currencyInput()).toHaveFocus();
+      expect(currency().value).toBe("E");
+      expect(amount().value).toBe("-1,234.50");
+    });
+
+    it("deletes from the currency with Backspace", async () => {
+      await activate("Corner Market", AMOUNT);
+
+      await userEvent.keyboard("EUX{Backspace}R");
+
+      expect(currency().value).toBe("EUR");
+      expect(amount().value).toBe("-1,234.50");
+    });
+
+    it("moves between the inputs on a click, carrying on with the edit", async () => {
+      await activate("Corner Market", AMOUNT);
+      await userEvent.keyboard("EU");
+
+      await userEvent.click(amountInput());
+      await expect.element(amountInput()).toHaveFocus();
+      await userEvent.click(currencyInput());
+
+      await expect.element(currencyInput()).toHaveFocus();
+      expect([currency().value, amount().value]).toEqual(["EU", "-1,234.50"]);
+      expect(onCommit).not.toHaveBeenCalled();
+    });
+
+    it("edits the currency when it's pressed in the active cell, with the caret there", async () => {
+      await activate("Corner Market", AMOUNT);
+      const shown = cellOf("Corner Market", AMOUNT).getByText("USD");
+      const point = characterPoint(shown, 1);
+      const box = shown.element().getBoundingClientRect();
+
+      await userEvent.click(shown, { position: { x: point.x - box.left, y: box.height / 2 } });
+
+      await expect.element(currencyInput()).toHaveFocus();
+      expect([currency().selectionStart, currency().selectionEnd]).toEqual([1, 1]);
+    });
+
+    it("splits pasted text into the currency and the number", async () => {
+      await renderTable();
+      await editAtCharacter(page.getByText("-1,234.50"), 0);
+
+      await amountInput().fill("EUR 12.50");
+
+      expect(currency().value).toBe("EUR");
+      expect(amount().value).toBe("12.50");
+    });
+
+    it("doesn't commit the same currency typed in another case", async () => {
+      await activate("Corner Market", AMOUNT);
+
+      await userEvent.keyboard("usd{Enter}");
+
+      expect(onCommit).not.toHaveBeenCalled();
+    });
+
+    it("keeps an unknown currency open with the error", async () => {
+      await activate("Corner Market", AMOUNT);
+
+      await userEvent.keyboard("XYZ{Enter}");
+
+      await expect.element(page.getByRole("alert")).toHaveTextContent("There's no currency “XYZ”");
+      expect(onCommit).not.toHaveBeenCalled();
+    });
+
+    it("keeps the transaction's currency when the currency is left empty", async () => {
+      await activate("Corner Market", AMOUNT);
+
+      await userEvent.keyboard("E{Backspace}5{Enter}");
+
+      committed({ currency: "USD", amount: 500, decimals: 2 });
+    });
+
+    it("doesn't commit an emptied currency with the same number", async () => {
+      await activate("Corner Market", AMOUNT);
+
+      await userEvent.keyboard("E{Backspace}{Enter}");
+
+      expect(onCommit).not.toHaveBeenCalled();
+      await expect.element(currencyInput()).not.toBeInTheDocument();
     });
   });
 
@@ -599,6 +798,7 @@ describe("TransactionsTable", () => {
           rows={[]}
           categories={CATEGORIES}
           accounts={ACCOUNTS}
+          currencies={CURRENCIES}
           onCommit={onCommit}
           lastUndoOrRedo={null}
           onUndoOrRedo={onUndoOrRedo}
@@ -775,13 +975,13 @@ describe("TransactionsTable", () => {
       await renderTable();
       await editAtCharacter(page.getByText("-1,234.50"), 0);
 
-      await input().fill("twelve");
+      await amountInput().fill("1.2.3");
       await userEvent.keyboard("{Tab}");
 
       await expect
         .element(page.getByRole("alert"))
         .toHaveTextContent("Enter a number, like -12.50");
-      await expect.element(input()).toHaveFocus();
+      await expect.element(amountInput()).toHaveFocus();
       expect(onCommit).not.toHaveBeenCalled();
     });
 
@@ -1009,6 +1209,16 @@ describe("TransactionsTable", () => {
       expect(activeCell()).toBe(cellOf("Corner Market", CATEGORY).element());
     });
 
+    it("sets an amount to 0 on Delete, keeping it active", async () => {
+      await activate("Corner Market", AMOUNT);
+
+      await userEvent.keyboard("{Delete}");
+
+      expect(onCommit).toHaveBeenCalledWith([{ rowIndex: 0, field: "amount", patch: usd(0) }]);
+      await expect.element(input()).not.toBeInTheDocument();
+      expect(activeCell()).toBe(cellOf("Corner Market", AMOUNT).element());
+    });
+
     it("starts editing empty text on Delete in a cell that can't be empty", async () => {
       await activate("Corner Market", COUNTERPARTY);
 
@@ -1027,12 +1237,15 @@ describe("TransactionsTable", () => {
 
         await userEvent.keyboard(key);
 
-        // Rows 0 and 2 have a category (row 1 has none to clear);
-        // counterparties and amounts can't be empty.
+        // Rows 0 and 2 have a category (row 1 has none to clear); an
+        // emptied amount is 0; counterparties can't be empty.
         expect(onCommit).toHaveBeenCalledTimes(1);
         expect(onCommit).toHaveBeenCalledWith([
           { rowIndex: 0, field: "category", patch: { category: null } },
           { rowIndex: 2, field: "category", patch: { category: null } },
+          { rowIndex: 0, field: "amount", patch: usd(0) },
+          { rowIndex: 1, field: "amount", patch: usd(0, 4) },
+          { rowIndex: 2, field: "amount", patch: usd(0) },
         ]);
         await expect.element(input()).not.toBeInTheDocument();
         expect(selectedCells()).toHaveLength(9);
@@ -1069,6 +1282,7 @@ describe("TransactionsTable", () => {
         rows={rows}
         categories={CATEGORIES}
         accounts={ACCOUNTS}
+        currencies={CURRENCIES}
         onCommit={onCommit}
         lastUndoOrRedo={moved}
         onUndoOrRedo={onUndoOrRedo}
@@ -1187,6 +1401,7 @@ describe("TransactionsTable", () => {
           rows={rows.slice(0, 2)}
           categories={CATEGORIES}
           accounts={ACCOUNTS}
+          currencies={CURRENCIES}
           onCommit={onCommit}
           lastUndoOrRedo={null}
           onUndoOrRedo={onUndoOrRedo}
@@ -1207,6 +1422,7 @@ describe("TransactionsTable", () => {
           rows={rows}
           categories={CATEGORIES}
           accounts={ACCOUNTS}
+          currencies={CURRENCIES}
           onCommit={onCommit}
           lastUndoOrRedo={null}
           onUndoOrRedo={onUndoOrRedo}
@@ -1848,7 +2064,7 @@ describe("TransactionsTable", () => {
       const cell = lastVisible.children[AMOUNT]!;
       await userEvent.dblClick(page.elementLocator(cell));
 
-      await input().fill("twelve");
+      await amountInput().fill("1.2.3");
       await userEvent.keyboard("{Enter}");
 
       const error = page.getByRole("alert");
@@ -1865,6 +2081,7 @@ describe("TransactionsTable", () => {
           rows={rows.slice(0, 5)}
           categories={many}
           accounts={ACCOUNTS}
+          currencies={CURRENCIES}
           onCommit={onCommit}
           lastUndoOrRedo={null}
           onUndoOrRedo={onUndoOrRedo}

@@ -69,6 +69,7 @@ function Table({
       rows={rows}
       categories={names.categories}
       accounts={ACCOUNTS}
+      currencies={[]}
       onCommit={onCommit}
       lastUndoOrRedo={null}
       onUndoOrRedo={() => {}}

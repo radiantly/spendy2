@@ -109,6 +109,12 @@ export const LIST_CATEGORIES = `
   ORDER BY category.name
 `;
 
+/** A currency, with the decimals its amounts are stored in. */
+export type Currency = { code: string; stored_decimals: number };
+
+/** Every currency, by code. */
+export const LIST_CURRENCIES = `SELECT code, stored_decimals FROM currencies ORDER BY code`;
+
 export type AccountCurrency = { name: string; display_currency: string | null };
 
 /**
@@ -126,7 +132,8 @@ type TransactionFieldColumns = {
   account_name: Pick<TransactionRow, "account_name">;
   counterparty: Pick<TransactionRow, "counterparty">;
   category: Pick<TransactionRow, "category">;
-  amount: Pick<TransactionRow, "amount">;
+  // An amount is in its currency's decimals, so the three are set together.
+  amount: Pick<TransactionRow, "currency" | "amount" | "decimals">;
   remarks: Pick<TransactionRow, "remarks">;
 };
 
@@ -144,14 +151,25 @@ export const UPDATE_TRANSACTION = {
   account_name: `UPDATE transactions SET account_name = $account_name WHERE id = $id`,
   counterparty: `UPDATE transactions SET counterparty = $counterparty WHERE id = $id`,
   category: `UPDATE transactions SET category = $category WHERE id = $id`,
-  amount: `UPDATE transactions SET amount = $amount WHERE id = $id`,
+  amount: `UPDATE transactions SET currency = $currency, amount = $amount WHERE id = $id`,
   remarks: `UPDATE transactions SET remarks = $remarks WHERE id = $id`,
 } as const satisfies Record<EditableTransactionField, string>;
 
-/** The binds for `UPDATE_TRANSACTION`: each column of `patch` as `$column`, and `$id`. */
+/**
+ * Deletes a transaction's conversion to a currency. A transaction can't be
+ * converted to its own currency, so this goes before setting its currency to
+ * one it has a conversion to. Bind `[id, currency]`.
+ */
+export const DELETE_CONVERSION = `DELETE FROM conversions WHERE transaction_id = ? AND currency = ?`;
+
+/** What a patch can set that isn't a column of transactions: the decimals are its currency's. */
+const NOT_STORED: ReadonlySet<string> = new Set<keyof TransactionRow>(["decimals"]);
+
+/** The binds for `UPDATE_TRANSACTION`: each stored column of `patch` as `$column`, and `$id`. */
 export function updateBinds(patch: TransactionPatch, id: string) {
   const binds: Record<string, string | number | null> = { $id: id };
-  for (const [column, value] of Object.entries(patch)) binds[`$${column}`] = value;
+  for (const [column, value] of Object.entries(patch))
+    if (!NOT_STORED.has(column)) binds[`$${column}`] = value;
   return binds;
 }
 

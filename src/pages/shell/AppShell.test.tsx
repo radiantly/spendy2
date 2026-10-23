@@ -41,6 +41,9 @@ const TWO_TRANSACTIONS = `
   INSERT INTO transactions (seq, id, source, account_name, amount, currency, counterparty, category, naive_date)
     VALUES (2, '${NEWER}', ${SOURCE_HASH_SQL}, 'Everyday Checking', -4620, 'USD', 'Corner Market', 'Groceries', '2026-10-09')
 `;
+/** Corner Market's USD -46.20 is also EUR -42.10 and SGD -62.30. */
+const WITH_CONVERSIONS = `${TWO_TRANSACTIONS};
+  INSERT INTO conversions VALUES ('${NEWER}', 'EUR', -4210), ('${NEWER}', 'SGD', -6230)`;
 
 beforeEach(async () => {
   vi.mocked(downloadDatabase).mockReset();
@@ -610,11 +613,11 @@ describe("TransactionsPage", () => {
       expect(
         await queryUploaded(
           blob,
-          "SELECT id, counterparty, category, remarks FROM transactions ORDER BY seq DESC",
+          "SELECT id, counterparty, category, amount, remarks FROM transactions ORDER BY seq DESC",
         ),
       ).toEqual([
-        { id: NEWER, counterparty: "Corner Market", category: null, remarks: null },
-        { id: OLDER, counterparty: "Café Lumen", category: null, remarks: null },
+        { id: NEWER, counterparty: "Corner Market", category: null, amount: 0, remarks: null },
+        { id: OLDER, counterparty: "Café Lumen", category: null, amount: 0, remarks: null },
       ]);
     });
 
@@ -704,7 +707,7 @@ describe("TransactionsPage", () => {
   describe("amounts", () => {
     async function editAmount(from: string, to: string) {
       await userEvent.dblClick(page.getByText(from, { exact: true }).shown());
-      await page.getByRole("textbox").fill(to);
+      await page.getByRole("textbox", { name: "Amount" }).fill(to);
       await userEvent.keyboard("{Enter}");
     }
 
@@ -750,6 +753,30 @@ describe("TransactionsPage", () => {
         .toBeVisible();
       await expect.element(page.getByText("-7.50", { exact: true }).shown()).toBeVisible();
       expect(await storedAmount()).toEqual([{ amount: -750 }]);
+    });
+
+    it("stores a new currency, deleting the transaction's conversion to it", async () => {
+      await loggedIn(await storedDatabase(WITH_CONVERSIONS));
+      await renderApp("/transactions");
+
+      await userEvent.dblClick(page.getByText("-46.20", { exact: true }).shown());
+      await userEvent.keyboard("EUR{Enter}");
+
+      await expect
+        .poll(async () => (await cellOf("Corner Market", AMOUNT)).element().textContent)
+        .toBe("EUR -46.20");
+      await userEvent.click(saveButton());
+      await expect.element(saveButton()).not.toBeInTheDocument();
+      const [, blob] = vi.mocked(uploadDatabase).mock.calls[0]!;
+      expect(
+        await queryUploaded(
+          blob,
+          `SELECT transactions.currency, transactions.amount,
+            group_concat(conversions.currency) AS conversions
+          FROM transactions JOIN conversions ON conversions.transaction_id = transactions.id
+          WHERE id = '${NEWER}'`,
+        ),
+      ).toEqual([{ currency: "EUR", amount: -4620, conversions: "SGD" }]);
     });
   });
 });
@@ -1134,7 +1161,7 @@ describe("undo and redo on the transactions page", () => {
 
   async function editAmount(from: string, to: string) {
     await userEvent.dblClick(page.getByText(from, { exact: true }).shown());
-    await page.getByRole("textbox").fill(to);
+    await page.getByRole("textbox", { name: "Amount" }).fill(to);
     await userEvent.keyboard("{Enter}");
   }
 
@@ -1216,6 +1243,29 @@ describe("undo and redo on the transactions page", () => {
     expect(
       await uploaded(`SELECT counterparty, amount FROM transactions WHERE id = '${NEWER}'`),
     ).toEqual([{ counterparty: "Corner Shop", amount: -4620 }]);
+  });
+
+  it("undoes a change of currency, with the conversion it deleted", async () => {
+    await loggedIn(await storedDatabase(WITH_CONVERSIONS));
+    await renderApp("/transactions");
+    // Something else to save, once the change of currency is undone.
+    await editCounterparty("Café Lumen", "Café Sol");
+    await userEvent.dblClick(page.getByText("-46.20", { exact: true }).shown());
+    await userEvent.keyboard("EUR{Enter}");
+    const amount = async () => (await cellOf("Corner Market", AMOUNT)).element().textContent;
+    await expect.poll(amount).toBe("EUR -46.20");
+
+    await undo();
+
+    await expect.poll(amount).toBe("USD -46.20");
+    expect(
+      await uploaded(
+        `SELECT transactions.currency, transactions.amount,
+          group_concat(conversions.currency ORDER BY conversions.currency) AS conversions
+        FROM transactions JOIN conversions ON conversions.transaction_id = transactions.id
+        WHERE id = '${NEWER}'`,
+      ),
+    ).toEqual([{ currency: "USD", amount: -4620, conversions: "EUR,SGD" }]);
   });
 
   it("undoes a cleared range in one step, and selects it", async () => {

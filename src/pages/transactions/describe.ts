@@ -3,8 +3,8 @@
  * did: "category of Corner Market: Groceries → Coffee". Values read as the
  * cells show them.
  */
-import type { TransactionRow } from "../../db/queries/transactions.ts";
-import { columns } from "./columns.ts";
+import { hasPatch, type TransactionRow } from "../../db/queries/transactions.ts";
+import { columns, type EditContext } from "./columns.ts";
 import { findName } from "./fields.ts";
 import type { TransactionChange } from "./TransactionsTable.tsx";
 
@@ -34,15 +34,27 @@ function plural(count: number, noun: string) {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
+/** Whether `change` stores what emptying its cell would, like 0 for an amount. */
+function clears(
+  { rowIndex, field, patch }: TransactionChange,
+  rows: readonly TransactionRow[],
+  context: EditContext,
+) {
+  const row = rows[rowIndex]!;
+  const cleared = columnOf(field).meta!.editor!.parse("", row, { ...context, create: false });
+  return cleared.ok && hasPatch({ ...row, ...patch }, cleared.value);
+}
+
 /**
  * Describes making `changes` to `rows` (as they are before them).
- * `categories` are the categories there are, so one that's new says so.
+ * `context` has the categories there are, so one that's new says so.
  */
 export function describeEdit(
   changes: readonly TransactionChange[],
   rows: readonly TransactionRow[],
-  categories: readonly string[],
+  context: EditContext,
 ) {
+  const { categories } = context;
   const [change] = changes;
   if (changes.length === 1 && change) {
     const before = rows[change.rowIndex]!;
@@ -62,8 +74,6 @@ export function describeEdit(
 
   const cells = plural(changes.length, "cell");
   const transactions = plural(new Set(changes.map(({ rowIndex }) => rowIndex)).size, "transaction");
-  const cleared = changes.every(
-    ({ rowIndex, field, patch }) => shown({ ...rows[rowIndex]!, ...patch }, field) === "none",
-  );
+  const cleared = changes.every((change) => clears(change, rows, context));
   return `${cleared ? "clearing" : "changes to"} ${cells} in ${transactions}`;
 }

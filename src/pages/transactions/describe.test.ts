@@ -15,10 +15,17 @@ const row = (overrides: Partial<TransactionRow> = {}): TransactionRow => ({
   remarks: null,
   ...overrides,
 });
-const CATEGORIES = ["Dining out", "Groceries"];
+const CONTEXT = {
+  categories: ["Dining out", "Groceries"],
+  accounts: ["Everyday Checking", "Savings"],
+  currencies: [
+    { code: "EUR", stored_decimals: 2 },
+    { code: "USD", stored_decimals: 2 },
+  ],
+};
 
 const describeOne = (change: Omit<TransactionChange, "rowIndex">, before = row()) =>
-  describeEdit([{ rowIndex: 0, ...change }], [before], CATEGORIES);
+  describeEdit([{ rowIndex: 0, ...change }], [before], CONTEXT);
 
 describe("describeEdit", () => {
   it.each<[string, Omit<TransactionChange, "rowIndex">, string]>([
@@ -44,8 +51,13 @@ describe("describeEdit", () => {
     ],
     [
       "an amount, with its currency",
-      { field: "amount", patch: { amount: -1250 } },
+      { field: "amount", patch: { currency: "USD", amount: -1250, decimals: 2 } },
       "amount of Corner Market: USD -46.20 → USD -12.50",
+    ],
+    [
+      "an amount in another currency",
+      { field: "amount", patch: { currency: "JPY", amount: -1250, decimals: 0 } },
+      "amount of Corner Market: USD -46.20 → JPY -1,250",
     ],
     [
       "a date",
@@ -110,9 +122,23 @@ describe("describeEdit", () => {
           { rowIndex: 1, field: "remarks", patch: { remarks: null } },
         ],
         rows,
-        CATEGORIES,
+        CONTEXT,
       ),
     ).toBe("clearing 3 cells in 2 transactions");
+  });
+
+  // Delete on a range sets its amounts to 0, which shows as USD 0.00, not empty
+  it("counts amounts set to 0 in a cleared range as cleared", () => {
+    expect(
+      describeEdit(
+        [
+          { rowIndex: 0, field: "category", patch: { category: null } },
+          { rowIndex: 0, field: "amount", patch: { currency: "USD", amount: 0, decimals: 2 } },
+        ],
+        [row()],
+        CONTEXT,
+      ),
+    ).toBe("clearing 2 cells in 1 transaction");
   });
 
   it("counts other changes to several cells as changes", () => {
@@ -123,7 +149,7 @@ describe("describeEdit", () => {
           { rowIndex: 0, field: "counterparty", patch: { counterparty: "Corner Shop" } },
         ],
         [row()],
-        CATEGORIES,
+        CONTEXT,
       ),
     ).toBe("changes to 2 cells in 1 transaction");
   });
