@@ -37,26 +37,6 @@ export const databaseEtagSchema = z.codec(z.string().regex(/^".{64}"$/), z.hash(
   encode: (hash) => `"${hash}"`,
 });
 
-/** A database upload's headers: exactly one precondition, and how long it is. */
-export const databasePutHeadersSchema = z
-  .object({
-    "if-match": databaseEtagSchema
-      .optional()
-      .meta({ description: "The ETag of the stored database this upload replaces" }),
-    "if-none-match": z.literal("*").optional().meta({ description: "`*` for the first upload" }),
-    "content-length": z.string().regex(/^\d+$/),
-  })
-  .refine(
-    (headers) => (headers["if-match"] === undefined) !== (headers["if-none-match"] === undefined),
-    { error: "Needs exactly one of If-Match and If-None-Match" },
-  );
-
-export const databaseGetPreconditionSchema = z.object({
-  "if-none-match": databaseEtagSchema
-    .optional()
-    .meta({ description: "The ETag of a database the client already has" }),
-});
-
 // Body format: SPENDY + version byte + ?
 // The rest is only read by clients; for v1 see src/db/blob.ts.
 export const DATABASE_BLOB_MAGIC = new TextEncoder().encode("SPENDY");

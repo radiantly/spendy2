@@ -1,29 +1,44 @@
-import { Activity, type ReactNode } from "react";
-import { matchPath, Navigate, NavLink, useLocation } from "react-router";
+import { Activity, useState, type ReactNode } from "react";
+import { matchPath, Navigate, useLocation } from "react-router";
 import { useAuth } from "../../auth/useAuth.ts";
 import DatabaseProvider from "../../db/DatabaseProvider.tsx";
 import { useDatabase } from "../../db/useDatabase.ts";
-import ActivePill from "../../components/ActivePill.tsx";
-import Logo from "../../components/Logo.tsx";
-import UserAvatar from "../../components/UserAvatar.tsx";
+import Header from "./Header.tsx";
 import { useHistoryKeys } from "./historyKeys.ts";
 import SaveControls from "./SaveControls.tsx";
 import { describeOpenError } from "./openError.ts";
 
-/** The anchor the tabs' pill is under: the active tab. */
-const ACTIVE_TAB = "--active-tab";
-
-/** A page behind login, shown at `path`. */
-export type ShellPage = { path: string; element: ReactNode };
+/**
+ * A page in the shell, shown at `path`. A `database` page shows the user's
+ * database: it's behind login, waits for the database to open, and is
+ * rendered from the start so its data loads in the background. A `public`
+ * page needs neither, and is rendered from its first visit.
+ */
+export type ShellPage = { path: string; element: ReactNode; kind: "database" | "public" };
 
 /**
- * Layout for the pages behind login: the header, and the user's database
- * opened for the pages. Pages render only once the database is ready.
+ * Layout for the app's pages: the header, and for a logged in user their
+ * database, opened once for all the pages. Pages stay rendered when another
+ * shows, so switching back to one finds it as it was left, and leaving the
+ * database's pages doesn't lose its unsaved changes.
  */
 function AppShell({ pages }: { pages: readonly ShellPage[] }) {
   const { state, endSession } = useAuth();
+  const { pathname } = useLocation();
   if (state.status === "loading") return null;
-  if (state.status === "anonymous") return <Navigate to="/login" replace />;
+
+  const databasePages = pages.filter(({ kind }) => kind === "database");
+  const publicPages = pages.filter(({ kind }) => kind === "public");
+
+  if (state.status === "anonymous") {
+    if (!publicPages.some(({ path }) => matchPath(path, pathname)))
+      return <Navigate to="/login" replace />;
+    return (
+      <Layout header={<Header />}>
+        <PublicPages pages={publicPages} />
+      </Layout>
+    );
+  }
 
   return (
     // A new session gets a fresh provider, so nothing carries over between users.
@@ -32,79 +47,61 @@ function AppShell({ pages }: { pages: readonly ShellPage[] }) {
       session={state.session}
       onSessionEnded={() => endSession(state.session)}
     >
-      {/* At least as wide as the content: a page wider than the screen
-          scrolls sideways as a whole, and everything spans that full width
-          rather than just the screen's. */}
-      <div className="flex min-h-svh min-w-fit flex-col">
-        <Header username={state.session.username} />
-        <main className="flex flex-1 flex-col">
-          <DatabaseGate pages={pages} />
-        </main>
-        <SaveControls placement="floating" />
-      </div>
+      <Layout
+        header={
+          <Header username={state.session.username} actions={<SaveControls placement="header" />} />
+        }
+        footer={<SaveControls placement="floating" />}
+      >
+        <DatabasePages pages={databasePages} />
+        <PublicPages pages={publicPages} />
+      </Layout>
     </DatabaseProvider>
   );
 }
 
-function Header({ username }: { username: string }) {
+function Layout({
+  header,
+  footer,
+  children,
+}: {
+  header: ReactNode;
+  footer?: ReactNode;
+  children: ReactNode;
+}) {
   return (
-    // On phones, the sides share the room the tabs leave equally, so the
-    // tabs sit in the middle. From 640px, they follow the logo.
-    <header className="flex flex-wrap items-center gap-x-3 gap-y-3 px-4 py-4 sm:gap-x-6 lg:px-8">
-      <div className="flex flex-1 sm:flex-none">
-        <Logo compact />
-      </div>
-      <nav
-        aria-label="Main"
-        className="relative isolate flex rounded-full border border-line bg-surface p-1 text-sm font-medium select-none"
-      >
-        <Tab to="/">Overview</Tab>
-        <Tab to="/transactions">Transactions</Tab>
-        <ActivePill name={ACTIVE_TAB} />
-      </nav>
-      <div className="flex flex-1 items-center justify-end gap-4 sm:ml-auto sm:flex-none">
-        <SaveControls placement="header" />
-        <UserAvatar username={username} alt={`Logged in as ${username}`} />
-      </div>
-    </header>
+    // At least as wide as the content: a page wider than the screen scrolls
+    // sideways as a whole, and everything spans that full width rather than
+    // just the screen's.
+    <div className="flex min-h-svh min-w-fit flex-col">
+      {header}
+      <main className="flex flex-1 flex-col">{children}</main>
+      {footer}
+    </div>
   );
 }
 
-function Tab({ to, children }: { to: string; children: string }) {
-  return (
-    <NavLink
-      to={to}
-      end
-      className={({ isActive }) =>
-        `rounded-full px-4 py-2 outline-none focus-visible:ring-3 focus-visible:ring-focus ${
-          isActive ? "text-ink" : "text-ink-muted hover:text-ink"
-        }`
-      }
-      style={({ isActive }) => (isActive ? { anchorName: ACTIVE_TAB } : undefined)}
-    >
-      {children}
-    </NavLink>
-  );
-}
-
-function DatabaseGate({ pages }: { pages: readonly ShellPage[] }) {
+/** The pages showing the user's database, once it's open. */
+function DatabasePages({ pages }: { pages: readonly ShellPage[] }) {
   const { state } = useDatabase();
   const { pathname } = useLocation();
   useHistoryKeys(state.status === "ready" ? state.history : null);
+  // Opening the database only holds up its own pages.
+  const shown = pages.some(({ path }) => matchPath(path, pathname));
 
   if (state.status === "loading")
-    return (
+    return shown ? (
       <p role="status" className="m-auto text-sm text-ink-muted">
         Opening your database…
       </p>
-    );
+    ) : null;
 
   if (state.status === "error")
-    return (
+    return shown ? (
       <p role="alert" className="m-auto max-w-sm text-center text-ink">
         {describeOpenError(state.error)}
       </p>
-    );
+    ) : null;
 
   // Every page stays rendered, the others hidden, so switching back to one
   // finds it as it was left. A hidden page is rendered after the shown one,
@@ -116,6 +113,22 @@ function DatabaseGate({ pages }: { pages: readonly ShellPage[] }) {
       {element}
     </Activity>
   ));
+}
+
+/** The pages anyone can open: each is rendered from its first visit, then kept like the others. */
+function PublicPages({ pages }: { pages: readonly ShellPage[] }) {
+  const { pathname } = useLocation();
+  const shown = pages.find(({ path }) => matchPath(path, pathname));
+  const [visited, setVisited] = useState<readonly string[]>([]);
+  if (shown && !visited.includes(shown.path)) setVisited([...visited, shown.path]);
+
+  return pages
+    .filter(({ path }) => visited.includes(path))
+    .map(({ path, element }) => (
+      <Activity key={path} mode={path === shown?.path ? "visible" : "hidden"}>
+        {element}
+      </Activity>
+    ));
 }
 
 export default AppShell;

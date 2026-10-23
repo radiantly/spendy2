@@ -1,16 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import type { RenderResult } from "vitest-browser-react";
-import { loginUser, type LoginResult } from "../../api/auth.ts";
-import { registerUser } from "../../api/users.ts";
+import { loginUser, registerUser, type LoginResult } from "../../api/auth.ts";
 import { deriveKek } from "../../lib/kek.ts";
 import { clearSession, loadSession, saveSession } from "../../lib/session.ts";
 import { loadPasswordStrengthEstimator } from "../../lib/passwordStrength.ts";
 import { EXPORT_KEY, TOKEN } from "../../test/fixtures.ts";
 import { rect, renderApp, visible } from "../../test/renderAuthPage.tsx";
 
-vi.mock("../../api/auth.ts", () => ({ loginUser: vi.fn() }));
-vi.mock("../../api/users.ts", () => ({ registerUser: vi.fn() }));
+vi.mock("../../api/auth.ts", () => ({ loginUser: vi.fn(), registerUser: vi.fn() }));
 // Real implementations, wrapped so tests can observe or break them.
 vi.mock("../../lib/session.ts", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../lib/session.ts")>();

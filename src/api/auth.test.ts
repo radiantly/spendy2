@@ -3,16 +3,14 @@ import * as opaque from "@serenity-kit/opaque";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { PASSWORD, forwardFetchToWorker } from "../../worker/test/helpers.ts";
 import { tokenSchema } from "../../worker/schemas.ts";
-import { registerUser } from "./users.ts";
-import { loginUser } from "./auth.ts";
+import { loginUser, registerUser } from "./auth.ts";
 
 beforeAll(() => opaque.ready);
-beforeEach(async () => {
+beforeEach(() => {
   // Time only moves when a test advances it, so the login backoff is deterministic.
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(new Date("2030-01-01T00:00:00Z"));
   forwardFetchToWorker();
-  await registerUser("alice", PASSWORD);
 });
 afterEach(async () => {
   vi.useRealTimers();
@@ -20,7 +18,38 @@ afterEach(async () => {
   await reset();
 });
 
+describe("registerUser", () => {
+  it("registers a new user", async () => {
+    expect(await registerUser("alice", PASSWORD)).toEqual({ success: true });
+  });
+
+  it("reports a taken username", async () => {
+    await registerUser("alice", PASSWORD);
+
+    expect(await registerUser("alice", "a different password")).toEqual({
+      success: false,
+      code: "USER_ALREADY_EXISTS",
+    });
+  });
+
+  it("reports a generic failure when the server rejects the request", async () => {
+    // The server validates usernames too; the form normally catches this first.
+    expect(await registerUser("Not Valid", PASSWORD)).toEqual({
+      success: false,
+      code: "REGISTRATION_FAILED",
+    });
+  });
+
+  it("throws when the server can't be reached", async () => {
+    vi.stubGlobal("fetch", () => Promise.reject(new TypeError("Failed to fetch")));
+
+    await expect(registerUser("alice", PASSWORD)).rejects.toThrow("Failed to fetch");
+  });
+});
+
 describe("loginUser", () => {
+  beforeEach(() => registerUser("alice", PASSWORD));
+
   it("returns a token for the user and the export key", async () => {
     const result = await loginUser("alice", PASSWORD);
 

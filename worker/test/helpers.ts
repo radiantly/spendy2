@@ -6,7 +6,7 @@ export const PASSWORD = "correct horse battery staple";
 
 /**
  * Routes the global `fetch` to the worker, so frontend API clients (which
- * call relative URLs like `/api/users`) can be tested against the real
+ * call relative URLs like `/api/auth/register/start`) can be tested against the real
  * server. Requests to other origins go to the previous `fetch`: the worker
  * and its durable objects share this global, so their own requests must not
  * be looped back. Undo with `vi.unstubAllGlobals()`.
@@ -35,7 +35,7 @@ export async function registerUser(username: string, password = PASSWORD) {
   const { clientRegistrationState, registrationRequest } = opaque.client.startRegistration({
     password,
   });
-  const startResponse = await post("/users", { username, registrationRequest });
+  const startResponse = await post("/auth/register/start", { username, registrationRequest });
   const { registrationResponse } = await startResponse.json<{
     registrationResponse: string;
   }>();
@@ -44,11 +44,11 @@ export async function registerUser(username: string, password = PASSWORD) {
     registrationResponse,
     password,
   });
-  const finishResponse = await post("/users", {
+  const finishResponse = await post("/auth/register/finish", {
     username,
     registrationRecord,
   });
-  expect(finishResponse.status).toBe(201);
+  expect(finishResponse.status).toBe(204);
 }
 
 export async function startLogin(username: string, password = PASSWORD) {

@@ -9,7 +9,7 @@ import {
 } from "@scalar/server-side-rendering";
 import { normalizePath, type Plugin, type ViteDevServer } from "vite";
 import { experimental_readRawConfig, type Unstable_RawConfig } from "wrangler";
-import { generateOpenAPIDocument } from "./openapi.ts";
+import { generateOpenAPIDocument } from "../vite-plugins/openapi.ts";
 
 interface ScalarOptions {
   /** The app's module, relative to the root; see generateOpenAPIDocument. */

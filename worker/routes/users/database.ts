@@ -7,37 +7,54 @@ import { createAuthenticatedRoute } from "../../middleware/requireAuth.ts";
 import {
   databaseBlobSchema,
   databaseEtagSchema,
-  databaseGetPreconditionSchema,
-  databasePutHeadersSchema,
 } from "../../schemas.ts";
 import { fixedResponse } from "../../openapi.ts";
 
 const database = new OpenAPIHono<{ Bindings: Env }>();
+
+// TODO: grab the sqlite table schema and put it in here during build time
+export const databaseTag = {
+  name: "Database",
+  description:
+    "All of the user data is stored in a single encrypted, compressed SQLite database.", // with the following table schema:
+};
 
 /** bodyLimit at the configured maximum, which only the request's env has. */
 const databaseBodyLimit = createMiddleware<{ Bindings: Env }>((c, next) =>
   bodyLimit({ maxSize: c.env.MAX_DATABASE_UPLOAD_BYTES })(c, next),
 );
 
+const databasePutHeadersSchema = z
+  .object({
+    "if-match": databaseEtagSchema
+      .optional()
+      .meta({ description: "If the user has an existing database, this header is required. Pass the ETag from the corresponding GET call for the value of this header." }),
+    "if-none-match": z.literal("*").optional().meta({ description: "If the user does NOT have an existing database, this header is required. Pass `*` for the value of this header." }),
+    "content-length": z.string().regex(/^\d+$/),
+  })
+  .refine(
+    (headers) => (headers["if-match"] === undefined) !== (headers["if-none-match"] === undefined),
+    { error: "Needs exactly one of If-Match and If-None-Match" },
+  );
+
 /** Documents a database blob; the user store checks uploads itself. */
 const databaseBlobBody = databaseBlobSchema.meta({
   type: "string",
   format: "binary",
-  description: "SPENDY, a version byte, then data only clients read",
+  description: "`SPENDY` + `01` + wrapped key (40 bytes) + nonce (12 bytes) + AES-GCM(gzip(sqlite file))",
 });
 
 const etagHeaders = z.object({
-  ETag: databaseEtagSchema.meta({ description: "The stored database's sha256" }),
+  ETag: databaseEtagSchema,
 });
 
 const uploadDatabase = createAuthenticatedRoute({
   method: "put",
   path: "/",
-  tags: ["Database"],
+  tags: [databaseTag.name],
   summary: "Upload the database",
   description:
-    "Replaces the stored database, if it is still the one the precondition names. " +
-    "The upload must say how long it is.",
+    "Upload a new version of the database.",
   middleware: [timing(), databaseBodyLimit],
   request: {
     headers: databasePutHeadersSchema,
@@ -47,7 +64,7 @@ const uploadDatabase = createAuthenticatedRoute({
   responses: {
     204: { description: "The upload is now the stored database", headers: etagHeaders },
     413: {
-      description: "The upload is larger than the maximum",
+      description: "The upload is larger than the maximum allowed.",
       content: { "text/plain": { schema: z.literal("Payload Too Large") } },
     },
   },
@@ -73,11 +90,19 @@ database.openapi(uploadDatabase, async (c) => {
   return fixedResponse(c, "NO_CONTENT", { ETag: databaseEtagSchema.encode(result.sha256) });
 });
 
+export const databaseGetPreconditionSchema = z.object({
+  "if-none-match": databaseEtagSchema
+    .optional(),
+});
+
 const downloadDatabase = createAuthenticatedRoute({
   method: "get",
   path: "/",
-  tags: ["Database"],
+  tags: [databaseTag.name],
   summary: "Download the database",
+  description:
+    "Downloads the stored database. With `If-None-Match` set to its ETag, responds 304 " +
+    "if it hasn't changed.",
   request: { headers: databaseGetPreconditionSchema },
   errors: ["NOT_FOUND"],
   responses: {
@@ -86,7 +111,7 @@ const downloadDatabase = createAuthenticatedRoute({
       headers: etagHeaders,
       content: { "application/octet-stream": { schema: databaseBlobBody } },
     },
-    304: { description: "The stored database is the If-None-Match one", headers: etagHeaders },
+    304: { description: "Not modified", headers: etagHeaders },
   },
 });
 

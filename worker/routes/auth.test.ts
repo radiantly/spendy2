@@ -62,6 +62,154 @@ function getSessionIds(username: string) {
   ]);
 }
 
+async function startRegistration(username: string) {
+  const { clientRegistrationState, registrationRequest } = opaque.client.startRegistration({
+    password: PASSWORD,
+  });
+
+  const response = await post("/auth/register/start", { username, registrationRequest });
+  expect(response.status).toBe(200);
+  const { registrationResponse } = await response.json<{
+    registrationResponse: string;
+  }>();
+
+  return { clientRegistrationState, registrationResponse };
+}
+
+async function createRegistrationRecord(username: string) {
+  const { clientRegistrationState, registrationResponse } = await startRegistration(username);
+
+  const { registrationRecord } = opaque.client.finishRegistration({
+    clientRegistrationState,
+    registrationResponse,
+    password: PASSWORD,
+  });
+
+  return registrationRecord;
+}
+
+describe("POST /api/auth/register/start", () => {
+  describe("validation", () => {
+    it.each(["Alice", "ab", "a".repeat(33), "al ice", "al-ice"])(
+      "rejects username %j",
+      async (username) => {
+        const response = await post("/auth/register/start", {
+          username,
+          registrationRequest: "x",
+        });
+        expect(response.status).toBe(400);
+      },
+    );
+
+    it("rejects a registrationRecord field", async () => {
+      const response = await post("/auth/register/start", {
+        username: "alice",
+        registrationRequest: "x",
+        registrationRecord: "x",
+      });
+      expect(response.status).toBe(400);
+    });
+
+    it("rejects unknown fields", async () => {
+      const response = await post("/auth/register/start", {
+        username: "alice",
+        registrationRequest: "x",
+        extra: true,
+      });
+      expect(response.status).toBe(400);
+    });
+
+    it("rejects an oversized registration request", async () => {
+      const response = await post("/auth/register/start", {
+        username: "alice",
+        registrationRequest: "x".repeat(4097),
+      });
+      expect(response.status).toBe(400);
+    });
+
+    it("rejects a malformed registration request", async () => {
+      const response = await post("/auth/register/start", {
+        username: "alice",
+        registrationRequest: "not-a-registration-request",
+      });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ error: "INVALID_REGISTRATION_REQUEST" });
+    });
+  });
+
+  it("returns a registration response", async () => {
+    const { registrationResponse } = await startRegistration("alice");
+    expect(registrationResponse).toEqual(expect.any(String));
+  });
+});
+
+describe("POST /api/auth/register/finish", () => {
+  describe("validation", () => {
+    it.each(["Alice", "ab", "a".repeat(33), "al ice", "al-ice"])(
+      "rejects username %j",
+      async (username) => {
+        const response = await post("/auth/register/finish", {
+          username,
+          registrationRecord: "x",
+        });
+        expect(response.status).toBe(400);
+      },
+    );
+
+    it("rejects a registrationRequest field", async () => {
+      const response = await post("/auth/register/finish", {
+        username: "alice",
+        registrationRequest: "x",
+        registrationRecord: "x",
+      });
+      expect(response.status).toBe(400);
+    });
+
+    it("rejects an oversized registration record", async () => {
+      const response = await post("/auth/register/finish", {
+        username: "alice",
+        registrationRecord: "x".repeat(4097),
+      });
+      expect(response.status).toBe(400);
+    });
+  });
+
+  it("creates the user", async () => {
+    const registrationRecord = await createRegistrationRecord("alice");
+
+    const response = await post("/auth/register/finish", {
+      username: "alice",
+      registrationRecord,
+    });
+    expect(response.status).toBe(204);
+    expect(response.body).toBeNull();
+    expect((await login("alice")).status).toBe(200);
+  });
+
+  it("returns 409 when the user already exists", async () => {
+    const registrationRecord = await createRegistrationRecord("alice");
+    await post("/auth/register/finish", { username: "alice", registrationRecord });
+
+    const response = await post("/auth/register/finish", {
+      username: "alice",
+      registrationRecord: await createRegistrationRecord("alice"),
+    });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: "USER_ALREADY_EXISTS" });
+  });
+
+  it("returns 409 for the same registration record again", async () => {
+    const registrationRecord = await createRegistrationRecord("alice");
+    await post("/auth/register/finish", { username: "alice", registrationRecord });
+
+    const response = await post("/auth/register/finish", {
+      username: "alice",
+      registrationRecord,
+    });
+    expect(response.status).toBe(409);
+  });
+});
+
 describe("POST /api/auth/login/start", () => {
   describe("validation", () => {
     it.each(["Alice", "ab", "a".repeat(33), "al ice", "al-ice"])(

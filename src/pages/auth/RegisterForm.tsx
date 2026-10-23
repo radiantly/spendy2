@@ -4,7 +4,7 @@ import { toast } from "sonner";
 import TextField from "../../components/TextField.tsx";
 import PasswordStrengthMeter from "../../components/PasswordStrengthMeter.tsx";
 import PasswordVisibilityToggle from "../../components/PasswordVisibilityToggle.tsx";
-import { registerUser } from "../../api/users.ts";
+import { registerUser } from "../../api/auth.ts";
 import { useAuth } from "../../auth/useAuth.ts";
 import { usePasswordStrength } from "../../hooks/usePasswordStrength.ts";
 import { warnSessionNotSaved } from "./toasts.ts";

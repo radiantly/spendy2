@@ -3,8 +3,7 @@ import babel from "@rolldown/plugin-babel";
 import { defineConfig } from "vite";
 import { cloudflare } from "@cloudflare/vite-plugin";
 import tailwindcss from "@tailwindcss/vite";
-import { openapi } from "./vite-plugin-openapi.ts";
-import pkg from "./package.json" with { type: "json" };
+import { openapi } from "./vite-plugins/openapi.ts";
 
 // https://vite.dev/config/
 export default defineConfig({
@@ -12,11 +11,7 @@ export default defineConfig({
     react(),
     tailwindcss(),
     babel({ presets: [reactCompilerPreset()] }),
-    openapi({
-      app: "./worker/app.ts",
-      fileName: "openapi.json",
-      document: { info: { title: "Spendy API", version: pkg.version } },
-    }),
+    openapi({ app: "./worker/app.ts", fileName: "openapi.json" }),
     cloudflare(),
   ],
   worker: { format: "es" },

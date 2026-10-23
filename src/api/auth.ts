@@ -1,6 +1,10 @@
 import * as opaque from "@serenity-kit/opaque";
 import { z } from "zod";
 
+export type RegisterResult =
+  | { success: true }
+  | { success: false; code: "USER_ALREADY_EXISTS" | "REGISTRATION_FAILED" };
+
 export type LoginResult =
   | { success: true; token: string; exportKey: string }
   | { success: false; code: LoginErrorCode };
@@ -11,15 +15,52 @@ export type LoginResult =
  */
 export type LoginErrorCode = "INVALID_LOGIN" | "RATE_LIMITED" | "LOGIN_FAILED";
 
+const RegistrationStartResponse = z.object({ registrationResponse: z.string() });
 const LoginStartResponse = z.object({ loginResponse: z.string() });
 const LoginFinishResponse = z.object({ token: z.string() });
 
-function postLogin(step: "start" | "finish", body: object) {
-  return fetch(`/api/auth/login/${step}`, {
+function postAuth(path: string, body: object) {
+  return fetch(`/api/auth/${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
+}
+
+/**
+ * Registers a user with the OPAQUE protocol. The password never leaves
+ * the client; only the registration request and record are sent.
+ *
+ * Network failures throw.
+ */
+export async function registerUser(username: string, password: string): Promise<RegisterResult> {
+  await opaque.ready;
+
+  const { clientRegistrationState, registrationRequest } = opaque.client.startRegistration({
+    password,
+  });
+
+  const startRes = await postAuth("register/start", { username, registrationRequest });
+  if (!startRes.ok) {
+    return { success: false, code: "REGISTRATION_FAILED" };
+  }
+  const { registrationResponse } = RegistrationStartResponse.parse(await startRes.json());
+
+  const { registrationRecord } = opaque.client.finishRegistration({
+    clientRegistrationState,
+    registrationResponse,
+    password,
+  });
+
+  const finishRes = await postAuth("register/finish", { username, registrationRecord });
+  if (finishRes.status === 409) {
+    return { success: false, code: "USER_ALREADY_EXISTS" };
+  }
+  if (!finishRes.ok) {
+    return { success: false, code: "REGISTRATION_FAILED" };
+  }
+
+  return { success: true };
 }
 
 /**
@@ -32,7 +73,7 @@ export async function loginUser(username: string, password: string): Promise<Log
 
   const { clientLoginState, startLoginRequest } = opaque.client.startLogin({ password });
 
-  const startRes = await postLogin("start", { username, startLoginRequest });
+  const startRes = await postAuth("login/start", { username, startLoginRequest });
   if (startRes.status === 429) {
     return { success: false, code: "RATE_LIMITED" };
   }
@@ -47,7 +88,7 @@ export async function loginUser(username: string, password: string): Promise<Log
     return { success: false, code: "INVALID_LOGIN" };
   }
 
-  const finishRes = await postLogin("finish", {
+  const finishRes = await postAuth("login/finish", {
     username,
     finishLoginRequest: loginResult.finishLoginRequest,
   });

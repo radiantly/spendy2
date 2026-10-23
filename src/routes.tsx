@@ -1,14 +1,16 @@
 import type { RouteObject } from "react-router";
 import type { IconContext } from "react-icons";
 import AuthPage from "./pages/auth/AuthPage.tsx";
+import DocsPage from "./pages/docs/DocsPage.tsx";
 import OverviewPage from "./pages/overview/OverviewPage.tsx";
 import AppShell, { type ShellPage } from "./pages/shell/AppShell.tsx";
 import TransactionsPage from "./pages/transactions/TransactionsPage.tsx";
 
-/** The pages behind login. The shell keeps them all rendered, showing the one at the URL. */
+/** The pages in the shell. It keeps them rendered, showing the one at the URL. */
 const shellPages: ShellPage[] = [
-  { path: "/", element: <OverviewPage /> },
-  { path: "/transactions", element: <TransactionsPage /> },
+  { path: "/", element: <OverviewPage />, kind: "database" },
+  { path: "/transactions", element: <TransactionsPage />, kind: "database" },
+  { path: "/docs", element: <DocsPage />, kind: "public" },
 ];
 
 export const routes: RouteObject[] = [

@@ -1,6 +1,6 @@
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { describe, expect, it } from "vitest";
-import app from "./app.ts";
+import app, { openAPIDocument } from "./app.ts";
 import { createApiRoute, fixedResponse } from "./openapi.ts";
 
 describe("createApiRoute", () => {
@@ -73,12 +73,9 @@ describe("fixedResponse", () => {
 });
 
 describe("the OpenAPI document", () => {
-  it("documents every route", () => {
-    const document = app.getOpenAPI31Document({
-      openapi: "3.1.0",
-      info: { title: "Spendy API", version: "0.0.0" },
-    });
+  const document = app.getOpenAPI31Document({ ...openAPIDocument, openapi: "3.1.0" });
 
+  it("documents every route", () => {
     const documented = Object.entries(document.paths ?? {}).flatMap(([path, operations]) =>
       Object.keys(operations).map((method) => `${method.toUpperCase()} ${path}`),
     );
@@ -87,5 +84,16 @@ describe("the OpenAPI document", () => {
       app.routes.map(({ method, path }) => `${method} ${path.replaceAll(/:(\w+)/g, "{$1}")}`),
     );
     expect(documented.toSorted()).toEqual([...routed].toSorted());
+  });
+
+  it("describes exactly the tags its operations use", () => {
+    const used = new Set(
+      Object.values(document.paths ?? {}).flatMap((operations) =>
+        Object.values(operations).flatMap((operation) => operation.tags ?? []),
+      ),
+    );
+
+    expect(document.tags?.map(({ name }) => name).toSorted()).toEqual([...used].toSorted());
+    for (const tag of document.tags ?? []) expect(tag.description).toBeTruthy();
   });
 });

@@ -168,6 +168,22 @@ describe("AppShell", () => {
     expect(rect(avatar).top).toBeLessThan(tabs.bottom);
   });
 
+  it("keeps the header on one line at 768px with every tab and Save", async () => {
+    await page.viewport(768, 800);
+    await loggedIn(await storedDatabase(TWO_TRANSACTIONS));
+    await renderApp("/transactions");
+    await editCounterparty("Corner Market", "Corner Shop");
+    const header = page.getByRole("banner");
+    await expect.element(header.getByRole("link", { name: "Documentation" })).toBeVisible();
+    await expect.element(header.getByRole("button", { name: "Save" })).toBeVisible();
+
+    const tabs = rect(page.getByRole("navigation", { name: "Main" }));
+    expect(rect(header.getByRole("button", { name: "Save" })).top).toBeLessThan(tabs.bottom);
+    expect(rect(page.getByRole("img", { name: "Logged in as alice" })).top).toBeLessThan(
+      tabs.bottom,
+    );
+  });
+
   describe("the tabs' pill", () => {
     /** Picks Transactions, the pill having been under Overview. */
     async function pickTransactions() {
