@@ -67,7 +67,7 @@ type EditableCellProps = {
   id: string;
   display: CellDisplay;
   align?: "end";
-  mono?: boolean;
+  tabular?: boolean;
   /** The text an edit starts with. Absent for read-only cells. */
   editText?: string;
   /** The prefix an edit starts with, for a cell whose prefix is edited too. */
@@ -107,7 +107,7 @@ function EditableCell({
   id,
   display,
   align,
-  mono,
+  tabular,
   editText,
   editPrefix,
   active,
@@ -154,7 +154,7 @@ function EditableCell({
       style={rangeEdges && rangeOutline(rangeEdges)}
       className={`relative min-w-0 border-r border-b border-line px-2 last:border-r-0 ${
         rangeEdges && !active ? "bg-focus/15" : ""
-      } ${active ? "outline-2 -outline-offset-2 outline-focus" : ""} ${align === "end" ? "text-right" : ""} ${mono ? "font-mono" : ""}`}
+      } ${active ? "outline-2 -outline-offset-2 outline-focus" : ""} ${align === "end" ? "text-right" : ""} ${tabular ? "tabular-nums" : ""}`}
     >
       {editing ? (
         <CellInput {...editing} align={align} />
@@ -184,17 +184,6 @@ function stopPress(event: MouseEvent) {
 }
 
 type CellInputProps = CellEditing & { align?: "end" };
-
-/**
- * The width of an input of a cell with a prefix: only as wide as `value`,
- * so the prefix and the text sit together, as the cell shows them. Those
- * cells (amounts) are monospaced: a `ch` a character. And a pixel for the
- * caret after the last one, without which WebKit scrolls the text to fit
- * it; the inputs' margins take it back, so the text stays put.
- */
-function fittedWidth(value: string) {
-  return `calc(${Math.max([...value].length, 1)}ch + 1px)`;
-}
 
 /**
  * The input a cell turns into. Enter submits and moves down (Shift+Enter, up);
@@ -372,9 +361,11 @@ function CellInput({
     "aria-invalid": error !== null || undefined,
     "aria-errormessage": showError ? errorId : undefined,
   };
-  const inputClass = `min-w-0 cursor-text bg-transparent outline-none ${
-    paused ? "caret-transparent selection:bg-transparent" : ""
-  }`;
+  // With a prefix, each input is only as wide as its text, so the prefix and
+  // the text sit together, as the cell shows them; empty, as wide as a character.
+  const inputClass = `cursor-text bg-transparent outline-none ${
+    hasPrefix ? "min-w-[1ch] [field-sizing:content]" : "min-w-0"
+  } ${paused ? "caret-transparent selection:bg-transparent" : ""}`;
 
   return (
     <>
@@ -385,20 +376,24 @@ function CellInput({
         } ${align === "end" ? "justify-end" : ""}`}
       >
         {initialPrefix && (
-          <input
-            ref={prefixRef}
-            value={prefix}
-            aria-label={initialPrefix.label}
-            onChange={(event) => handlePartChange("prefix", event.target)}
-            onKeyDown={handleKeyDown}
-            onBlur={handleBlur}
-            // Its caret and selection are the browser's, not placed by the grid.
-            onMouseDown={(event) => event.stopPropagation()}
-            {...invalid}
-            style={{ width: fittedWidth(prefix) }}
-            // A space before the text, less the caret's pixel.
-            className={`mr-[calc(1ch-1px)] text-ink-muted focus:text-ink ${inputClass}`}
-          />
+          <>
+            <input
+              ref={prefixRef}
+              value={prefix}
+              aria-label={initialPrefix.label}
+              onChange={(event) => handlePartChange("prefix", event.target)}
+              onKeyDown={handleKeyDown}
+              onBlur={handleBlur}
+              // Its caret and selection are the browser's, not placed by the grid.
+              onMouseDown={(event) => event.stopPropagation()}
+              {...invalid}
+              className={`text-ink-muted focus:text-ink ${inputClass}`}
+            />
+            {/* The space before the text, as wide as the cell shows it. */}
+            <span aria-hidden className="whitespace-pre">
+              {" "}
+            </span>
+          </>
         )}
         <input
           ref={inputRef}
@@ -415,11 +410,8 @@ function CellInput({
           aria-controls={menu ? menuId : undefined}
           aria-activedescendant={showMenu && highlight >= 0 ? `${menuId}-${highlight}` : undefined}
           {...invalid}
-          style={hasPrefix ? { width: fittedWidth(text) } : undefined}
-          // With a prefix, the input fits its text, and its caret's pixel
-          // goes into the cell's padding.
-          className={`${inputClass} ${hasPrefix ? "-mr-px" : "flex-1"} ${
-            align === "end" && !hasPrefix ? "text-right" : ""
+          className={`${inputClass} ${
+            hasPrefix ? "" : `flex-1 ${align === "end" ? "text-right" : ""}`
           }`}
         />
       </div>

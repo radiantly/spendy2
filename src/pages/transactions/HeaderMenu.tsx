@@ -135,7 +135,7 @@ function HeaderMenu({
         onMouseDown={(event) => event.stopPropagation()}
         // Over the browser's popover defaults: in the middle of the window,
         // padded. The header's type is inherited, so it's reset.
-        className="peer m-0 mt-1 w-max max-w-96 overflow-y-auto rounded-md border border-line bg-surface p-0 py-1 font-sans text-sm tracking-normal whitespace-nowrap text-ink normal-case shadow-lg outline-none [inset:auto]"
+        className="peer m-0 mt-1 w-max max-w-96 overflow-y-auto rounded-md border border-line bg-surface p-0 py-1 text-sm font-normal whitespace-nowrap text-ink shadow-lg outline-none [inset:auto]"
         style={{
           positionAnchor: anchor,
           // Under the header, from its start; flipped to end at its end where
@@ -157,13 +157,15 @@ function HeaderMenu({
         tabIndex={-1}
         popoverTarget={menuId}
         style={{ anchorName: anchor }}
-        className={`flex size-full min-w-0 cursor-default items-center gap-1.5 px-2 uppercase outline-none hover:bg-field hover:text-ink peer-open:bg-field peer-open:text-ink ${
-          sorted || filtered ? "text-ink" : ""
-        }`}
+        // The label's colour stays the same whatever the column does: the
+        // arrow and the badge say it sorts or filters.
+        className="flex size-full min-w-0 cursor-default items-center gap-1.5 px-2 outline-none hover:bg-field hover:text-ink peer-open:bg-field peer-open:text-ink"
       >
         <span className="truncate">{label}</span>
-        {sorted === "ascending" && <FiArrowUp aria-hidden className="shrink-0 stroke-3" />}
-        {sorted === "descending" && <FiArrowDown aria-hidden className="shrink-0 stroke-3" />}
+        {sorted === "ascending" && <FiArrowUp aria-hidden className="shrink-0 stroke-3 text-ink" />}
+        {sorted === "descending" && (
+          <FiArrowDown aria-hidden className="shrink-0 stroke-3 text-ink" />
+        )}
         {filtered && (
           <span className="grid size-4 shrink-0 place-items-center rounded-full bg-lime text-ink-on-lime">
             <FaFilter aria-hidden className="text-[8px]" />
@@ -186,9 +188,7 @@ export function MenuGroup({ title, children }: { title: string; children: ReactN
   return (
     // min-w-0: fieldsets are otherwise as wide as their widest label, so long ones wouldn't be cut short.
     <fieldset className="min-w-0 border-b border-line pb-1 last:border-b-0">
-      <legend className="px-3 pt-1.5 pb-1 font-mono text-xs tracking-widest text-ink-muted uppercase">
-        {title}
-      </legend>
+      <legend className="px-3 pt-1.5 pb-1 text-xs font-medium text-ink-muted">{title}</legend>
       {children}
     </fieldset>
   );

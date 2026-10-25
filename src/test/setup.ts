@@ -1,4 +1,4 @@
-import { afterEach, vi } from "vitest";
+import { afterEach, beforeAll, vi } from "vitest";
 import { locators, type Locator } from "vitest/browser";
 import { clear, createStore } from "idb-keyval";
 import { toast } from "sonner";
@@ -22,6 +22,25 @@ locators.extend({
   shown() {
     return "visible=true";
   },
+});
+
+// The browser loads a font once text first needs it, showing a fallback
+// until then: a test measuring text could measure the fallback, and later
+// text the font. So they're loaded before any test runs.
+beforeAll(async () => {
+  const families = [
+    "Geist Variable",
+    "Geist Mono Variable",
+    "Bricolage Grotesque Variable",
+    "Gloria Hallelujah",
+  ];
+  await Promise.all(
+    families.map(async (family) => {
+      const faces = await document.fonts.load(`1em "${family}"`);
+      // Loading a font with no faces does nothing, rather than failing.
+      if (faces.length === 0) throw new Error(`No font face for ${family}`);
+    }),
+  );
 });
 
 // The store session.ts uses. Cleared directly rather than through

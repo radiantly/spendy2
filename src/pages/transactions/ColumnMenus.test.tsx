@@ -321,6 +321,17 @@ describe("the header", () => {
 
     await expect.element(headerButton("Date")).toHaveAccessibleName("Date (filtered)");
   });
+
+  it("labels every column in the same colour, sorting and filtering or not", async () => {
+    await renderTable();
+    // Date sorts the transactions already.
+    await open("Date");
+    await userEvent.click(radio("This month"));
+    await userEvent.keyboard("{Escape}");
+
+    const colorOf = (name: string) => getComputedStyle(headerButton(name).element()).color;
+    expect(colorOf("Date")).toBe(colorOf("Account"));
+  });
 });
 
 describe("the date menu", () => {

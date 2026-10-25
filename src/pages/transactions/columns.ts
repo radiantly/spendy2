@@ -86,8 +86,8 @@ export type TransactionColumnMeta = {
   /** The column's CSS grid track. */
   track: string;
   align?: "end";
-  /** For numbers, so digits line up. */
-  mono?: boolean;
+  /** For numbers: tabular figures, so digits line up. */
+  tabular?: boolean;
   display: (row: TransactionRow) => CellDisplay;
   /** Absent for read-only columns. */
   editor?: CellEditor;
@@ -104,7 +104,7 @@ export const columns = helper.columns([
     header: "Date",
     meta: {
       track: "minmax(6.5rem, 7rem)",
-      mono: true,
+      tabular: true,
       headerMenu: "date",
       display: (row) => ({ text: row.naive_date }),
       editor: {
@@ -167,7 +167,7 @@ export const columns = helper.columns([
     meta: {
       track: "minmax(8rem, 1fr)",
       align: "end",
-      mono: true,
+      tabular: true,
       headerMenu: "amount",
       display: (row) => ({
         prefix: `${row.currency} `,

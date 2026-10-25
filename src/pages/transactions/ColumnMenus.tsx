@@ -147,7 +147,7 @@ function DateMenu({ header, view, onViewChange }: MenuProps) {
 }
 
 const dateInputClass =
-  "h-7 rounded border border-line bg-field px-1.5 font-mono text-xs outline-none focus-visible:outline-2 focus-visible:outline-focus";
+  "h-7 rounded border border-line bg-field px-1.5 text-xs tabular-nums outline-none focus-visible:outline-2 focus-visible:outline-focus";
 
 /** A custom range's dates, under its option. */
 function CustomRange({

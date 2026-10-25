@@ -626,7 +626,7 @@ function TransactionsTable({
       }}
       className="cursor-default text-sm outline-none"
     >
-      <div role="rowgroup" className="sticky top-0 z-20 bg-canvas">
+      <div role="rowgroup" className="sticky top-0 z-20 bg-surface">
         {table.getHeaderGroups().map((group) => (
           <div
             key={group.id}
@@ -650,7 +650,7 @@ function TransactionsTable({
                       : undefined
                   }
                   onMouseDown={(event) => handleHeaderPress(column, event)}
-                  className={`flex items-center truncate border-r border-line font-mono text-xs tracking-widest text-ink-muted uppercase last:border-r-0 ${
+                  className={`flex items-center truncate border-r border-line font-medium text-ink-muted last:border-r-0 ${
                     headerMenu && menus ? "" : "px-2"
                   } ${activeHeader === column ? "outline-2 -outline-offset-2 outline-focus" : ""}`}
                 >
@@ -708,7 +708,7 @@ function TransactionsTable({
                     id={cellId(position)}
                     display={meta.display(row)}
                     align={meta.align}
-                    mono={meta.mono}
+                    tabular={meta.tabular}
                     editText={editText}
                     editPrefix={editPrefix}
                     active={selection !== null && samePosition(selection.active, position)}
