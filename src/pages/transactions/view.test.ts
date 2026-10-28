@@ -2,17 +2,18 @@ import { beforeEach, describe, expect, it } from "vitest";
 import type { ListedTransaction } from "../../db/queries/transactions.ts";
 import { DEFAULT_VIEW, filterValues, viewOrder, type TransactionsView } from "./view.ts";
 
-let seq = 0;
+let count = 0;
 beforeEach(() => {
-  seq = 0;
+  count = 0;
 });
 
-/** A transaction, imported after the ones before it. */
+/** A transaction without a time, imported after the ones before it. */
 function row(overrides: Partial<ListedTransaction> = {}): ListedTransaction {
-  seq++;
+  count++;
   return {
-    id: `t${seq}`,
-    seq,
+    id: `t${count}`,
+    timestamp: null,
+    sort_key: count,
     naive_date: "2026-10-10",
     account_name: "Checking",
     counterparty: "Shop",
@@ -42,6 +43,9 @@ function shown(rows: ListedTransaction[], changes: Partial<TransactionsView> = {
 }
 
 const ids = (rows: ListedTransaction[]) => rows.map(({ id }) => id);
+/** A time on 2026-10-10 (`HH:MM`, UTC), as a timestamp. */
+const at = (time: string) => Date.parse(`2026-10-10T${time}Z`) / 1000;
+const OLDEST_FIRST = { sort: { column: "date", direction: "ascending" } } as const;
 
 describe("viewOrder", () => {
   describe("sorting by date", () => {
@@ -68,9 +72,49 @@ describe("viewOrder", () => {
       const first = row({ naive_date: "2026-10-05" });
       const second = row({ naive_date: "2026-10-05" });
 
-      expect(
-        shown([second, first, older], { sort: { column: "date", direction: "ascending" } }),
-      ).toEqual(ids([older, first, second]));
+      expect(shown([second, first, older], OLDEST_FIRST)).toEqual(ids([older, first, second]));
+    });
+
+    it("shows a day's with a time first, the latest first, then those without", () => {
+      const evening = row({ timestamp: at("18:00") });
+      const morning = row({ timestamp: at("09:00") });
+      const untimed = row();
+
+      expect(shown([untimed, morning, evening])).toEqual(ids([evening, morning, untimed]));
+    });
+
+    it("shows the oldest first: on a day, those without a time first, as if at its start", () => {
+      const evening = row({ timestamp: at("18:00") });
+      const untimed = row();
+      const morning = row({ timestamp: at("09:00") });
+
+      expect(shown([evening, untimed, morning], OLDEST_FIRST)).toEqual(
+        ids([untimed, morning, evening]),
+      );
+    });
+
+    it("shows a transaction on its date, whatever day its time is on", () => {
+      const later = row({ naive_date: "2026-10-05", timestamp: at("12:00") });
+      const next = row({ naive_date: "2026-10-06" });
+
+      expect(shown([later, next])).toEqual(ids([next, later]));
+    });
+
+    it.each([
+      ["the same time", at("12:00")],
+      ["no time", null],
+    ])("shows a day's with %s by sort key, the highest first", (_, timestamp) => {
+      const higher = row({ timestamp, sort_key: 2 });
+      const lower = row({ timestamp, sort_key: 1 });
+
+      expect(shown([lower, higher])).toEqual(ids([higher, lower]));
+    });
+
+    it("shows a day's with the same sort key by id, the highest first", () => {
+      const a = row({ id: "a", sort_key: 1 });
+      const b = row({ id: "b", sort_key: 1 });
+
+      expect(shown([a, b])).toEqual(ids([b, a]));
     });
   });
 

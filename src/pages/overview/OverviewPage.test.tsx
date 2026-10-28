@@ -21,7 +21,7 @@ vi.mock("../../lib/period.ts", async (importOriginal) => ({
 
 /** A transaction's SQL. Amounts are in whole units, stored in hundredths: every currency here has 2. */
 const insert = (
-  seq: number,
+  n: number,
   date: string,
   account: string,
   amount: number,
@@ -35,15 +35,15 @@ const insert = (
     duplicateOf?: string;
   } = {},
 ) => `
-  INSERT INTO transactions (seq, id, source, account_name, transfer_account, amount, currency, counterparty, category, duplicate_of, naive_date)
-  VALUES (${seq}, '${transactionId(seq)}', ${SOURCE_HASH_SQL}, '${account}', ${extra.transfer ? `'${extra.transfer}'` : "NULL"},
+  INSERT INTO transactions (sort_key, id, source, account_name, transfer_account, amount, currency, counterparty, category, duplicate_of, naive_date)
+  VALUES (${n}, '${transactionId(n)}', ${SOURCE_HASH_SQL}, '${account}', ${extra.transfer ? `'${extra.transfer}'` : "NULL"},
     ${Math.round(amount * 100)}, '${extra.currency ?? "USD"}',
     '${counterparty}', ${category === null ? "NULL" : `'${category}'`},
     ${extra.duplicateOf ? `'${extra.duplicateOf}'` : "NULL"}, '${date}')
   ${Object.entries(extra.conversions ?? {})
     .map(
       ([currency, value]) =>
-        `; INSERT INTO conversions VALUES ('${transactionId(seq)}', '${currency}', ${Math.round(value * 100)})`,
+        `; INSERT INTO conversions VALUES ('${transactionId(n)}', '${currency}', ${Math.round(value * 100)})`,
     )
     .join("")}
 `;

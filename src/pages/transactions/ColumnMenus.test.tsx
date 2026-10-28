@@ -22,15 +22,16 @@ const CATEGORIES: CategoryParent[] = [
   { name: "Rent", parent: null },
 ];
 
-let seq = 0;
+let count = 0;
 function transaction(overrides: Partial<ListedTransaction> = {}): ListedTransaction {
-  seq++;
+  count++;
   return {
-    id: `t${seq}`,
-    seq,
+    id: `t${count}`,
+    timestamp: null,
+    sort_key: count,
     naive_date: "2026-10-10",
     account_name: "Checking",
-    counterparty: `Shop ${seq}`,
+    counterparty: `Shop ${count}`,
     category: "Groceries",
     amount: -100,
     decimals: 2,
@@ -48,7 +49,7 @@ let view: TransactionsView;
 let onCommit: (changes: TransactionChange[]) => void;
 
 beforeEach(async () => {
-  seq = 0;
+  count = 0;
   view = DEFAULT_VIEW;
   onCommit = vi.fn();
   await page.viewport(1280, 800);

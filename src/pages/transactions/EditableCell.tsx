@@ -14,7 +14,7 @@ import {
 } from "react";
 import { toast } from "sonner";
 import { mapOffset, textOffsetAtPoint } from "./caret.ts";
-import type { CellHistory } from "./cellHistory.ts";
+import type { EditHandle } from "./editHandle.ts";
 import { historyKey, type HistoryDirection } from "../../lib/historyKey.ts";
 import { defaultHighlight, menuItems, type MenuConfig, type MenuItem } from "./menu.ts";
 import { splitChange, type Part } from "./prefix.ts";
@@ -62,12 +62,12 @@ export type CellEditing = {
   finish: (how: FinishHow) => void;
   /** Undoes or redoes the table's last change, once the edit has finished. */
   history: (direction: HistoryDirection) => void;
-  /** Set to the edit's undo and redo from outside the cell, while it lasts. */
-  historyRef: Ref<CellHistory>;
+  /** Set to what can be done to the edit from outside the cell, while it lasts. */
+  handleRef: Ref<EditHandle>;
   /**
    * Told when the edit starts to change the cell, and when it no longer
    * does, or ends: what its undo and redo from outside the cell can do
-   * depends on it (see `CellHistory`).
+   * depends on it (see `EditHandle`).
    */
   onModifiedChange: (modified: boolean) => void;
 };
@@ -184,7 +184,7 @@ type CellInputProps = CellEditing & { align?: "end" };
  * keeping the cell active; Tab submits and moves on. Undo and redo (Ctrl+Z,
  * Ctrl+Y) are the input's own in an edit started by typing, or once its text
  * has changed; otherwise they finish the edit and undo or redo the table's
- * last change, as from outside the cell (see `CellHistory`). Leaving the cell
+ * last change, as from outside the cell (see `EditHandle`). Leaving the cell
  * submits too, but can't show an error there, so an invalid value is undone
  * instead. With a `menu`, it's a combobox: up and down move through the
  * options, and Enter, Tab or leaving picks the highlighted one.
@@ -208,7 +208,7 @@ function CellInput({
   submit,
   finish,
   history,
-  historyRef,
+  handleRef,
   onModifiedChange,
   align,
 }: CellInputProps) {
@@ -223,7 +223,7 @@ function CellInput({
     onModifiedChange(true);
     return () => onModifiedChange(false);
   }, [modified, onModifiedChange]);
-  useImperativeHandle(historyRef, () => ({ undoOrRedo }));
+  useImperativeHandle(handleRef, () => ({ undoOrRedo, settle }));
   const prefixRef = useRef<HTMLInputElement>(null);
   const [error, setError] = useState<string | null>(null);
   // Until the user types, the menu lists every option.
@@ -320,18 +320,22 @@ function CellInput({
     );
   }
 
-  /** See `CellHistory`. */
+  /** See `EditHandle`. */
   function undoOrRedo(direction: HistoryDirection) {
     if (!modified) {
       done("stay");
       history(direction);
-    } else if (direction === "undo") {
-      // Saving what comes to the cell's value again changes nothing, so it's
-      // the change before it that's undone, as if unmodified.
-      const saved = submitAsLeaving().ok;
-      done("stay");
-      if (saved) history("undo");
     }
+    // Saving what comes to the cell's value again changes nothing, so it's
+    // the change before it that's undone, as if unmodified.
+    else if (direction === "undo" && settle()) history("undo");
+  }
+
+  /** See `EditHandle`. */
+  function settle() {
+    const saved = submitAsLeaving().ok;
+    done("stay");
+    return saved;
   }
 
   function handleChange(value: string) {

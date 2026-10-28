@@ -4,10 +4,16 @@ import type { Database } from "./database.ts";
 import type { EditHistory } from "./editHistory.ts";
 import type { EditedCell } from "./queries/transactions.ts";
 
-/** An edit to transactions: the cells it changed, and what it did, in words. */
+/**
+ * An edit to transactions: the cells it changed, every transaction it
+ * changed (theirs, and others it moved, like a day's numbered again), and
+ * what it did, in words.
+ */
 export type TransactionEdit = {
   kind: "transaction";
   cells: readonly EditedCell[];
+  /** By id: read again after an undo or redo of it, which may add or remove them. */
+  transactions: readonly string[];
   /** What it did, to follow "Undid" or "Redid": "category of Corner Market: Groceries → Coffee". */
   description: string;
 };

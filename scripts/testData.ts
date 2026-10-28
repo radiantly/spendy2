@@ -155,7 +155,7 @@ export function generateTestData(
         db.exec({ sql: "INSERT INTO categories VALUES (?, ?)", bind: [name, parent] });
 
     const insert = db.prepare(`
-      INSERT INTO transactions (seq, id, source, account_name, transfer_account, amount,
+      INSERT INTO transactions (sort_key, id, source, account_name, transfer_account, amount,
         currency, counterparty, category, naive_date, remarks)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
@@ -164,12 +164,12 @@ export function generateTestData(
     `);
     const insertSource = db.prepare("INSERT OR IGNORE INTO sources (hash, remarks) VALUES (?, ?)");
 
-    // Spread over the past ten years, oldest first, so seq follows the dates.
+    // Spread over the past ten years, oldest first, so sort_key follows the dates.
     const end = Date.UTC(2026, 9, 10);
     const start = end - 10 * 365 * 86_400_000;
     try {
-      for (let seq = 1; seq <= count; seq++) {
-        const date = new Date(start + ((end - start) * seq) / count).toISOString().slice(0, 10);
+      for (let sortKey = 1; sortKey <= count; sortKey++) {
+        const date = new Date(start + ((end - start) * sortKey) / count).toISOString().slice(0, 10);
         // As if each month were imported from its own statement.
         const statement = `statement ${date.slice(0, 7)}.csv`;
         const source = createHash("sha256").update(statement).digest();
@@ -228,7 +228,7 @@ export function generateTestData(
         const id = crypto.randomUUID();
         insert
           .bind([
-            seq,
+            sortKey,
             id,
             source,
             row.account.name,

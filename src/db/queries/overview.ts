@@ -12,6 +12,8 @@
  * 12.50); dates are `YYYY-MM-DD`.
  */
 
+import { newestFirst } from "./transactions.ts";
+
 /**
  * The display currency whose overview a transaction in `transactions` is in:
  * its account's, or its own when the account has none (its transactions stay
@@ -264,8 +266,8 @@ export type RecentTransaction = {
 };
 
 /**
- * The latest transactions in the period, newest first. Bind
- * `{ $display, $from, $to, $limit }`.
+ * The latest transactions in the period, newest first (see `newestFirst`).
+ * Bind `{ $display, $from, $to, $limit }`.
  */
 export const LIST_RECENT_TRANSACTIONS = `${IN_PERIOD}
   SELECT
@@ -284,6 +286,6 @@ export const LIST_RECENT_TRANSACTIONS = `${IN_PERIOD}
   JOIN currencies AS display_currency ON display_currency.code = $display
   LEFT JOIN categories AS category ON category.name = t.category
   LEFT JOIN categories AS parent ON parent.name = category.parent
-  ORDER BY t.naive_date DESC, t.seq DESC
+  ORDER BY ${newestFirst("t")}
   LIMIT $limit
 `;

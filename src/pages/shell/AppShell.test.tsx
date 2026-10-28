@@ -6,6 +6,7 @@ import { Database, openDatabase } from "../../db/database.ts";
 import { GET_OVERVIEW_META } from "../../db/queries/overview.ts";
 import { LIST_CATEGORIES, LIST_TRANSACTIONS } from "../../db/queries/transactions.ts";
 import { ClosedError } from "../../db/rpc.ts";
+import { today } from "../../lib/period.ts";
 import { loadSession } from "../../lib/session.ts";
 import { itFailsInFirefox } from "../../test/browsers.ts";
 import { SOURCE_HASH_SQL, TOKEN, transactionId } from "../../test/fixtures.ts";
@@ -36,9 +37,9 @@ const TWO_TRANSACTIONS = `
   INSERT INTO accounts VALUES ('Savings', 'USD', 'Bank', NULL);
   INSERT INTO sources (hash, remarks) VALUES (${SOURCE_HASH_SQL}, 'statement.csv');
   INSERT INTO categories VALUES ('Groceries', NULL);
-  INSERT INTO transactions (seq, id, source, account_name, amount, currency, counterparty, category, naive_date)
+  INSERT INTO transactions (sort_key, id, source, account_name, amount, currency, counterparty, category, naive_date)
     VALUES (1, '${OLDER}', ${SOURCE_HASH_SQL}, 'Everyday Checking', -500, 'USD', 'Café Lumen', NULL, '2026-10-01');
-  INSERT INTO transactions (seq, id, source, account_name, amount, currency, counterparty, category, naive_date)
+  INSERT INTO transactions (sort_key, id, source, account_name, amount, currency, counterparty, category, naive_date)
     VALUES (2, '${NEWER}', ${SOURCE_HASH_SQL}, 'Everyday Checking', -4620, 'USD', 'Corner Market', 'Groceries', '2026-10-09')
 `;
 /** Corner Market's USD -46.20 is also EUR -42.10 and SGD -62.30. */
@@ -84,6 +85,7 @@ const holdNextUpdate = () =>
     statements.some(({ sql }) => sql.trimStart().startsWith("UPDATE")),
   );
 
+const DATE = 0;
 const ACCOUNT = 1;
 const COUNTERPARTY = 2;
 const CATEGORY = 3;
@@ -474,7 +476,7 @@ describe("TransactionsPage", () => {
     expect(showError).not.toHaveBeenCalled();
     const [, blob] = vi.mocked(uploadDatabase).mock.calls[0]!;
     expect(
-      await queryUploaded(blob, "SELECT id, category FROM transactions ORDER BY seq DESC"),
+      await queryUploaded(blob, "SELECT id, category FROM transactions ORDER BY sort_key DESC"),
     ).toEqual([
       { id: NEWER, category: null },
       { id: OLDER, category: "Groceries" },
@@ -631,7 +633,7 @@ describe("TransactionsPage", () => {
       expect(
         await queryUploaded(
           blob,
-          "SELECT id, counterparty, category, amount, remarks FROM transactions ORDER BY seq DESC",
+          "SELECT id, counterparty, category, amount, remarks FROM transactions ORDER BY sort_key DESC",
         ),
       ).toEqual([
         { id: NEWER, counterparty: "Corner Market", category: null, amount: 0, remarks: null },
@@ -1004,7 +1006,7 @@ describe("a version saved elsewhere", () => {
     const [, blob, precondition] = vi.mocked(uploadDatabase).mock.calls[0]!;
     expect(precondition).toEqual({ ifMatch: SHA_C });
     expect(
-      await queryUploaded(blob, "SELECT counterparty FROM transactions ORDER BY seq DESC"),
+      await queryUploaded(blob, "SELECT counterparty FROM transactions ORDER BY sort_key DESC"),
     ).toEqual([{ counterparty: "Corner Shop" }, { counterparty: "Café Sol" }]);
   });
 
@@ -1153,6 +1155,21 @@ describe("a session the server no longer accepts", () => {
   });
 });
 
+/** Gives the grid focus, as the keys need, from a cell in `column` of the row showing `text`. */
+async function focusGrid(text: string, column = COUNTERPARTY) {
+  await userEvent.click(await cellOf(text, column));
+  await userEvent.keyboard("{Escape}");
+  await expect.element(page.getByRole("grid")).toHaveFocus();
+}
+
+/** Saves, and runs `sql` on the database uploaded. */
+async function uploaded(sql: string) {
+  await userEvent.click(saveButton());
+  await expect.element(saveButton()).not.toBeInTheDocument();
+  const [, blob] = vi.mocked(uploadDatabase).mock.calls.at(-1)!;
+  return queryUploaded(blob, sql);
+}
+
 describe("undo and redo on the transactions page", () => {
   const undo = () => userEvent.keyboard("{Control>}z{/Control}");
   const redo = () => userEvent.keyboard("{Control>}y{/Control}");
@@ -1162,20 +1179,6 @@ describe("undo and redo on the transactions page", () => {
   const WITH_PARENT = `${TWO_TRANSACTIONS};
     INSERT INTO categories VALUES ('Food', NULL);
     UPDATE categories SET parent = 'Food' WHERE name = 'Groceries'`;
-
-  /** Gives the grid focus, as the keys need, from a cell in `column` of the row showing `text`. */
-  async function focusGrid(text: string, column = COUNTERPARTY) {
-    await userEvent.click(await cellOf(text, column));
-    await userEvent.keyboard("{Escape}");
-    await expect.element(page.getByRole("grid")).toHaveFocus();
-  }
-
-  async function uploaded(sql: string) {
-    await userEvent.click(saveButton());
-    await expect.element(saveButton()).not.toBeInTheDocument();
-    const [, blob] = vi.mocked(uploadDatabase).mock.calls.at(-1)!;
-    return queryUploaded(blob, sql);
-  }
 
   async function editAmount(from: string, to: string) {
     await userEvent.dblClick(page.getByText(from, { exact: true }).shown());
@@ -1231,7 +1234,7 @@ describe("undo and redo on the transactions page", () => {
     await undo();
 
     await expect.element(inTable("Café Lumen")).toBeVisible();
-    expect(await uploaded("SELECT counterparty FROM transactions ORDER BY seq DESC")).toEqual([
+    expect(await uploaded("SELECT counterparty FROM transactions ORDER BY sort_key DESC")).toEqual([
       { counterparty: "Corner Shop" },
       { counterparty: "Café Lumen" },
     ]);
@@ -1688,5 +1691,161 @@ describe("undo and redo on the transactions page", () => {
       await expect.element(inTable("Corner Shop")).toBeVisible();
       await expect.element(saveButton()).toBeEnabled();
     });
+  });
+});
+
+describe("adding rows on the transactions page", () => {
+  const button = (name: string) => page.getByRole("button", { name });
+  const counterparties = () => columnTexts(COUNTERPARTY);
+  /** The cell the grid points at as active. */
+  const activeCell = () =>
+    document.getElementById(
+      page.getByRole("grid").element().getAttribute("aria-activedescendant") ?? "",
+    );
+  /** The cell in `column` of the row `index` rows down. */
+  const cellAt = (index: number, column: number) =>
+    page.getByRole("row").elements()[index + 1]!.querySelectorAll('[role="gridcell"]')[column];
+
+  async function sortBy(header: string, option: string) {
+    await userEvent.click(page.getByRole("button", { name: new RegExp(`^${header}`) }));
+    await userEvent.click(page.getByRole("radio", { name: option }));
+    await userEvent.keyboard("{Escape}");
+  }
+
+  it("adds a row below the active one, on its day and in its account, selected in its column", async () => {
+    await opened();
+    await focusGrid("Corner Market", AMOUNT);
+
+    await userEvent.click(button("Add row below"));
+
+    await expect.poll(counterparties).toEqual(["Corner Market", "-", "Café Lumen"]);
+    expect(columnTexts(DATE)).toEqual(["2026-10-09", "2026-10-09", "2026-10-01"]);
+    expect(columnTexts(ACCOUNT)[1]).toBe("Everyday Checking");
+    await expect.poll(() => activeCell() === cellAt(1, AMOUNT)).toBe(true);
+    expect(
+      await uploaded(
+        `SELECT counterparty, amount, currency, category, remarks, sort_key FROM transactions
+        WHERE naive_date = '2026-10-09' ORDER BY sort_key DESC`,
+      ),
+    ).toEqual([
+      {
+        counterparty: "Corner Market",
+        amount: -4620,
+        currency: "USD",
+        category: "Groceries",
+        remarks: null,
+        sort_key: 2,
+      },
+      { counterparty: "-", amount: 0, currency: "USD", category: null, remarks: null, sort_key: 1 },
+    ]);
+  });
+
+  it("adds a row above the active one, stored as the newer of the two", async () => {
+    await opened();
+    await focusGrid("Café Lumen");
+
+    await userEvent.click(button("Add row above"));
+
+    await expect.poll(counterparties).toEqual(["Corner Market", "-", "Café Lumen"]);
+    await expect.poll(() => activeCell() === cellAt(1, COUNTERPARTY)).toBe(true);
+    expect(
+      await uploaded(
+        `SELECT counterparty FROM transactions WHERE naive_date = '2026-10-01'
+        ORDER BY sort_key DESC`,
+      ),
+    ).toEqual([{ counterparty: "-" }, { counterparty: "Café Lumen" }]);
+  });
+
+  it("adds a row above as the older of the two where the oldest are shown first", async () => {
+    await opened();
+    await sortBy("Date", "Oldest transactions first");
+    await expect.poll(counterparties).toEqual(["Café Lumen", "Corner Market"]);
+    await focusGrid("Café Lumen");
+
+    await userEvent.click(button("Add row above"));
+
+    await expect.poll(counterparties).toEqual(["-", "Café Lumen", "Corner Market"]);
+    expect(
+      await uploaded(
+        `SELECT counterparty FROM transactions WHERE naive_date = '2026-10-01' ORDER BY sort_key`,
+      ),
+    ).toEqual([{ counterparty: "-" }, { counterparty: "Café Lumen" }]);
+  });
+
+  it("adds today's, in the first account, at the top, with no row active", async () => {
+    await opened();
+
+    await userEvent.click(button("Add row below"));
+
+    await expect.poll(counterparties).toEqual(["-", "Corner Market", "Café Lumen"]);
+    expect(columnTexts(DATE)[0]).toBe(today());
+    expect(columnTexts(ACCOUNT)[0]).toBe("Everyday Checking");
+    await expect.poll(() => activeCell() === cellAt(0, COUNTERPARTY)).toBe(true);
+  });
+
+  it("saves an edit in progress first, and adds beside the row as edited", async () => {
+    await opened();
+    await userEvent.dblClick(await cellOf("Café Lumen", DATE));
+    await page.getByRole("textbox").fill("2026-10-05");
+
+    await userEvent.click(button("Add row below"));
+
+    await expect.poll(counterparties).toEqual(["Corner Market", "Café Lumen", "-"]);
+    expect(columnTexts(DATE)).toEqual(["2026-10-09", "2026-10-05", "2026-10-05"]);
+  });
+
+  it("takes an added row out on undo, leaving nothing to save, and puts it back on redo, selected", async () => {
+    await opened();
+    await focusGrid("Corner Market", AMOUNT);
+    await userEvent.click(button("Add row below"));
+    await expect.poll(counterparties).toEqual(["Corner Market", "-", "Café Lumen"]);
+
+    await userEvent.click(button("Undo"));
+
+    await expect.poll(counterparties).toEqual(["Corner Market", "Café Lumen"]);
+    await expect.element(saveButton()).not.toBeInTheDocument();
+    await userEvent.click(button("Redo"));
+    await expect.poll(counterparties).toEqual(["Corner Market", "-", "Café Lumen"]);
+    await expect
+      .poll(() => activeCell()?.closest('[role="row"]') === page.getByRole("row").elements()[2])
+      .toBe(true);
+  });
+
+  it("puts an added row back where the view puts it, when redone after the view changed", async () => {
+    await opened();
+    await focusGrid("Corner Market");
+    await userEvent.click(button("Add row below"));
+    await expect.poll(counterparties).toEqual(["Corner Market", "-", "Café Lumen"]);
+    await userEvent.click(button("Undo"));
+    await expect.poll(counterparties).toEqual(["Corner Market", "Café Lumen"]);
+    await sortBy("Counterparty", "A to Z");
+    await expect.poll(counterparties).toEqual(["Café Lumen", "Corner Market"]);
+
+    await userEvent.click(button("Redo"));
+
+    await expect.poll(counterparties).toEqual(["-", "Café Lumen", "Corner Market"]);
+  });
+
+  it("shows the table and the bar with an account but no transactions, to add the first", async () => {
+    await loggedIn(
+      await storedDatabase("INSERT INTO accounts VALUES ('Savings', 'EUR', 'Bank', NULL)"),
+    );
+    await renderApp("/transactions");
+    await expect.element(page.getByRole("grid")).toBeVisible();
+
+    await userEvent.click(button("Add row below"));
+
+    await expect.poll(counterparties).toEqual(["-"]);
+    expect(
+      await uploaded("SELECT account_name, currency, naive_date, timestamp FROM transactions"),
+    ).toEqual([{ account_name: "Savings", currency: "EUR", naive_date: today(), timestamp: null }]);
+  });
+
+  it("has no table, nor a way to add a row, without an account", async () => {
+    await loggedIn(null);
+    await renderApp("/transactions");
+
+    await expect.element(page.getByText("No transactions yet.").shown()).toBeVisible();
+    expect(button("Add row below").query()).toBeNull();
   });
 });

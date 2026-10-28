@@ -19,12 +19,12 @@ import {
 const sqlite3 = await sqlite3InitModule();
 
 let db: Database;
-let seq = 0;
+let count = 0;
 beforeEach(() => {
   db = new sqlite3.oo1.DB(":memory:");
   configureConnection(db);
   migrate(db, MIGRATIONS);
-  seq = 0;
+  count = 0;
   db.exec(`
     INSERT INTO accounts VALUES ('Checking', 'USD', 'Bank', '••4821'), ('Savings', 'USD', 'Bank', NULL),
       ('Travel', 'EUR', 'Card', '••5512'), ('India', 'INR', 'Bank', NULL);
@@ -45,6 +45,8 @@ type Transaction = {
   transfer?: string;
   duplicateOf?: string;
   counterparty?: string;
+  /** When it happened, in seconds since the Unix epoch. */
+  timestamp?: number;
 };
 
 /** A whole-units amount as the schema stores it, in the currency's stored_decimals. */
@@ -66,15 +68,17 @@ function add({
   transfer,
   duplicateOf,
   counterparty = "Somewhere",
+  timestamp,
 }: Transaction) {
-  seq++;
-  const id = transactionId(seq);
+  count++;
+  const id = transactionId(count);
   db.exec({
-    sql: `INSERT INTO transactions (seq, id, source, account_name, transfer_account, amount,
-      currency, counterparty, category, duplicate_of, naive_date)
-      VALUES (?, ?, ${SOURCE_HASH_SQL}, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    sql: `INSERT INTO transactions (sort_key, timestamp, id, source, account_name,
+      transfer_account, amount, currency, counterparty, category, duplicate_of, naive_date)
+      VALUES (?, ?, ?, ${SOURCE_HASH_SQL}, ?, ?, ?, ?, ?, ?, ?, ?)`,
     bind: [
-      seq,
+      count,
+      timestamp ?? null,
       id,
       account,
       transfer ?? null,
@@ -470,6 +474,14 @@ describe("LIST_RECENT_TRANSACTIONS", () => {
     add({ amount: -1, date: "2026-11-01" });
 
     expect(rows(LIST_RECENT_TRANSACTIONS, bind).map(({ id }) => id)).toEqual([second, first]);
+  });
+
+  it("lists a day's with a time first, as the transactions are listed", () => {
+    const timed = add({ amount: -1, timestamp: Date.parse("2026-10-05T09:00Z") / 1000 });
+    add({ amount: -1 });
+    add({ amount: -1, date: "2026-10-01" });
+
+    expect(rows(LIST_RECENT_TRANSACTIONS, bind)[0]!.id).toBe(timed);
   });
 
   it("includes the category's parent and whether it's marked as a duplicate", () => {

@@ -18,7 +18,7 @@ beforeEach(() => {
     INSERT INTO accounts VALUES ('Checking', 'USD', 'Bank', NULL), ('Savings', 'USD', 'Bank', NULL);
     INSERT INTO sources (hash, remarks) VALUES (${SOURCE_HASH_SQL}, 'statement.csv');
     INSERT INTO categories VALUES ('Food', NULL), ('Groceries', 'Food'), ('Bills', NULL);
-    INSERT INTO transactions (seq, id, source, account_name, amount, currency, counterparty, category, naive_date, remarks)
+    INSERT INTO transactions (sort_key, id, source, account_name, amount, currency, counterparty, category, naive_date, remarks)
     VALUES (1, '${T1}', ${SOURCE_HASH_SQL}, 'Checking', -100, 'USD', 'Corner Market', 'Groceries', '2026-10-01', 'weekly'),
            (2, '${T2}', ${SOURCE_HASH_SQL}, 'Checking', -200, 'USD', 'City Power', 'Bills', '2026-10-02', NULL);
     INSERT INTO conversions VALUES ('${T1}', 'EUR', -90);

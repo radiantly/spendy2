@@ -100,13 +100,15 @@ CREATE TABLE transactions (
   -- transactions as duplicate of the other.
   duplicate_of      TEXT REFERENCES transactions(id) ON UPDATE CASCADE ON DELETE SET NULL,
 
+  timestamp         INTEGER,
+
   -- Local date, not utc, not timezone aware.
   naive_date        TEXT NOT NULL CHECK (naive_date IS date(naive_date)),
-
-  -- if timestamp is NULL, transactions will be ordered by (naive_date, seq).
-  seq               INTEGER NOT NULL UNIQUE,
   
-  timestamp         INTEGER,
+  -- if timestamp is NULL, transactions are ordered by (naive_date, sort_key).
+  -- Can be set to 0 if not required
+  sort_key          INTEGER NOT NULL,
+
   remarks           TEXT CHECK (remarks <> ''),
   CONSTRAINT no_self_duplicate CHECK (id <> duplicate_of),
   CONSTRAINT no_self_transfer CHECK (account_name <> transfer_account)

@@ -4,17 +4,18 @@ import { configureConnection } from "../connection.ts";
 import { migrate } from "../migrate.ts";
 import { MIGRATIONS } from "../migrations.ts";
 import { SOURCE_HASH_SQL, transactionId } from "../../test/fixtures.ts";
+import { DEFAULT_VIEW, viewOrder } from "../../pages/transactions/view.ts";
 import { GET_TRANSACTIONS, LIST_TRANSACTIONS, listedTransactions } from "./transactions.ts";
 
 const sqlite3 = await sqlite3InitModule();
 
 let db: Database;
-let seq = 0;
+let count = 0;
 beforeEach(() => {
   db = new sqlite3.oo1.DB(":memory:");
   configureConnection(db);
   migrate(db, MIGRATIONS);
-  seq = 0;
+  count = 0;
   db.exec(`
     INSERT INTO accounts VALUES ('Checking', 'USD', 'Bank', NULL), ('Travel', 'EUR', 'Card', NULL);
     INSERT INTO sources (hash, remarks) VALUES (${SOURCE_HASH_SQL}, 'statement.csv');
@@ -25,22 +26,31 @@ afterEach(() => db.close());
 
 /**
  * Inserts EUR -9.20 on `date`, with `conversions` as stored (in each
- * currency's stored_decimals). Returns its id.
+ * currency's stored_decimals). Unless given, it has no time, and its sort key
+ * follows the ones before it, as an import's do. Returns its id, which
+ * follows the ones before it too.
  */
 function add(
   date: string,
   {
     counterparty = "Somewhere",
     conversions = {},
-  }: { counterparty?: string; conversions?: Record<string, number> } = {},
+    timestamp = null,
+    sortKey,
+  }: {
+    counterparty?: string;
+    conversions?: Record<string, number>;
+    timestamp?: number | null;
+    sortKey?: number;
+  } = {},
 ) {
-  seq++;
-  const id = transactionId(seq);
+  count++;
+  const id = transactionId(count);
   db.exec({
-    sql: `INSERT INTO transactions (seq, id, source, account_name, amount, currency, counterparty,
-      category, naive_date)
-      VALUES (?, ?, ${SOURCE_HASH_SQL}, 'Travel', -920, 'EUR', ?, 'Groceries', ?)`,
-    bind: [seq, id, counterparty, date],
+    sql: `INSERT INTO transactions (sort_key, timestamp, id, source, account_name, amount,
+      currency, counterparty, category, naive_date)
+      VALUES (?, ?, ?, ${SOURCE_HASH_SQL}, 'Travel', -920, 'EUR', ?, 'Groceries', ?)`,
+    bind: [sortKey ?? count, timestamp, id, counterparty, date],
   });
   for (const [currency, amount] of Object.entries(conversions))
     db.exec({ sql: "INSERT INTO conversions VALUES (?, ?, ?)", bind: [id, currency, amount] });
@@ -49,6 +59,8 @@ function add(
 
 const listed = (sql: string, bind?: BindingSpec) => listedTransactions(db.selectObjects(sql, bind));
 const ids = (sql: string, bind?: BindingSpec) => listed(sql, bind).map(({ id }) => id);
+/** A time on 2026-10-05 (`HH:MM`, UTC), as a timestamp. */
+const at = (time: string) => Date.parse(`2026-10-05T${time}Z`) / 1000;
 
 describe("LIST_TRANSACTIONS", () => {
   it("is empty without transactions", () => {
@@ -63,14 +75,68 @@ describe("LIST_TRANSACTIONS", () => {
     expect(ids(LIST_TRANSACTIONS)).toEqual([second, first, older]);
   });
 
+  it("lists a day's transactions with a time first, latest first, then those without", () => {
+    const evening = add("2026-10-05", { timestamp: at("18:00") });
+    const morning = add("2026-10-05", { timestamp: at("09:00") });
+    const untimed = add("2026-10-05");
+
+    expect(ids(LIST_TRANSACTIONS)).toEqual([evening, morning, untimed]);
+  });
+
+  it("lists a transaction on its date, whatever day its time is on", () => {
+    const later = add("2026-10-05", { timestamp: at("12:00") + 2 * 86_400 });
+    const next = add("2026-10-06");
+
+    expect(ids(LIST_TRANSACTIONS)).toEqual([next, later]);
+  });
+
+  it.each([
+    ["the same time", at("12:00")],
+    ["no time", null],
+  ])("lists a day's transactions with %s by sort key, highest first", (_, timestamp) => {
+    const higher = add("2026-10-05", { timestamp, sortKey: 2 });
+    const lower = add("2026-10-05", { timestamp, sortKey: 1 });
+
+    expect(ids(LIST_TRANSACTIONS)).toEqual([higher, lower]);
+  });
+
+  it("lists a day's transactions with the same sort key by id, the highest first", () => {
+    const lower = add("2026-10-05", { sortKey: 1 });
+    const higher = add("2026-10-05", { sortKey: 1 });
+
+    expect(ids(LIST_TRANSACTIONS)).toEqual([higher, lower]);
+  });
+
+  it("lists them in the order the transactions page sorts them by date", () => {
+    add("2026-10-05", { timestamp: at("09:00"), sortKey: 3 });
+    add("2026-10-05", { sortKey: 1 });
+    add("2026-10-05", { timestamp: at("09:00"), sortKey: 1 });
+    add("2026-10-01", { timestamp: at("23:00") });
+    add("2026-10-05", { sortKey: 1 });
+    add("2026-10-05", { timestamp: at("18:00"), sortKey: 0 });
+    const rows = listed(LIST_TRANSACTIONS);
+    // Reversed, so the page's sort has to put each in its place.
+    const reversed = rows.toReversed();
+
+    const sorted = viewOrder(
+      reversed,
+      DEFAULT_VIEW,
+      { accounts: ["Travel"], categories: ["Groceries"] },
+      "2026-10-28",
+    ).map((position) => reversed[position]!.id);
+
+    expect(sorted).toEqual(rows.map(({ id }) => id));
+  });
+
   it("gives every column of a transaction", () => {
     const id = add("2026-10-05", { counterparty: "Café Sol" });
 
     expect(listed(LIST_TRANSACTIONS)).toEqual([
       {
         id,
-        seq: 1,
         naive_date: "2026-10-05",
+        timestamp: null,
+        sort_key: 1,
         account_name: "Travel",
         counterparty: "Café Sol",
         category: "Groceries",

@@ -14,7 +14,12 @@ import {
  * What the bar's buttons do to the table (see TransactionsTable's
  * `actionBar`): each null while it can't be done.
  */
-export type TableActions = { undo: (() => void) | null; redo: (() => void) | null };
+export type TableActions = {
+  undo: (() => void) | null;
+  redo: (() => void) | null;
+  addAbove: (() => void) | null;
+  addBelow: (() => void) | null;
+};
 
 /** How long the pointer rests on a button before its tooltip shows (ms). */
 const TOOLTIP_DELAY = 500;
@@ -126,9 +131,9 @@ function Divider() {
 /**
  * A pill floating at the bottom of the window, over the table: a search of
  * the transactions, undo and redo, and actions on the selected rows. Only
- * undo and redo are wired up so far.
+ * undo, redo and adding rows are wired up so far.
  */
-function ActionBar({ undo, redo }: TableActions) {
+function ActionBar({ undo, redo, addAbove, addBelow }: TableActions) {
   const tooltips = useTooltips();
   return (
     <div className="pointer-events-none fixed inset-x-0 bottom-6 z-30 flex justify-center px-4">
@@ -151,10 +156,10 @@ function ActionBar({ undo, redo }: TableActions) {
           <TbArrowForwardUp />
         </IconButton>
         <Divider />
-        <IconButton label="Add row above" tooltips={tooltips}>
+        <IconButton label="Add row above" action={addAbove} tooltips={tooltips}>
           <TbRowInsertTop />
         </IconButton>
-        <IconButton label="Add row below" tooltips={tooltips}>
+        <IconButton label="Add row below" action={addBelow} tooltips={tooltips}>
           <TbRowInsertBottom />
         </IconButton>
         <IconButton label="Delete selected rows" tooltips={tooltips}>

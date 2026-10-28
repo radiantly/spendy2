@@ -13,6 +13,9 @@ export const MAX_NAME_LENGTH = 30;
 /** Longer values are cut off with an ellipsis. */
 export const MAX_VALUE_LENGTH = 40;
 
+/** A row added from the action bar: "Undid adding a transaction". */
+export const ADD_DESCRIPTION = "adding a transaction";
+
 type Field = TransactionChange["field"];
 
 const columnOf = (field: Field) => columns.find((column) => column.meta!.editor?.field === field)!;

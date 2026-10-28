@@ -18,7 +18,7 @@ vi.mock("./docsSite.ts", () => ({ DOCS_SITE: "about:blank#docs" }));
 const ONE_TRANSACTION = `
   INSERT INTO accounts VALUES ('Everyday Checking', 'USD', 'Bank', NULL);
   INSERT INTO sources (hash, remarks) VALUES (${SOURCE_HASH_SQL}, 'statement.csv');
-  INSERT INTO transactions (seq, id, source, account_name, amount, currency, counterparty, category, naive_date)
+  INSERT INTO transactions (sort_key, id, source, account_name, amount, currency, counterparty, category, naive_date)
     VALUES (1, '${transactionId(1)}', ${SOURCE_HASH_SQL}, 'Everyday Checking', -4620, 'USD', 'Corner Market', NULL, '2026-10-09')
 `;
 

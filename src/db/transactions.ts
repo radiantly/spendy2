@@ -5,18 +5,24 @@
  */
 import { queryOptions, type QueryClient } from "@tanstack/react-query";
 import type { Database } from "./database.ts";
-import type { DatabaseHistory, TransactionEdit } from "./databaseContext.ts";
+import type { DatabaseHistory, Edit, TransactionEdit } from "./databaseContext.ts";
+import type { Moved } from "./editHistory.ts";
 import {
+  compareNewestFirst,
   DELETE_CONVERSION,
   GET_TRANSACTIONS,
   hasPatch,
   INSERT_CATEGORY,
+  INSERT_SOURCE,
+  INSERT_TRANSACTION,
+  insertBinds,
   LIST_ACCOUNTS,
   LIST_CATEGORIES,
   LIST_CURRENCIES,
   LIST_TRANSACTIONS,
   listedTransactions,
   patchFrom,
+  UPDATE_SORT_KEY,
   UPDATE_TRANSACTION,
   updateBinds,
   type AccountCurrency,
@@ -28,11 +34,33 @@ import {
 import type { CategoryParent } from "./queries/overview.ts";
 import { databaseKey } from "./queryClient.ts";
 import { ClosedError } from "./rpc.ts";
+import type { NaiveDate } from "../lib/period.ts";
 
 export type Transactions = {
+  /**
+   * Every transaction read, or added since, each at the position it was read
+   * or added at, removed ones too (see `removed`).
+   */
   rows: ListedTransaction[];
   /** Each row's position in `rows`, by id. Rows keep their positions. */
   positions: ReadonlyMap<string, number>;
+  /**
+   * The positions of the rows removed since (adds undone), which aren't
+   * transactions any more. Each keeps its place and how it was, so a view
+   * worked out while it's gone still has a place for it, should it come back
+   * (the add redone). See `existing`.
+   */
+  removed: ReadonlySet<number>;
+  /**
+   * New each time the transactions are read, which gives them new
+   * positions: positions from another read don't apply to these rows.
+   */
+  read: symbol;
+  /**
+   * The latest undo or redo since they were read, once the rows show it
+   * (see `keepTransactionsInSync`): it can add or remove rows.
+   */
+  lastUndoOrRedo: Moved<Edit> | null;
   /** With their parents, in the order the cell menus list them (see the queries). */
   categories: readonly CategoryParent[];
   accounts: readonly AccountCurrency[];
@@ -67,6 +95,9 @@ export function transactionsQuery(database: Database) {
       return {
         rows,
         positions: new Map(rows.map((row, position) => [row.id, position])),
+        removed: new Set(),
+        read: Symbol("read"),
+        lastUndoOrRedo: null,
         categories: categoriesOf(categories),
         // The queries' columns match the row types, and the schema guarantees their types.
         accounts: accounts as AccountCurrency[],
@@ -77,6 +108,12 @@ export function transactionsQuery(database: Database) {
     // Rows are replaced as they change, so there's nothing to compare.
     structuralSharing: false,
   });
+}
+
+/** The transactions there are: `transactions`' rows, but those removed. */
+export function existing(transactions: Transactions) {
+  const { rows, removed } = transactions;
+  return removed.size === 0 ? rows : rows.filter((_, position) => !removed.has(position));
 }
 
 /** Updates `database`'s transactions where they've been read. */
@@ -105,14 +142,44 @@ function patched(
   return { ...current, rows };
 }
 
-/** `current` with `stored` in place of the rows with their ids. */
-function replaced(current: Transactions, stored: readonly ListedTransaction[]): Transactions {
+/** `positions` with `ids` added, at the positions after the last of `rows`. */
+function withPositions(
+  positions: ReadonlyMap<string, number>,
+  ids: readonly string[],
+  rows: number,
+) {
+  if (ids.length === 0) return positions;
+  const added = new Map(positions);
+  ids.forEach((id, index) => added.set(id, rows + index));
+  return added;
+}
+
+/**
+ * `current` with the transactions with `ids` as `stored` has them: each
+ * replaced, put back if it was removed, added after the rest if it's new,
+ * and removed if it isn't stored.
+ */
+function synced(
+  current: Transactions,
+  ids: readonly string[],
+  stored: readonly ListedTransaction[],
+): Transactions {
+  const storedById = new Map(stored.map((row) => [row.id, row]));
+  const added = ids.filter((id) => storedById.has(id) && !current.positions.has(id));
+  const positions = withPositions(current.positions, added, current.rows.length);
   const rows = [...current.rows];
-  for (const row of stored) {
-    const position = current.positions.get(row.id);
-    if (position !== undefined) rows[position] = row;
+  const removed = new Set(current.removed);
+  for (const id of ids) {
+    const position = positions.get(id);
+    if (position === undefined) continue;
+    const row = storedById.get(id);
+    if (row === undefined) removed.add(position);
+    else {
+      rows[position] = row;
+      removed.delete(position);
+    }
   }
-  return { ...current, rows };
+  return { ...current, rows, positions, removed };
 }
 
 /**
@@ -172,6 +239,7 @@ export async function commitTransactions(
   const edit: TransactionEdit = {
     kind: "transaction",
     cells: updates.map(({ id, field }) => ({ id, field })),
+    transactions: [...new Set(updates.map(({ id }) => id))],
     description,
   };
 
@@ -217,9 +285,9 @@ export async function commitTransactions(
 /**
  * Keeps `database`'s transactions up to date with every undo and redo in
  * `history`, whichever page it happens on, until the returned function is
- * called: it reads again what each changed (also if it failed). Edits only
- * ever change their own rows' transactions, and categories, so those are all
- * there is to read.
+ * called: it reads again what each changed (also if it failed), which may
+ * add or remove transactions. Edits only ever change the transactions they
+ * list, and categories, so those are all there is to read.
  */
 export function keepTransactionsInSync(
   queryClient: QueryClient,
@@ -231,7 +299,7 @@ export function keepTransactionsInSync(
     if (moved === null || moved.step.about.kind !== "transaction") return;
     // There's an edit to undo or redo only once they've been read for the page.
     if (queryClient.getQueryData(transactionsQuery(database).queryKey) === undefined) return;
-    const ids = [...new Set(moved.step.about.cells.map(({ id }) => id))];
+    const ids = moved.step.about.transactions;
     Promise.all([
       database.query(GET_TRANSACTIONS, [JSON.stringify(ids)]),
       database.query(LIST_CATEGORIES),
@@ -239,8 +307,9 @@ export function keepTransactionsInSync(
       ([transactions, categories]) => {
         const stored = listedTransactions(transactions);
         update(queryClient, database, (current) => ({
-          ...replaced(current, stored),
+          ...synced(current, ids, stored),
           categories: categoriesOf(categories),
+          lastUndoOrRedo: moved,
         }));
       },
       (error: unknown) => {
@@ -249,4 +318,168 @@ export function keepTransactionsInSync(
       },
     );
   });
+}
+
+/** A transaction to add (see `addTransaction`). It has no category. */
+export type NewTransaction = Pick<
+  ListedTransaction,
+  "naive_date" | "timestamp" | "account_name" | "currency" | "amount" | "counterparty" | "remarks"
+>;
+
+/**
+ * Where a new transaction goes among its day's: next to one at the same
+ * time, on its newer or older side, or the newest of those at its time
+ * (of those without a time, if it has none).
+ */
+export type Placement =
+  | { kind: "beside"; id: string; side: "newer" | "older" }
+  | { kind: "newest" };
+
+/** Every field a transaction has a cell for. */
+const FIELDS = Object.keys(UPDATE_TRANSACTION) as EditableTransactionField[];
+
+/**
+ * The source of the transactions added here on `day`, as `[hash, remarks]`:
+ * one a day, so a day's can be told apart from imports, or removed,
+ * together. Its hash is its remarks' SHA-256.
+ */
+async function addedSource(day: NaiveDate) {
+  const remarks = `Spendy2 Web UI - ${day}`;
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(remarks));
+  return [new Uint8Array(digest), remarks] as const;
+}
+
+/**
+ * `added`'s day's transactions, oldest first, with `added` among them where
+ * `placement` puts it.
+ */
+function dayWith(transactions: Transactions, added: ListedTransaction, placement: Placement) {
+  const day = existing(transactions)
+    .filter((row) => row.naive_date === added.naive_date)
+    .sort((x, y) => compareNewestFirst(y, x));
+  let at: number;
+  if (placement.kind === "beside") {
+    const index = day.findIndex(({ id }) => id === placement.id);
+    if (index === -1 || day[index]!.timestamp !== added.timestamp)
+      throw new Error("A transaction can only be added beside one on its day, at its time");
+    at = placement.side === "newer" ? index + 1 : index;
+  } else {
+    // After those at its time or earlier; those without a time are the earliest.
+    const later = day.findIndex(
+      (row) => (row.timestamp ?? -Infinity) > (added.timestamp ?? -Infinity),
+    );
+    at = later === -1 ? day.length : later;
+  }
+  return day.toSpliced(at, 0, added);
+}
+
+/**
+ * Adds `transaction` among its day's where `placement` puts it, numbering
+ * the day's transactions again from 1, oldest first (see the schema's
+ * sort_key), in one transaction, as one step to undo, which `description`
+ * describes. It's from the source of the transactions added here `today`
+ * (see `addedSource`), made with the first of them.
+ *
+ * It's in the transactions as soon as it's asked to be written, so the adds
+ * and edits after it see its day numbered with it. Resolves with its id
+ * once it's written, or null if the database closed first. If the write
+ * fails, it's taken out again, the day's numbers go back to what the
+ * database has, and this rejects with why.
+ */
+export async function addTransaction(
+  queryClient: QueryClient,
+  database: Database,
+  history: DatabaseHistory,
+  {
+    transaction,
+    placement,
+    description,
+    today,
+  }: { transaction: NewTransaction; placement: Placement; description: string; today: NaiveDate },
+): Promise<string | null> {
+  const [source, remarks] = await addedSource(today);
+  // Nothing awaits from here until it's asked to be written, so its day is
+  // numbered as the transactions are then.
+  const { queryKey } = transactionsQuery(database);
+  const current = queryClient.getQueryData(queryKey);
+  if (current === undefined) throw new Error("The transactions haven't been read");
+  const currency = current.currencies.find(({ code }) => code === transaction.currency);
+  if (currency === undefined) throw new Error(`There's no currency ${transaction.currency}`);
+  const id = crypto.randomUUID();
+  const day = dayWith(
+    current,
+    {
+      ...transaction,
+      id,
+      decimals: currency.stored_decimals,
+      category: null,
+      sort_key: 0,
+      transfer_account: null,
+      duplicate_of: null,
+      conversions: {},
+    },
+    placement,
+  );
+  const numbered = day.map((row, index) => ({ ...row, sort_key: index + 1 }));
+  const added = numbered.find((row) => row.id === id)!;
+  // Only the numbers that change are written.
+  const moved = numbered.filter(
+    (row, index) => row.id !== id && row.sort_key !== day[index]!.sort_key,
+  );
+  const edit: TransactionEdit = {
+    kind: "transaction",
+    // All of it, for a redo to select.
+    cells: FIELDS.map((field) => ({ id, field })),
+    transactions: [id, ...moved.map((row) => row.id)],
+    description,
+  };
+  const statements = [
+    { sql: INSERT_SOURCE, bind: [source, remarks] },
+    ...moved.map((row) => ({ sql: UPDATE_SORT_KEY, bind: [row.sort_key, row.id] })),
+    { sql: INSERT_TRANSACTION, bind: insertBinds(added, source) },
+  ];
+
+  const rows = [...current.rows, added];
+  for (const row of moved) rows[current.positions.get(row.id)!] = row;
+  queryClient.setQueryData(queryKey, {
+    ...current,
+    rows,
+    positions: withPositions(current.positions, [id], current.rows.length),
+  });
+  let failure: { error: unknown } | undefined;
+  try {
+    try {
+      // As commitTransactions asks.
+      const written = database.batch(statements);
+      history.record({ changes: written, about: edit });
+      await written;
+    } catch (error) {
+      if (error instanceof ClosedError) throw error;
+      failure = { error };
+      const stored = listedTransactions(
+        await database.query(GET_TRANSACTIONS, [JSON.stringify(moved.map((row) => row.id))]),
+      );
+      const numbers = new Map(moved.map((row) => [row.id, row.sort_key]));
+      update(queryClient, database, (latest) => {
+        const rows = [...latest.rows];
+        const removed = new Set(latest.removed);
+        const position = latest.positions.get(id);
+        if (position !== undefined) removed.add(position);
+        // If a later add numbered the day again, its write decides the numbers.
+        for (const { id, sort_key } of stored) {
+          const position = latest.positions.get(id);
+          if (position === undefined) continue;
+          const row = rows[position]!;
+          if (row.sort_key === numbers.get(id)) rows[position] = { ...row, sort_key };
+        }
+        return { ...latest, rows, removed };
+      });
+    }
+  } catch (error) {
+    // The database closed (e.g. on logging out), and the page with it.
+    if (error instanceof ClosedError) return null;
+    throw error;
+  }
+  if (failure) throw failure.error;
+  return id;
 }

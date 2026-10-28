@@ -15,7 +15,8 @@ function transaction(overrides: Partial<ListedTransaction> = {}): ListedTransact
   ids++;
   return {
     id: `t${ids}`,
-    seq: ids,
+    timestamp: null,
+    sort_key: ids,
     naive_date: "2020-10-10",
     account_name: "Everyday Checking",
     counterparty: "Aldi",
@@ -59,11 +60,11 @@ beforeEach(async () => {
 });
 
 describe("TransactionsList", () => {
-  it("puts the transactions under a heading for each day, as they come", async () => {
+  it("puts the transactions under a heading for each day, newest first, however they come", async () => {
     await show([
+      transaction({ counterparty: "Uniqlo", naive_date: "2020-10-09", sort_key: 1 }),
       transaction({ counterparty: "Aldi", naive_date: "2020-10-10" }),
-      transaction({ counterparty: "Uniqlo", naive_date: "2020-10-09" }),
-      transaction({ counterparty: "City Power", naive_date: "2020-10-09" }),
+      transaction({ counterparty: "City Power", naive_date: "2020-10-09", sort_key: 2 }),
     ]);
 
     await expect.element(items().first()).toBeVisible();
@@ -71,8 +72,8 @@ describe("TransactionsList", () => {
       "Oct 10, 2020 Saturday",
       expect.stringContaining("Aldi"),
       "Oct 9, 2020 Friday",
-      expect.stringContaining("Uniqlo"),
       expect.stringContaining("City Power"),
+      expect.stringContaining("Uniqlo"),
     ]);
     await expect
       .element(page.getByRole("heading", { level: 2, name: "Oct 10, 2020 Saturday" }))

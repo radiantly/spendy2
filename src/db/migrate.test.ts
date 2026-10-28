@@ -187,7 +187,7 @@ describe("schema", () => {
   /** Inserts a transaction, overriding columns of a valid one. */
   function insertTransaction(overrides: Record<string, unknown> = {}) {
     const row: Record<string, unknown> = {
-      seq: 1,
+      sort_key: 1,
       id: T1,
       source: SOURCE_HASH,
       account_name: "checking",
@@ -400,7 +400,7 @@ describe("schema", () => {
     it("keeps a category still used by a transaction spelling it in another case", () => {
       db.exec("INSERT INTO categories VALUES ('Groceries', NULL)");
       insertTransaction({ category: "Groceries" });
-      insertTransaction({ seq: 2, id: T2, category: "groceries" });
+      insertTransaction({ sort_key: 2, id: T2, category: "groceries" });
 
       db.exec(`UPDATE transactions SET category = NULL WHERE id = '${T1}'`);
 
@@ -528,7 +528,7 @@ describe("schema", () => {
     });
 
     it("rejects moving a conversion to a transaction in its currency", () => {
-      insertTransaction({ seq: 2, id: T2, currency: "USD" });
+      insertTransaction({ sort_key: 2, id: T2, currency: "USD" });
       insertConversion("USD");
 
       expect(() => db.exec(`UPDATE conversions SET transaction_id = '${T2}'`)).toThrow(
@@ -602,7 +602,7 @@ describe("schema", () => {
 
     it("keeps a category another transaction still uses", () => {
       insertTransaction({ category: "Groceries" });
-      insertTransaction({ seq: 2, id: T2, category: "Groceries" });
+      insertTransaction({ sort_key: 2, id: T2, category: "Groceries" });
 
       db.exec(`UPDATE transactions SET category = 'Dining out' WHERE id = '${T1}'`);
 
@@ -635,7 +635,7 @@ describe("schema", () => {
 
     it("keeps a category that has subcategories", () => {
       insertTransaction({ category: "Utilities" });
-      insertTransaction({ seq: 2, id: T2, category: "Power" });
+      insertTransaction({ sort_key: 2, id: T2, category: "Power" });
 
       db.exec(`UPDATE transactions SET category = NULL WHERE id = '${T1}'`);
 
@@ -655,7 +655,7 @@ describe("schema", () => {
     it("keeps a parent that has transactions of its own", () => {
       insertTransaction({ category: "Utilities" });
       db.exec("DELETE FROM categories WHERE name = 'Power'");
-      insertTransaction({ seq: 2, id: T2, category: "Housing" });
+      insertTransaction({ sort_key: 2, id: T2, category: "Housing" });
 
       db.exec(`UPDATE transactions SET category = NULL WHERE id = '${T1}'`);
 

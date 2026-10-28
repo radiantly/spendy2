@@ -1,4 +1,4 @@
-import type { ComponentProps } from "react";
+import { createRef, useImperativeHandle, useState, type ComponentProps, type Ref } from "react";
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { page, userEvent, type Locator } from "vitest/browser";
 import { render } from "vitest-browser-react";
@@ -8,7 +8,7 @@ import type { Moved } from "../../db/editHistory.ts";
 import type { Currency, EditedCell, TransactionRow } from "../../db/queries/transactions.ts";
 import { mouse, pointIn } from "../../test/mouse.ts";
 import ActionBar from "./ActionBar.tsx";
-import TransactionsTable, { ROW_HEIGHT } from "./TransactionsTable.tsx";
+import TransactionsTable, { ROW_HEIGHT, type AddAt, type Added } from "./TransactionsTable.tsx";
 
 const ROW_COUNT = 100_000;
 const CATEGORIES = ["Dining out", "Groceries"];
@@ -175,6 +175,71 @@ const backgroundOf = (element: Element) => getComputedStyle(element).backgroundC
 /** The outline the grid draws around a range of cells. */
 const rangeOutline = () =>
   document.querySelector('[role="rowgroup"] + [role="rowgroup"] > [aria-hidden] > *');
+/** Presses a disabled button, as a person still can: Playwright won't, unless forced. */
+const pressDisabled = (button: Locator) => userEvent.click(button, { force: true });
+
+type TableProps = ComponentProps<typeof TransactionsTable>;
+
+/** The table's props, showing `shown`, with `more`. */
+const tableProps = (shown: TransactionRow[], more: Partial<TableProps> = {}): TableProps => ({
+  rows: shown,
+  maxRowNumber: shown.length,
+  categories: CATEGORIES,
+  accounts: ACCOUNTS,
+  currencies: CURRENCIES,
+  onCommit,
+  lastUndoOrRedo: null,
+  onUndoOrRedo,
+  ...more,
+});
+
+function Changeable({
+  initial,
+  changeRef,
+}: {
+  initial: TableProps;
+  changeRef: Ref<(props: TableProps) => void>;
+}) {
+  const [props, setProps] = useState(initial);
+  useImperativeHandle(changeRef, () => setProps, []);
+  return <TransactionsTable {...props} />;
+}
+
+/**
+ * Renders the table with `props`, returning a function that changes them
+ * as the page does once a row is written: outside a render or an event, so
+ * React renders the change in a task of its own. (`rerender` changes them
+ * in `act`, which runs every effect before it returns.)
+ */
+async function renderChangeable(props: TableProps) {
+  const changeRef = createRef<(props: TableProps) => void>();
+  await render(<Changeable initial={props} changeRef={changeRef} />);
+  return (next: TableProps) => changeRef.current!(next);
+}
+
+/**
+ * The active cell when the row showing `text` is first in the grid, as its
+ * row's counterparty and its column. Mutation observers hear of a change
+ * before the browser can draw it, so it's what's first drawn.
+ */
+function activeWhenShown(text: string) {
+  return new Promise<{ row: string | null; column: number } | null>((resolve) => {
+    const observer = new MutationObserver(() => {
+      if (page.getByText(text, { exact: true }).query() === null) return;
+      observer.disconnect();
+      const cell = activeCell();
+      const row = cell?.closest('[role="row"]');
+      if (!cell || !row) return resolve(null);
+      const cells = [...row.querySelectorAll('[role="gridcell"]')];
+      resolve({ row: cells[COUNTERPARTY]!.textContent, column: cells.indexOf(cell) });
+    });
+    observer.observe(grid().element(), { subtree: true, childList: true, characterData: true });
+  });
+}
+
+/** A row added below Shop 2's, and the rows with it. */
+const ADDED: TransactionRow = { ...rows[2]!, id: "added", counterparty: "Added" };
+const withAdded = rows.toSpliced(3, 0, ADDED);
 
 describe("TransactionsTable", () => {
   describe("virtualization", () => {
@@ -1656,6 +1721,7 @@ describe("TransactionsTable", () => {
         about: {
           kind: "transaction",
           cells: cells.map(([row, field]) => ({ id: `t${row}`, field })),
+          transactions: [...new Set(cells.map(([row]) => `t${row}`))],
           description: "an edit",
         },
       },
@@ -1705,6 +1771,34 @@ describe("TransactionsTable", () => {
 
       await expect.element(cellOf("Shop 500", AMOUNT)).toBeInViewport();
       expect(activeCell()).toBe(cellOf("Shop 500", AMOUNT).element());
+    });
+
+    it("has the cells a redo brings back selected from when they're first drawn", async () => {
+      const change = await renderChangeable(tableProps(rows));
+      await makeActive("Shop 2", CATEGORY);
+      const shown = activeWhenShown("Added");
+
+      change(
+        tableProps(withAdded, {
+          lastUndoOrRedo: {
+            direction: "redo",
+            step: {
+              changes: Promise.resolve(new Uint8Array()),
+              about: {
+                kind: "transaction",
+                cells: (["naive_date", "counterparty", "remarks"] as const).map((field) => ({
+                  id: ADDED.id,
+                  field,
+                })),
+                transactions: [ADDED.id],
+                description: "adding a transaction",
+              },
+            },
+          },
+        }),
+      );
+
+      expect(await shown).toEqual({ row: "Added", column: DATE });
     });
 
     it("selects them once, not again on later renders", async () => {
@@ -1791,7 +1885,12 @@ describe("TransactionsTable", () => {
         onCommit={onCommit}
         lastUndoOrRedo={null}
         onUndoOrRedo={onUndoOrRedo}
-        actionBar={{ canUndo, canRedo, render: (actions) => <ActionBar {...actions} /> }}
+        actionBar={{
+          canUndo,
+          canRedo,
+          add: null,
+          render: (actions) => <ActionBar {...actions} />,
+        }}
       />
     );
 
@@ -1804,9 +1903,6 @@ describe("TransactionsTable", () => {
       onUndoOrRedo.mockImplementation((direction) => void calls.push(direction));
       return calls;
     }
-
-    /** Presses a disabled button, as a person still can: Playwright won't, unless forced. */
-    const pressDisabled = (button: Locator) => userEvent.click(button, { force: true });
 
     it.each([
       ["Undo", "undo"],
@@ -1965,6 +2061,149 @@ describe("TransactionsTable", () => {
 
         await expect.element(redoButton()).not.toHaveAttribute("aria-disabled");
       });
+    });
+  });
+
+  describe("the action bar's add", () => {
+    const addBelow = () => page.getByRole("button", { name: "Add row below" });
+    let onAdd: Mock<(at: AddAt) => void>;
+    beforeEach(() => {
+      onAdd = vi.fn();
+    });
+
+    /** The table with its action bar, showing `shown`, adding with `add`. */
+    const withBar = ({
+      add = onAdd as ((at: AddAt) => void) | null,
+      lastAdded = null as Added | null,
+      shown = rows,
+    } = {}) => (
+      <TransactionsTable
+        rows={shown}
+        maxRowNumber={rows.length}
+        categories={CATEGORIES}
+        accounts={ACCOUNTS}
+        currencies={CURRENCIES}
+        onCommit={onCommit}
+        lastUndoOrRedo={null}
+        onUndoOrRedo={onUndoOrRedo}
+        lastAdded={lastAdded}
+        actionBar={{
+          canUndo: false,
+          canRedo: false,
+          add,
+          render: (actions) => <ActionBar {...actions} />,
+        }}
+      />
+    );
+
+    it.each([
+      ["Add row above", "above"],
+      ["Add row below", "below"],
+    ] as const)(
+      "%s asks for a row %s the active cell's, for its column, keeping focus in the grid",
+      async (name, side) => {
+        await render(withBar());
+        await makeActive("Shop 2", CATEGORY);
+
+        await userEvent.click(page.getByRole("button", { name }));
+
+        expect(onAdd.mock.calls).toEqual([[{ row: 2, side, column: CATEGORY }]]);
+        await expect.element(grid()).toHaveFocus();
+      },
+    );
+
+    it("asks for a row beside none while no cell is active, for its counterparty", async () => {
+      await render(withBar());
+
+      await userEvent.click(addBelow());
+
+      expect(onAdd.mock.calls).toEqual([[{ row: null, side: "below", column: COUNTERPARTY }]]);
+    });
+
+    it.each(["Add row above", "Add row below"])(
+      "disables %s while rows can't be added",
+      async (name) => {
+        await render(withBar({ add: null }));
+        await makeActive("Shop 2", CATEGORY);
+        const button = page.getByRole("button", { name });
+        await expect.element(button).toHaveAttribute("aria-disabled", "true");
+
+        await pressDisabled(button);
+
+        await expect.element(grid()).toHaveFocus();
+        expect(activeCell()).toBe(cellOf("Shop 2", CATEGORY).element());
+      },
+    );
+
+    it("saves an edit in progress first, keeping its cell active", async () => {
+      await render(withBar());
+      const calls: string[] = [];
+      onCommit.mockImplementation((changes) => void calls.push(JSON.stringify(changes)));
+      onAdd.mockImplementation((at) => void calls.push(JSON.stringify(at)));
+      await userEvent.dblClick(cellOf("Corner Market", COUNTERPARTY));
+      await userEvent.keyboard("{End}s");
+
+      await userEvent.click(addBelow());
+
+      expect(calls).toEqual([
+        JSON.stringify([
+          { rowIndex: 0, field: "counterparty", patch: { counterparty: "Corner Markets" } },
+        ]),
+        JSON.stringify({ row: 0, side: "below", column: COUNTERPARTY }),
+      ]);
+      await expect.element(input()).not.toBeInTheDocument();
+      expect(activeCell()).toBe(cellOf("Corner Market", COUNTERPARTY).element());
+    });
+
+    it("drops an edit in progress that can't be saved first", async () => {
+      await render(withBar());
+      await editAtCharacter(page.getByText("$1,234.50"), 1);
+      await amountInput().fill("1.2.3");
+
+      await userEvent.click(addBelow());
+
+      await expect.element(amountInput()).not.toBeInTheDocument();
+      expect(onCommit).not.toHaveBeenCalled();
+      expect(onAdd.mock.calls).toEqual([[{ row: 0, side: "below", column: AMOUNT }]]);
+    });
+
+    it("selects the added row's cell in its column, scrolling to it", async () => {
+      const screen = await render(withBar());
+
+      await screen.rerender(withBar({ lastAdded: { id: "t500", column: AMOUNT } }));
+
+      await expect.element(cellOf("Shop 500", AMOUNT)).toBeInViewport();
+      expect(activeCell()).toBe(cellOf("Shop 500", AMOUNT).element());
+    });
+
+    it("selects the added row once it's shown", async () => {
+      const added = { id: "t0", column: DATE };
+      const screen = await render(withBar({ shown: rows.slice(1), lastAdded: added }));
+      expect(activeCell()).toBeNull();
+
+      await screen.rerender(withBar({ lastAdded: added }));
+
+      expect(activeCell()).toBe(cellOf("Corner Market", DATE).element());
+    });
+
+    it("has the added row's cell active from when it's first drawn", async () => {
+      const change = await renderChangeable(tableProps(rows));
+      await makeActive("Shop 2", CATEGORY);
+      const shown = activeWhenShown("Added");
+
+      change(tableProps(withAdded, { lastAdded: { id: ADDED.id, column: CATEGORY } }));
+
+      expect(await shown).toEqual({ row: "Added", column: CATEGORY });
+    });
+
+    it("selects an added row once, not again on later renders", async () => {
+      const added = { id: "t3", column: DATE };
+      const screen = await render(withBar({ lastAdded: added }));
+      await makeActive("Shop 1", REMARKS);
+
+      await screen.rerender(withBar({ lastAdded: added }));
+
+      expect(activeCell()).toBe(cellOf("Shop 1", REMARKS).element());
     });
   });
 

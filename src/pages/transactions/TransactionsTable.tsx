@@ -1,5 +1,4 @@
 import {
-  useEffect,
   useId,
   useLayoutEffect,
   useRef,
@@ -22,7 +21,7 @@ import type { HistoryDirection } from "../../lib/historyKey.ts";
 import type { TableActions } from "./ActionBar.tsx";
 import { columns, features, type CellEditor } from "./columns.ts";
 import { selectBetween, selectionAnchor, textOffsetAtPoint, wordAt } from "./caret.ts";
-import { cellHistoryAvailable, type CellHistory } from "./cellHistory.ts";
+import { historyAvailable, type EditHandle } from "./editHandle.ts";
 import EditableCell, {
   type EditStart,
   type FinishHow,
@@ -139,6 +138,17 @@ const editorOf = (column: number): CellEditor | undefined => columns[column]!.me
 const columnOf = (field: CellEditor["field"]) =>
   columns.findIndex((column) => column.meta!.editor?.field === field);
 
+/**
+ * Where the action bar asks for a row to be added: above or below row `row`
+ * (its index in `rows`), the active cell's, or with no cell active, null.
+ * `column` is the active cell's, or with none, the counterparty's: the new
+ * row's cell there is selected once it's added (see `lastAdded`).
+ */
+export type AddAt = { row: number | null; side: "above" | "below"; column: number };
+
+/** A row added where `AddAt` asked: its transaction's id, and the column to select. */
+export type Added = { id: string; column: number };
+
 type TransactionsTableProps = {
   /** In the order they're shown, and numbered in it from 1. */
   rows: TransactionRow[];
@@ -152,8 +162,9 @@ type TransactionsTableProps = {
   /** Called when a cell starts being edited, and when it stops. */
   onEditingChange?: (editing: boolean) => void;
   /**
-   * The latest undo or redo. Each new one selects the cells it changed, so
-   * it's clear what did (once the table is shown, if it's hidden).
+   * The latest undo or redo, once `rows` show it. Each new one selects the
+   * cells it changed, so it's clear what did (once the table is shown, if
+   * it's hidden).
    */
   lastUndoOrRedo: Moved<Edit> | null;
   /**
@@ -161,6 +172,11 @@ type TransactionsTableProps = {
    * the action bar.
    */
   onUndoOrRedo: (direction: HistoryDirection) => void;
+  /**
+   * The latest row added (see `actionBar`). Each new one's cell in its
+   * column is selected, once it's in `rows`.
+   */
+  lastAdded?: Added | null;
   /**
    * The headers' menus, for sorting and filtering by their columns (see the
    * columns' `headerMenu`): `sort` is how the rows are sorted, and `render`
@@ -172,13 +188,14 @@ type TransactionsTableProps = {
   };
   /**
    * The action bar floating over the table (see ActionBar): `canUndo` and
-   * `canRedo` are whether there's a change to undo and one to redo, and
-   * `render` renders the bar, given what its buttons do to the table.
-   * Without, there's none.
+   * `canRedo` are whether there's a change to undo and one to redo, `add`
+   * adds a row (null while one can't be), and `render` renders the bar,
+   * given what its buttons do to the table. Without, there's none.
    */
   actionBar?: {
     canUndo: boolean;
     canRedo: boolean;
+    add: ((at: AddAt) => void) | null;
     render: (actions: TableActions) => ReactNode;
   };
 };
@@ -199,6 +216,7 @@ function TransactionsTable({
   onEditingChange,
   lastUndoOrRedo,
   onUndoOrRedo,
+  lastAdded = null,
   menus,
   actionBar,
 }: TransactionsTableProps) {
@@ -230,7 +248,7 @@ function TransactionsTable({
     return () => onEditingChange?.(false);
   }, [isEditing, onEditingChange]);
   // Whether the edit has changed its cell: the action bar's undo and redo
-  // depend on it (see CellHistory).
+  // depend on it (see EditHandle).
   const [editModified, setEditModified] = useState(false);
   // The column whose header is active, while no cell is: from the keyboard,
   // Up from the first row reaches the headers, where their menus open.
@@ -247,8 +265,8 @@ function TransactionsTable({
   const headerRowRef = useRef<HTMLDivElement>(null);
   // The input of the cell being edited.
   const inputRef = useRef<HTMLInputElement>(null);
-  // The undo and redo of the edit, from outside its cell.
-  const cellHistoryRef = useRef<CellHistory>(null);
+  // What can be done to the edit from outside its cell.
+  const editHandleRef = useRef<EditHandle>(null);
   // The menus of the headers with them, by column.
   const menusRef = useRef<(HeaderMenuHandle | null)[]>([]);
   const dragRef = useRef<Drag | null>(null);
@@ -425,9 +443,10 @@ function TransactionsTable({
   }
 
   // Which undo or redo has been shown; the effect runs again when the page
-  // is shown again, and mustn't select it again then.
+  // is shown again, and mustn't select it again then. Selected before the
+  // browser draws the rows it changed, so they're never drawn without it.
   const shownUndoOrRedoRef = useRef<typeof lastUndoOrRedo>(null);
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (lastUndoOrRedo === null || lastUndoOrRedo === shownUndoOrRedoRef.current) return;
     shownUndoOrRedoRef.current = lastUndoOrRedo;
     const { about } = lastUndoOrRedo.step;
@@ -442,18 +461,45 @@ function TransactionsTable({
     if (next) select(next, next.active);
   });
 
-  /** The action bar's undo or redo: the edit's, while there is one (see CellHistory). */
+  // Which added row has been selected, as for undo and redo above, and as
+  // soon. Until it's in the rows, there's nothing to select yet.
+  const shownAddedRef = useRef<Added | null>(null);
+  useLayoutEffect(() => {
+    if (lastAdded === null || lastAdded === shownAddedRef.current) return;
+    const row = rows.findIndex(({ id }) => id === lastAdded.id);
+    if (row === -1) return;
+    shownAddedRef.current = lastAdded;
+    const cell = { row, column: lastAdded.column };
+    select(collapsed(cell), cell);
+  });
+
+  /** The action bar's undo or redo: the edit's, while there is one (see EditHandle). */
   function undoOrRedo(direction: HistoryDirection) {
-    if (cellHistoryRef.current) cellHistoryRef.current.undoOrRedo(direction);
+    if (editHandleRef.current) editHandleRef.current.undoOrRedo(direction);
     else onUndoOrRedo(direction);
   }
 
-  /** What the action bar's buttons do here, given what `history` can undo and redo. */
-  function barActions(history: { canUndo: boolean; canRedo: boolean }): TableActions {
-    const { canUndo, canRedo } = cellHistoryAvailable(editModified, history);
+  /**
+   * The action bar's add, beside the active cell's row: an edit is settled
+   * first (see EditHandle), so it's saved, or dropped if it can't be.
+   */
+  function addRow(add: (at: AddAt) => void, side: AddAt["side"]) {
+    editHandleRef.current?.settle();
+    add({
+      row: selection?.active.row ?? null,
+      side,
+      column: selection?.active.column ?? columnOf("counterparty"),
+    });
+  }
+
+  /** What the action bar's buttons do here (see `actionBar`). */
+  function barActions({ add, ...history }: NonNullable<typeof actionBar>): TableActions {
+    const { canUndo, canRedo } = historyAvailable(editModified, history);
     return {
       undo: canUndo ? () => undoOrRedo("undo") : null,
       redo: canRedo ? () => undoOrRedo("redo") : null,
+      addAbove: add && (() => addRow(add, "above")),
+      addBelow: add && (() => addRow(add, "below")),
     };
   }
 
@@ -835,7 +881,7 @@ function TransactionsTable({
                                 submit(row, item.index, editor, text, create, prefix),
                               finish: (how) => finishEditing(position, how),
                               history: onUndoOrRedo,
-                              historyRef: cellHistoryRef,
+                              handleRef: editHandleRef,
                               onModifiedChange: setEditModified,
                             }
                           : undefined

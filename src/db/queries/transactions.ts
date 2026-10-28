@@ -23,11 +23,13 @@ export type TransactionRow = {
 
 /**
  * A transaction as the page loads it: its row, and what no edit changes:
- * what the list on narrow screens also shows, and its order of import.
+ * what the list on narrow screens also shows, and its place in order.
  */
 export type ListedTransaction = TransactionRow & {
-  /** Its place in import order, for ordering the transactions on a day. */
-  seq: number;
+  /** When it happened, in seconds since the Unix epoch, if known. */
+  timestamp: number | null;
+  /** Orders the transactions on a day after their times (see `newestFirst`). */
+  sort_key: number;
   transfer_account: string | null;
   duplicate_of: string | null;
   /** Its amount in other currencies: `{ USD: { amount: -1090, decimals: 2 } }`. */
@@ -48,7 +50,8 @@ export function conversionTo(
  * columns into JavaScript takes several times as long for many rows.
  */
 const LISTED_JSON = `json_object(
-  'id', transactions.id, 'seq', transactions.seq, 'naive_date', transactions.naive_date,
+  'id', transactions.id, 'naive_date', transactions.naive_date,
+  'timestamp', transactions.timestamp, 'sort_key', transactions.sort_key,
   'account_name', transactions.account_name, 'counterparty', transactions.counterparty,
   'category', transactions.category, 'amount', transactions.amount,
   'decimals', currencies.stored_decimals, 'currency', transactions.currency,
@@ -72,12 +75,29 @@ const LISTED_FROM = `
 `;
 
 /**
- * Newest first. Rows on the same day keep their import order, latest first.
- * Read the result with `listedTransactions`.
+ * The order of transactions, newest first (see the schema): by date; on the
+ * same day, by time, those without one last, as if at the start of the day;
+ * then by sort key, then id. `table` is the transactions' name in the query.
  */
+export const newestFirst = (table: string) =>
+  `${table}.naive_date DESC, ${table}.timestamp DESC NULLS LAST, ${table}.sort_key DESC, ${table}.id DESC`;
+
+/** What orders transactions. */
+type Ordered = Pick<ListedTransaction, "id" | "naive_date" | "timestamp" | "sort_key">;
+
+/** `newestFirst` in JavaScript, for sorting transactions newest first. */
+export function compareNewestFirst(x: Ordered, y: Ordered) {
+  if (x.naive_date !== y.naive_date) return x.naive_date < y.naive_date ? 1 : -1;
+  // Those without a time last, as if at the start of the day.
+  if (x.timestamp !== y.timestamp) return (y.timestamp ?? -Infinity) - (x.timestamp ?? -Infinity);
+  if (x.sort_key !== y.sort_key) return y.sort_key - x.sort_key;
+  return x.id === y.id ? 0 : x.id < y.id ? 1 : -1;
+}
+
+/** Newest first (see `newestFirst`). Read the result with `listedTransactions`. */
 export const LIST_TRANSACTIONS = `
   SELECT json_group_array(
-    ${LISTED_JSON} ORDER BY transactions.naive_date DESC, transactions.seq DESC
+    ${LISTED_JSON} ORDER BY ${newestFirst("transactions")}
   ) AS transactions
   ${LISTED_FROM}
 `;
@@ -161,6 +181,40 @@ export const UPDATE_TRANSACTION = {
  * one it has a conversion to. Bind `[id, currency]`.
  */
 export const DELETE_CONVERSION = `DELETE FROM conversions WHERE transaction_id = ? AND currency = ?`;
+
+/** A source, unless one with its hash exists. Bind `[hash, remarks]`. */
+export const INSERT_SOURCE = `INSERT INTO sources (hash, remarks) VALUES (?, ?) ON CONFLICT DO NOTHING`;
+
+/**
+ * A transaction, without a transfer, a duplicate or conversions. Bind with
+ * `insertBinds`.
+ */
+export const INSERT_TRANSACTION = `
+  INSERT INTO transactions (id, source, account_name, currency, amount, counterparty, category,
+    naive_date, timestamp, sort_key, remarks)
+  VALUES ($id, $source, $account_name, $currency, $amount, $counterparty, $category,
+    $naive_date, $timestamp, $sort_key, $remarks)
+`;
+
+/** The binds for `INSERT_TRANSACTION`: `transaction`'s columns, from the source `source`. */
+export function insertBinds(transaction: ListedTransaction, source: Uint8Array) {
+  return {
+    $id: transaction.id,
+    $source: source,
+    $account_name: transaction.account_name,
+    $currency: transaction.currency,
+    $amount: transaction.amount,
+    $counterparty: transaction.counterparty,
+    $category: transaction.category,
+    $naive_date: transaction.naive_date,
+    $timestamp: transaction.timestamp,
+    $sort_key: transaction.sort_key,
+    $remarks: transaction.remarks,
+  };
+}
+
+/** Sets a transaction's sort key. Bind `[sortKey, id]`. */
+export const UPDATE_SORT_KEY = `UPDATE transactions SET sort_key = ? WHERE id = ?`;
 
 /** What a patch can set that isn't a column of transactions: the decimals are its currency's. */
 const NOT_STORED: ReadonlySet<string> = new Set<keyof TransactionRow>(["decimals"]);

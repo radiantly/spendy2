@@ -3,7 +3,7 @@
  * column headers' menus set it, and the rows that makes.
  */
 
-import type { ListedTransaction } from "../../db/queries/transactions.ts";
+import { compareNewestFirst, type ListedTransaction } from "../../db/queries/transactions.ts";
 import { resolvePeriod, type NaiveDate, type PeriodChoice } from "../../lib/period.ts";
 import { nameFinder } from "./fields.ts";
 
@@ -91,14 +91,11 @@ function filterFor(view: TransactionsView, names: ViewNames, today: NaiveDate) {
   return (row: ListedTransaction) => checks.every((check) => check(row));
 }
 
-/** Newest first; on the same day, the last imported first. */
-function byRecent(rows: readonly ListedTransaction[]) {
-  return (a: number, b: number) => {
-    const x = rows[a]!;
-    const y = rows[b]!;
-    if (x.naive_date !== y.naive_date) return x.naive_date < y.naive_date ? 1 : -1;
-    return y.seq - x.seq;
-  };
+type Rows = readonly ListedTransaction[];
+
+/** Positions in `rows` newest first, as the transactions are listed. */
+function byRecent(rows: Rows) {
+  return (a: number, b: number) => compareNewestFirst(rows[a]!, rows[b]!);
 }
 
 /** Names in alphabetical order for people: ignoring case, and with numbers by value. */
@@ -114,7 +111,7 @@ const collator = new Intl.Collator(undefined, { numeric: true });
  * transactions themselves took several times as long.
  */
 function sortByText(
-  rows: readonly ListedTransaction[],
+  rows: Rows,
   order: readonly number[],
   textOf: (row: ListedTransaction) => string | null,
   direction: SortDirection,
@@ -145,7 +142,7 @@ function sortByText(
  * of a period are as of `today`.
  */
 export function viewOrder(
-  rows: readonly ListedTransaction[],
+  rows: Rows,
   view: TransactionsView,
   names: ViewNames,
   today: NaiveDate,
@@ -179,7 +176,7 @@ export type FilterValues = {
   currencies: readonly string[];
 };
 
-export function filterValues(rows: readonly ListedTransaction[], names: ViewNames): FilterValues {
+export function filterValues(rows: Rows, names: ViewNames): FilterValues {
   const listed = listedNames(names);
   const categories = new Set<string | null>();
   const currencies = new Set<string>();

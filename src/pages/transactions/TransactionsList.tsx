@@ -1,6 +1,7 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useWindowVirtualizer } from "@tanstack/react-virtual";
 import {
+  compareNewestFirst,
   conversionTo,
   type AccountCurrency,
   type ListedTransaction,
@@ -14,11 +15,11 @@ export const ROW_HEIGHT = 72;
 
 type Item = { kind: "day"; date: string } | { kind: "transaction"; transaction: ListedTransaction };
 
-/** The transactions in the order they come (newest first), each day's under a heading. */
+/** The transactions newest first, as they're listed, each day's under a heading. */
 function byDay(transactions: readonly ListedTransaction[]) {
   const items: Item[] = [];
   let day: string | undefined;
-  for (const transaction of transactions) {
+  for (const transaction of transactions.toSorted(compareNewestFirst)) {
     if (transaction.naive_date !== day) {
       day = transaction.naive_date;
       items.push({ kind: "day", date: day });
@@ -44,7 +45,7 @@ function formatDay(date: string, thisYear: string) {
 }
 
 type TransactionsListProps = {
-  /** Newest first. */
+  /** In any order: edits and adds leave them out of order. */
   transactions: readonly ListedTransaction[];
   accounts: readonly AccountCurrency[];
 };
