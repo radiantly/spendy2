@@ -10,6 +10,12 @@ import {
   TbTrash,
 } from "react-icons/tb";
 
+/**
+ * What the bar's buttons do to the table (see TransactionsTable's
+ * `actionBar`): each null while it can't be done.
+ */
+export type TableActions = { undo: (() => void) | null; redo: (() => void) | null };
+
 /** How long the pointer rests on a button before its tooltip shows (ms). */
 const TOOLTIP_DELAY = 500;
 /** How soon after a tooltip hides the next shows without the wait (ms). */
@@ -59,14 +65,17 @@ type Tooltips = ReturnType<typeof useTooltips>;
 /**
  * A button that's just an icon, named by its tooltip (see `useTooltips`).
  * Pressing it keeps focus where it was, so the grid's selection and keys
- * carry on.
+ * carry on. `action` is what pressing it does; while it's null, the button
+ * is disabled, but keeps its tooltip, and focus.
  */
 function IconButton({
   label,
+  action,
   tooltips,
   children,
 }: {
   label: string;
+  action?: (() => void) | null;
   tooltips: Tooltips;
   children: ReactNode;
 }) {
@@ -75,11 +84,14 @@ function IconButton({
   const open = shown?.id === tooltipId;
   // It fades in and out, but not when one takes another's place.
   const fades = open ? !shown.swapped : shown === null;
+  const disabled = action === null;
   return (
     <span className="relative">
       <button
         type="button"
         aria-labelledby={tooltipId}
+        aria-disabled={disabled || undefined}
+        onClick={action ?? undefined}
         onMouseDown={(event) => event.preventDefault()}
         // Not for touch, where there's no hovering.
         onPointerEnter={(event) => event.pointerType === "mouse" && tooltips.hover(tooltipId)}
@@ -88,7 +100,9 @@ function IconButton({
           event.currentTarget.matches(":focus-visible") && tooltips.showNow(tooltipId)
         }
         onBlur={tooltips.hide}
-        className="grid size-9 place-items-center rounded-full text-xl text-ink-muted hover:bg-field hover:text-ink focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus"
+        className={`grid size-9 place-items-center rounded-full text-xl text-ink-muted focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus ${
+          disabled ? "opacity-60" : "hover:bg-field hover:text-ink"
+        }`}
       >
         {children}
       </button>
@@ -111,10 +125,10 @@ function Divider() {
 
 /**
  * A pill floating at the bottom of the window, over the table: a search of
- * the transactions, undo and redo, and actions on the selected rows. A
- * prototype: nothing is wired up yet.
+ * the transactions, undo and redo, and actions on the selected rows. Only
+ * undo and redo are wired up so far.
  */
-function ActionBar() {
+function ActionBar({ undo, redo }: TableActions) {
   const tooltips = useTooltips();
   return (
     <div className="pointer-events-none fixed inset-x-0 bottom-6 z-30 flex justify-center px-4">
@@ -130,10 +144,10 @@ function ActionBar() {
           />
         </search>
         <Divider />
-        <IconButton label="Undo" tooltips={tooltips}>
+        <IconButton label="Undo" action={undo} tooltips={tooltips}>
           <TbArrowBackUp />
         </IconButton>
-        <IconButton label="Redo" tooltips={tooltips}>
+        <IconButton label="Redo" action={redo} tooltips={tooltips}>
           <TbArrowForwardUp />
         </IconButton>
         <Divider />

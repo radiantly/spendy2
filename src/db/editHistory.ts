@@ -25,6 +25,7 @@ export class EditHistory<T> {
   /** Settles when the latest undo or redo has; they run one at a time, in order. */
   #moving: Promise<unknown> = Promise.resolve();
   readonly #listeners = new Set<() => void>();
+  readonly #stackListeners = new Set<() => void>();
 
   constructor(database: Database) {
     this.#database = database;
@@ -36,12 +37,12 @@ export class EditHistory<T> {
    * If it can't be written, it was never made, and is forgotten.
    */
   record(step: Step<T>) {
-    this.#stacks = { undo: [...this.#stacks.undo, step], redo: [] };
+    this.#setStacks({ undo: [...this.#stacks.undo, step], redo: [] });
     step.changes.catch(() => {
-      this.#stacks = {
+      this.#setStacks({
         undo: this.#stacks.undo.filter((recorded) => recorded !== step),
         redo: this.#stacks.redo.filter((recorded) => recorded !== step),
-      };
+      });
     });
   }
 
@@ -55,10 +56,10 @@ export class EditHistory<T> {
   undo() {
     const step = this.#stacks.undo.at(-1);
     if (step === undefined) return Promise.resolve(null);
-    this.#stacks = {
+    this.#setStacks({
       undo: this.#stacks.undo.slice(0, -1),
       redo: [...this.#stacks.redo, step],
-    };
+    });
     return this.#run("undo", step, (changes) => this.#database.undo(changes));
   }
 
@@ -66,10 +67,10 @@ export class EditHistory<T> {
   redo() {
     const step = this.#stacks.redo.at(-1);
     if (step === undefined) return Promise.resolve(null);
-    this.#stacks = {
+    this.#setStacks({
       undo: [...this.#stacks.undo, step],
       redo: this.#stacks.redo.slice(0, -1),
-    };
+    });
     return this.#run("redo", step, (changes) => this.#database.redo(changes));
   }
 
@@ -89,6 +90,31 @@ export class EditHistory<T> {
     this.#listeners.add(listener);
     return () => void this.#listeners.delete(listener);
   };
+
+  /** Whether there's an edit to undo. */
+  get canUndo() {
+    return this.#stacks.undo.length > 0;
+  }
+
+  /** Whether there's an edit to redo. */
+  get canRedo() {
+    return this.#stacks.redo.length > 0;
+  }
+
+  /**
+   * Calls `listener` whenever what can be undone or redone may have changed
+   * (see `canUndo` and `canRedo`), until the returned function is called.
+   * The same function every time, as `subscribe` is.
+   */
+  readonly subscribeToStacks = (listener: () => void) => {
+    this.#stackListeners.add(listener);
+    return () => void this.#stackListeners.delete(listener);
+  };
+
+  #setStacks(stacks: Stacks<T>) {
+    this.#stacks = stacks;
+    for (const listener of this.#stackListeners) listener();
+  }
 
   /**
    * Runs an undo or redo after the ones before it, telling the listeners.
@@ -124,7 +150,7 @@ export class EditHistory<T> {
     } catch (error) {
       // The database closed (e.g. on logging out): no one's left to tell.
       if (error instanceof ClosedError) throw error;
-      this.#stacks = { undo: [], redo: [] };
+      this.#setStacks({ undo: [], redo: [] });
       moved = { direction, step, error };
     }
     this.#latest = moved;

@@ -177,4 +177,87 @@ describe("EditHistory", () => {
     await expect(history.undo()).rejects.toBeInstanceOf(ClosedError);
     expect(listener).not.toHaveBeenCalled();
   });
+
+  describe("what can be undone and redone", () => {
+    const can = () => ({ undo: history.canUndo, redo: history.canRedo });
+
+    it("is nothing at first", () => {
+      expect(can()).toEqual({ undo: false, redo: false });
+    });
+
+    it("follows edits, undos and redos, as soon as they're asked for", async () => {
+      history.record(a);
+      expect(can()).toEqual({ undo: true, redo: false });
+
+      const undone = history.undo();
+      expect(can()).toEqual({ undo: false, redo: true });
+      await undone;
+      const redone = history.redo();
+      expect(can()).toEqual({ undo: true, redo: false });
+      await redone;
+      await history.undo();
+      history.record(b);
+      expect(can()).toEqual({ undo: true, redo: false });
+    });
+
+    it("leaves out an edit that couldn't be written", async () => {
+      const b = writing("b");
+      history.record(b.step);
+
+      b.fail();
+      await b.step.changes.catch(() => {});
+
+      expect(can()).toEqual({ undo: false, redo: false });
+    });
+
+    it("is nothing once an undo fails", async () => {
+      database.undo.mockRejectedValueOnce(new Error("The changes don't match the database"));
+      history.record(a);
+      history.record(b);
+
+      await history.undo();
+
+      expect(can()).toEqual({ undo: false, redo: false });
+    });
+
+    it("is told to stack listeners each time it changes", async () => {
+      const listener = vi.fn(can);
+      history.subscribeToStacks(listener);
+      const b = writing("b");
+
+      history.record(a);
+      await history.undo();
+      await history.redo();
+      history.record(b.step);
+      b.fail();
+      await b.step.changes.catch(() => {});
+
+      expect(listener.mock.results.map(({ value }) => value)).toEqual([
+        { undo: true, redo: false },
+        { undo: false, redo: true },
+        { undo: true, redo: false },
+        { undo: true, redo: false },
+        { undo: true, redo: false },
+      ]);
+    });
+
+    it("stops being told to a stack listener once unsubscribed", () => {
+      const listener = vi.fn();
+      history.subscribeToStacks(listener)();
+
+      history.record(a);
+
+      expect(listener).not.toHaveBeenCalled();
+    });
+
+    it("isn't told to undo and redo listeners, who hear only of undos and redos", async () => {
+      const listener = vi.fn();
+      history.subscribe(listener);
+
+      history.record(a);
+      await a.changes;
+
+      expect(listener).not.toHaveBeenCalled();
+    });
+  });
 });

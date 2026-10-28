@@ -1644,4 +1644,49 @@ describe("undo and redo on the transactions page", () => {
     await expect.element(inTable("Corner Market")).toBeVisible();
     await expect.element(saveButton()).not.toBeInTheDocument();
   });
+
+  describe("from the action bar", () => {
+    const undoButton = () => page.getByRole("button", { name: "Undo" });
+    const redoButton = () => page.getByRole("button", { name: "Redo" });
+
+    it("undoes an edit and redoes it", async () => {
+      await opened();
+      await editCounterparty("Corner Market", "Corner Shop");
+
+      await userEvent.click(undoButton());
+      await expect.element(inTable("Corner Market")).toBeVisible();
+      await userEvent.click(redoButton());
+
+      await expect.element(inTable("Corner Shop")).toBeVisible();
+    });
+
+    it("has nothing to undo or redo until there's an edit, and then an undo", async () => {
+      await opened();
+      await expect.element(undoButton()).toHaveAttribute("aria-disabled", "true");
+      await expect.element(redoButton()).toHaveAttribute("aria-disabled", "true");
+
+      await editCounterparty("Corner Market", "Corner Shop");
+      await expect.element(undoButton()).not.toHaveAttribute("aria-disabled");
+      await expect.element(redoButton()).toHaveAttribute("aria-disabled", "true");
+      await userEvent.click(undoButton());
+
+      await expect.element(undoButton()).toHaveAttribute("aria-disabled", "true");
+      await expect.element(redoButton()).not.toHaveAttribute("aria-disabled");
+    });
+
+    it("undoes an edit in progress, leaving nothing to save, and redoes it", async () => {
+      await opened();
+      await userEvent.dblClick(page.getByText("Corner Market").shown());
+      await page.getByRole("textbox").fill("Corner Shop");
+
+      await userEvent.click(undoButton());
+
+      await expect.element(page.getByRole("textbox")).not.toBeInTheDocument();
+      await expect.element(inTable("Corner Market")).toBeVisible();
+      await expect.element(saveButton()).not.toBeInTheDocument();
+      await userEvent.click(redoButton());
+      await expect.element(inTable("Corner Shop")).toBeVisible();
+      await expect.element(saveButton()).toBeEnabled();
+    });
+  });
 });

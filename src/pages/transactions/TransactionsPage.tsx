@@ -42,6 +42,8 @@ function TransactionsPage() {
   useHoldUpdates(editing);
   // Undoing and redoing can happen from any page.
   const moved = useSyncExternalStore(history.subscribe, () => history.latest);
+  const canUndo = useSyncExternalStore(history.subscribeToStacks, () => history.canUndo);
+  const canRedo = useSyncExternalStore(history.subscribeToStacks, () => history.canRedo);
   const undoOrRedo = useUndoRedo(history);
   // The table's columns fit from md; narrower, the transactions are a list.
   const tableFits = useBreakpoint("md");
@@ -138,9 +140,9 @@ function TransactionsPage() {
               />
             ),
           }}
+          actionBar={{ canUndo, canRedo, render: (actions) => <ActionBar {...actions} /> }}
         />
       )}
-      {showsTable && <ActionBar />}
     </div>
   );
 }

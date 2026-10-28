@@ -7,6 +7,7 @@ import type { Edit } from "../../db/databaseContext.ts";
 import type { Moved } from "../../db/editHistory.ts";
 import type { Currency, EditedCell, TransactionRow } from "../../db/queries/transactions.ts";
 import { mouse, pointIn } from "../../test/mouse.ts";
+import ActionBar from "./ActionBar.tsx";
 import TransactionsTable, { ROW_HEIGHT } from "./TransactionsTable.tsx";
 
 const ROW_COUNT = 100_000;
@@ -1773,6 +1774,198 @@ describe("TransactionsTable", () => {
         await expect.element(input()).toHaveValue(text);
       },
     );
+  });
+
+  describe("the action bar's undo and redo", () => {
+    const undoButton = () => page.getByRole("button", { name: "Undo" });
+    const redoButton = () => page.getByRole("button", { name: "Redo" });
+
+    /** The table with its action bar, with a change to undo and one to redo unless said. */
+    const withBar = ({ canUndo = true, canRedo = true } = {}) => (
+      <TransactionsTable
+        rows={rows}
+        maxRowNumber={rows.length}
+        categories={CATEGORIES}
+        accounts={ACCOUNTS}
+        currencies={CURRENCIES}
+        onCommit={onCommit}
+        lastUndoOrRedo={null}
+        onUndoOrRedo={onUndoOrRedo}
+        actionBar={{ canUndo, canRedo, render: (actions) => <ActionBar {...actions} /> }}
+      />
+    );
+
+    /** What was saved, undone and redone, in order. */
+    function recordCalls() {
+      const calls: string[] = [];
+      onCommit.mockImplementation(
+        (changes) => void calls.push(`commit ${JSON.stringify(changes)}`),
+      );
+      onUndoOrRedo.mockImplementation((direction) => void calls.push(direction));
+      return calls;
+    }
+
+    /** Presses a disabled button, as a person still can: Playwright won't, unless forced. */
+    const pressDisabled = (button: Locator) => userEvent.click(button, { force: true });
+
+    it.each([
+      ["Undo", "undo"],
+      ["Redo", "redo"],
+    ] as const)(
+      "%s asks to %s the table's last change, keeping focus in the grid",
+      async (name, direction) => {
+        await render(withBar());
+        await makeActive("Shop 1", COUNTERPARTY);
+        const button = page.getByRole("button", { name });
+        await expect.element(button).not.toHaveAttribute("aria-disabled");
+
+        await userEvent.click(button);
+
+        expect(onUndoOrRedo.mock.calls).toEqual([[direction]]);
+        await expect.element(grid()).toHaveFocus();
+      },
+    );
+
+    it.each(["Undo", "Redo"])("disables %s while there's nothing for it", async (name) => {
+      await render(withBar({ canUndo: false, canRedo: false }));
+      await makeActive("Shop 1", COUNTERPARTY);
+      const button = page.getByRole("button", { name });
+      await expect.element(button).toHaveAttribute("aria-disabled", "true");
+
+      await pressDisabled(button);
+
+      expect(onUndoOrRedo).not.toHaveBeenCalled();
+    });
+
+    describe("while a cell is being edited", () => {
+      it.each([
+        ["Undo", "undo"],
+        ["Redo", "redo"],
+      ] as const)(
+        "%s finishes an unchanged edit first, keeping its cell active",
+        async (name, direction) => {
+          await render(withBar());
+          await userEvent.dblClick(cellOf("Corner Market", COUNTERPARTY));
+
+          await userEvent.click(page.getByRole("button", { name }));
+
+          expect(onUndoOrRedo.mock.calls).toEqual([[direction]]);
+          expect(onCommit).not.toHaveBeenCalled();
+          await expect.element(input()).not.toBeInTheDocument();
+          expect(activeCell()).toBe(cellOf("Corner Market", COUNTERPARTY).element());
+          await expect.element(grid()).toHaveFocus();
+        },
+      );
+
+      it("disables Undo for an unchanged edit while there's nothing to undo", async () => {
+        await render(withBar({ canUndo: false }));
+
+        await userEvent.dblClick(cellOf("Corner Market", COUNTERPARTY));
+
+        await expect.element(undoButton()).toHaveAttribute("aria-disabled", "true");
+      });
+
+      it("saves a changed edit and undoes it, even with nothing else to undo", async () => {
+        await render(withBar({ canUndo: false }));
+        const calls = recordCalls();
+        await userEvent.dblClick(cellOf("Corner Market", COUNTERPARTY));
+        await userEvent.keyboard("{End}s");
+
+        await userEvent.click(undoButton());
+
+        expect(calls).toEqual([
+          `commit ${JSON.stringify([
+            { rowIndex: 0, field: "counterparty", patch: { counterparty: "Corner Markets" } },
+          ])}`,
+          "undo",
+        ]);
+        await expect.element(input()).not.toBeInTheDocument();
+        expect(activeCell()).toBe(cellOf("Corner Market", COUNTERPARTY).element());
+        await expect.element(grid()).toHaveFocus();
+      });
+
+      it("saves an edit started by typing and undoes it", async () => {
+        await render(withBar());
+        const calls = recordCalls();
+        await makeActive("Shop 1", COUNTERPARTY);
+        await userEvent.keyboard("Shop 9");
+
+        await userEvent.click(undoButton());
+
+        expect(calls).toEqual([
+          `commit ${JSON.stringify([
+            { rowIndex: 1, field: "counterparty", patch: { counterparty: "Shop 9" } },
+          ])}`,
+          "undo",
+        ]);
+      });
+
+      it("undoes the change before an edit that comes to the cell's own value", async () => {
+        await render(withBar());
+        await makeActive("Shop 1", COUNTERPARTY);
+        await userEvent.keyboard("Shop 1");
+
+        await userEvent.click(undoButton());
+
+        expect(onCommit).not.toHaveBeenCalled();
+        expect(onUndoOrRedo.mock.calls).toEqual([["undo"]]);
+      });
+
+      it("drops a changed edit that can't be saved, undoing nothing", async () => {
+        await render(withBar());
+        await editAtCharacter(page.getByText("$1,234.50"), 1);
+        await amountInput().fill("1.2.3");
+
+        await userEvent.click(undoButton());
+
+        await expect.element(amountInput()).not.toBeInTheDocument();
+        expect(onCommit).not.toHaveBeenCalled();
+        expect(onUndoOrRedo).not.toHaveBeenCalled();
+        expect(activeCell()).toBe(cellOf("Corner Market", AMOUNT).element());
+        await expect.element(grid()).toHaveFocus();
+      });
+
+      it("drops a category typed in it rather than creating it", async () => {
+        await render(withBar());
+        await userEvent.dblClick(cellOf("Shop 1", CATEGORY));
+        await combobox().fill("Pets");
+
+        await userEvent.click(undoButton());
+
+        await expect.element(combobox()).not.toBeInTheDocument();
+        expect(onCommit).not.toHaveBeenCalled();
+        expect(onUndoOrRedo).not.toHaveBeenCalled();
+      });
+
+      it("disables Redo while an edit has changed its cell", async () => {
+        await render(withBar());
+        await userEvent.dblClick(cellOf("Corner Market", COUNTERPARTY));
+        await expect.element(redoButton()).not.toHaveAttribute("aria-disabled");
+
+        await userEvent.keyboard("{End}s");
+
+        await expect.element(redoButton()).toHaveAttribute("aria-disabled", "true");
+        await pressDisabled(redoButton());
+        expect(onUndoOrRedo).not.toHaveBeenCalled();
+        expect(onCommit).not.toHaveBeenCalled();
+        await expect.element(input()).toHaveFocus();
+        await expect.element(input()).toHaveValue("Corner Markets");
+      });
+
+      it.each([
+        ["changed back", "{Backspace}"],
+        ["over", "{Escape}"],
+      ])("enables Redo again once the edit is %s", async (_, keys) => {
+        await render(withBar());
+        await userEvent.dblClick(cellOf("Corner Market", COUNTERPARTY));
+        await userEvent.keyboard("{End}s");
+        await expect.element(redoButton()).toHaveAttribute("aria-disabled", "true");
+
+        await userEvent.keyboard(keys);
+
+        await expect.element(redoButton()).not.toHaveAttribute("aria-disabled");
+      });
+    });
   });
 
   describe("when the rows change", () => {

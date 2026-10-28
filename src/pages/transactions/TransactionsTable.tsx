@@ -19,8 +19,10 @@ import {
   type TransactionRow,
 } from "../../db/queries/transactions.ts";
 import type { HistoryDirection } from "../../lib/historyKey.ts";
+import type { TableActions } from "./ActionBar.tsx";
 import { columns, features, type CellEditor } from "./columns.ts";
 import { selectBetween, selectionAnchor, textOffsetAtPoint, wordAt } from "./caret.ts";
+import { cellHistoryAvailable, type CellHistory } from "./cellHistory.ts";
 import EditableCell, {
   type EditStart,
   type FinishHow,
@@ -154,7 +156,10 @@ type TransactionsTableProps = {
    * it's clear what did (once the table is shown, if it's hidden).
    */
   lastUndoOrRedo: Moved<Edit> | null;
-  /** Undo or redo asked for from a cell being edited (see EditableCell). */
+  /**
+   * Undo or redo asked for from a cell being edited (see EditableCell), or
+   * the action bar.
+   */
   onUndoOrRedo: (direction: HistoryDirection) => void;
   /**
    * The headers' menus, for sorting and filtering by their columns (see the
@@ -164,6 +169,17 @@ type TransactionsTableProps = {
   menus?: {
     sort: Sort;
     render: (column: MenuColumn, header: HeaderProps) => ReactNode;
+  };
+  /**
+   * The action bar floating over the table (see ActionBar): `canUndo` and
+   * `canRedo` are whether there's a change to undo and one to redo, and
+   * `render` renders the bar, given what its buttons do to the table.
+   * Without, there's none.
+   */
+  actionBar?: {
+    canUndo: boolean;
+    canRedo: boolean;
+    render: (actions: TableActions) => ReactNode;
   };
 };
 
@@ -184,6 +200,7 @@ function TransactionsTable({
   lastUndoOrRedo,
   onUndoOrRedo,
   menus,
+  actionBar,
 }: TransactionsTableProps) {
   // The table and virtualizer are mutable objects that return new results
   // from the same instance, so the React Compiler would memoize reads of
@@ -212,6 +229,9 @@ function TransactionsTable({
     // Also when the table goes away mid-edit.
     return () => onEditingChange?.(false);
   }, [isEditing, onEditingChange]);
+  // Whether the edit has changed its cell: the action bar's undo and redo
+  // depend on it (see CellHistory).
+  const [editModified, setEditModified] = useState(false);
   // The column whose header is active, while no cell is: from the keyboard,
   // Up from the first row reaches the headers, where their menus open.
   const [headerColumn, setHeaderColumn] = useState<number | null>(null);
@@ -227,6 +247,8 @@ function TransactionsTable({
   const headerRowRef = useRef<HTMLDivElement>(null);
   // The input of the cell being edited.
   const inputRef = useRef<HTMLInputElement>(null);
+  // The undo and redo of the edit, from outside its cell.
+  const cellHistoryRef = useRef<CellHistory>(null);
   // The menus of the headers with them, by column.
   const menusRef = useRef<(HeaderMenuHandle | null)[]>([]);
   const dragRef = useRef<Drag | null>(null);
@@ -419,6 +441,21 @@ function TransactionsTable({
     );
     if (next) select(next, next.active);
   });
+
+  /** The action bar's undo or redo: the edit's, while there is one (see CellHistory). */
+  function undoOrRedo(direction: HistoryDirection) {
+    if (cellHistoryRef.current) cellHistoryRef.current.undoOrRedo(direction);
+    else onUndoOrRedo(direction);
+  }
+
+  /** What the action bar's buttons do here, given what `history` can undo and redo. */
+  function barActions(history: { canUndo: boolean; canRedo: boolean }): TableActions {
+    const { canUndo, canRedo } = cellHistoryAvailable(editModified, history);
+    return {
+      undo: canUndo ? () => undoOrRedo("undo") : null,
+      redo: canRedo ? () => undoOrRedo("redo") : null,
+    };
+  }
 
   function handleKeyDown(event: KeyboardEvent) {
     // Keys typed into a cell's input, or a header's menu, are theirs.
@@ -645,171 +682,177 @@ function TransactionsTable({
   const tint = "bg-focus/8";
 
   return (
-    <div
-      ref={gridRef}
-      role="grid"
-      tabIndex={0}
-      aria-rowcount={rows.length + 1}
-      aria-multiselectable
-      aria-activedescendant={
-        selection
-          ? cellId(selection.active)
-          : activeHeader !== null
-            ? headerId(activeHeader)
-            : undefined
-      }
-      onKeyDown={handleKeyDown}
-      onFocus={(event) => {
-        // Tabbing into the grid starts at its first cell, or without rows,
-        // its first header. A click focuses it too, but one on a cell or a
-        // header makes that active, and one elsewhere, nothing.
-        if (
-          event.target !== event.currentTarget ||
-          selection !== null ||
-          activeHeader !== null ||
-          !event.currentTarget.matches(":focus-visible")
-        )
-          return;
-        if (size.rows > 0) setSelection(collapsed({ row: 0, column: 0 }));
-        else activateHeader(0);
-      }}
-      className="cursor-default text-sm outline-none"
-    >
-      <div role="rowgroup" className="sticky top-0 z-20 bg-canvas">
-        {table.getHeaderGroups().map((group) => (
-          <div
-            key={group.id}
-            ref={headerRowRef}
-            role="row"
-            aria-rowindex={1}
-            className="grid border-y border-line"
-            style={{ gridTemplateColumns: template, height: HEADER_HEIGHT }}
-          >
-            {/* Over the row numbers. */}
-            <div aria-hidden className="border-r border-line" />
-            {group.headers.map((header, column) => {
-              const { headerMenu } = header.column.columnDef.meta!;
-              const label = <table.FlexRender header={header} />;
-              return (
-                <div
-                  key={header.id}
-                  id={headerId(column)}
-                  role="columnheader"
-                  aria-sort={
-                    headerMenu && menus?.sort.column === headerMenu
-                      ? menus.sort.direction
-                      : undefined
-                  }
-                  onMouseDown={(event) => handleHeaderPress(column, event)}
-                  className={`flex items-center truncate border-r border-line font-medium text-ink-muted last:border-r-0 ${
-                    columnSelected(column) ? tint : ""
-                  } ${headerMenu && menus ? "" : "px-2"} ${
-                    activeHeader === column ? "outline-2 -outline-offset-2 outline-focus" : ""
-                  }`}
-                >
-                  {headerMenu && menus
-                    ? menus.render(headerMenu, {
-                        label,
-                        menuRef: (menu) => {
-                          menusRef.current[column] = menu;
-                        },
-                        onDone: () => leaveHeader(column),
-                      })
-                    : label}
-                </div>
-              );
-            })}
-          </div>
-        ))}
-      </div>
-
+    <>
       <div
-        ref={bodyRef}
-        role="rowgroup"
-        className="relative"
-        style={{ height: virtualizer.getTotalSize() }}
+        ref={gridRef}
+        role="grid"
+        tabIndex={0}
+        aria-rowcount={rows.length + 1}
+        aria-multiselectable
+        aria-activedescendant={
+          selection
+            ? cellId(selection.active)
+            : activeHeader !== null
+              ? headerId(activeHeader)
+              : undefined
+        }
+        onKeyDown={handleKeyDown}
+        onFocus={(event) => {
+          // Tabbing into the grid starts at its first cell, or without rows,
+          // its first header. A click focuses it too, but one on a cell or a
+          // header makes that active, and one elsewhere, nothing.
+          if (
+            event.target !== event.currentTarget ||
+            selection !== null ||
+            activeHeader !== null ||
+            !event.currentTarget.matches(":focus-visible")
+          )
+            return;
+          if (size.rows > 0) setSelection(collapsed({ row: 0, column: 0 }));
+          else activateHeader(0);
+        }}
+        className="cursor-default text-sm outline-none"
       >
-        {virtualizer.getVirtualItems().map((item) => {
-          const row = rows[item.index]!;
-          const isEditingRow = editing?.cell.row === item.index;
-          return (
+        <div role="rowgroup" className="sticky top-0 z-20 bg-canvas">
+          {table.getHeaderGroups().map((group) => (
             <div
-              key={item.key}
+              key={group.id}
+              ref={headerRowRef}
               role="row"
-              aria-rowindex={item.index + 2}
-              className="absolute inset-x-0 grid leading-7"
-              style={{
-                gridTemplateColumns: template,
-                height: ROW_HEIGHT,
-                // Placed with top, not a transform: the edited cell's popups
-                // are anchored to it (see EditableCell), and Firefox places
-                // them wrongly against a transformed anchor.
-                top: item.start - scrollMargin,
-              }}
+              aria-rowindex={1}
+              className="grid border-y border-line"
+              style={{ gridTemplateColumns: template, height: HEADER_HEIGHT }}
             >
-              {/* Screen readers have the row's place from aria-rowindex, and
-                  the keyboard selects a row with Home, then Shift+End. */}
-              <div
-                aria-hidden
-                onMouseDown={(event) => handleRowPress(item.index, event)}
-                className={`truncate border-r border-b border-line px-2 text-right text-ink-muted tabular-nums ${
-                  rowSelected(item.index) ? tint : ""
-                }`}
-              >
-                {item.index + 1}
-              </div>
-              {leafColumns.map((leafColumn, column) => {
-                const meta = leafColumn.columnDef.meta!;
-                const editor = meta.editor;
-                const position = { row: item.index, column };
-                const selected = area !== null && contains(area, position);
-                const isEditing = isEditingRow && editing.cell.column === column;
-                const editText = editor?.editText(row);
+              {/* Over the row numbers. */}
+              <div aria-hidden className="border-r border-line" />
+              {group.headers.map((header, column) => {
+                const { headerMenu } = header.column.columnDef.meta!;
+                const label = <table.FlexRender header={header} />;
                 return (
-                  <EditableCell
-                    key={leafColumn.id}
-                    id={cellId(position)}
-                    display={meta.display(row)}
-                    align={meta.align}
-                    tabular={meta.tabular}
-                    editText={editText}
-                    active={selection !== null && samePosition(selection.active, position)}
-                    selected={selected}
-                    inRange={ranged && selected}
-                    inActiveRow={
-                      selection !== null && !ranged && selection.active.row === item.index
-                    }
-                    editing={
-                      isEditing && editor
-                        ? {
-                            text: editing.text ?? editText!,
-                            label: String(leafColumn.columnDef.header),
-                            prefix: editor.prefix && {
-                              text: editing.prefix ?? editor.prefix.editText(row),
-                              label: editor.prefix.label,
-                            },
-                            start: editing.start,
-                            typed: editing.text !== undefined || editing.prefix !== undefined,
-                            menu: editor.menu?.(context),
-                            paused: ranged,
-                            inputRef,
-                            submit: (text, create, prefix) =>
-                              submit(row, item.index, editor, text, create, prefix),
-                            finish: (how) => finishEditing(position, how),
-                            history: onUndoOrRedo,
-                          }
+                  <div
+                    key={header.id}
+                    id={headerId(column)}
+                    role="columnheader"
+                    aria-sort={
+                      headerMenu && menus?.sort.column === headerMenu
+                        ? menus.sort.direction
                         : undefined
                     }
-                    onPress={(event, offset) => handlePress(position, event, offset)}
-                  />
+                    onMouseDown={(event) => handleHeaderPress(column, event)}
+                    className={`flex items-center truncate border-r border-line font-medium text-ink-muted last:border-r-0 ${
+                      columnSelected(column) ? tint : ""
+                    } ${headerMenu && menus ? "" : "px-2"} ${
+                      activeHeader === column ? "outline-2 -outline-offset-2 outline-focus" : ""
+                    }`}
+                  >
+                    {headerMenu && menus
+                      ? menus.render(headerMenu, {
+                          label,
+                          menuRef: (menu) => {
+                            menusRef.current[column] = menu;
+                          },
+                          onDone: () => leaveHeader(column),
+                        })
+                      : label}
+                  </div>
                 );
               })}
             </div>
-          );
-        })}
-        {area && ranged && <RangeOutline area={area} template={template} />}
+          ))}
+        </div>
+
+        <div
+          ref={bodyRef}
+          role="rowgroup"
+          className="relative"
+          style={{ height: virtualizer.getTotalSize() }}
+        >
+          {virtualizer.getVirtualItems().map((item) => {
+            const row = rows[item.index]!;
+            const isEditingRow = editing?.cell.row === item.index;
+            return (
+              <div
+                key={item.key}
+                role="row"
+                aria-rowindex={item.index + 2}
+                className="absolute inset-x-0 grid leading-7"
+                style={{
+                  gridTemplateColumns: template,
+                  height: ROW_HEIGHT,
+                  // Placed with top, not a transform: the edited cell's popups
+                  // are anchored to it (see EditableCell), and Firefox places
+                  // them wrongly against a transformed anchor.
+                  top: item.start - scrollMargin,
+                }}
+              >
+                {/* Screen readers have the row's place from aria-rowindex, and
+                  the keyboard selects a row with Home, then Shift+End. */}
+                <div
+                  aria-hidden
+                  onMouseDown={(event) => handleRowPress(item.index, event)}
+                  className={`truncate border-r border-b border-line px-2 text-right text-ink-muted tabular-nums ${
+                    rowSelected(item.index) ? tint : ""
+                  }`}
+                >
+                  {item.index + 1}
+                </div>
+                {leafColumns.map((leafColumn, column) => {
+                  const meta = leafColumn.columnDef.meta!;
+                  const editor = meta.editor;
+                  const position = { row: item.index, column };
+                  const selected = area !== null && contains(area, position);
+                  const isEditing = isEditingRow && editing.cell.column === column;
+                  const editText = editor?.editText(row);
+                  return (
+                    <EditableCell
+                      key={leafColumn.id}
+                      id={cellId(position)}
+                      display={meta.display(row)}
+                      align={meta.align}
+                      tabular={meta.tabular}
+                      editText={editText}
+                      active={selection !== null && samePosition(selection.active, position)}
+                      selected={selected}
+                      inRange={ranged && selected}
+                      inActiveRow={
+                        selection !== null && !ranged && selection.active.row === item.index
+                      }
+                      editing={
+                        isEditing && editor
+                          ? {
+                              text: editing.text ?? editText!,
+                              label: String(leafColumn.columnDef.header),
+                              prefix: editor.prefix && {
+                                text: editing.prefix ?? editor.prefix.editText(row),
+                                label: editor.prefix.label,
+                              },
+                              start: editing.start,
+                              typed: editing.text !== undefined || editing.prefix !== undefined,
+                              menu: editor.menu?.(context),
+                              paused: ranged,
+                              inputRef,
+                              submit: (text, create, prefix) =>
+                                submit(row, item.index, editor, text, create, prefix),
+                              finish: (how) => finishEditing(position, how),
+                              history: onUndoOrRedo,
+                              historyRef: cellHistoryRef,
+                              onModifiedChange: setEditModified,
+                            }
+                          : undefined
+                      }
+                      onPress={(event, offset) => handlePress(position, event, offset)}
+                    />
+                  );
+                })}
+              </div>
+            );
+          })}
+          {area && ranged && <RangeOutline area={area} template={template} />}
+        </div>
       </div>
-    </div>
+      {/* After the grid, so it's after it from the keyboard too. */}
+      {actionBar?.render(barActions(actionBar))}
+    </>
   );
 }
 

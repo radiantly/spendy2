@@ -1,5 +1,7 @@
 import {
+  useEffect,
   useId,
+  useImperativeHandle,
   useLayoutEffect,
   useRef,
   useState,
@@ -7,10 +9,12 @@ import {
   type FocusEvent,
   type KeyboardEvent,
   type MouseEvent,
+  type Ref,
   type RefObject,
 } from "react";
 import { toast } from "sonner";
 import { mapOffset, textOffsetAtPoint } from "./caret.ts";
+import type { CellHistory } from "./cellHistory.ts";
 import { historyKey, type HistoryDirection } from "../../lib/historyKey.ts";
 import { defaultHighlight, menuItems, type MenuConfig, type MenuItem } from "./menu.ts";
 import { splitChange, type Part } from "./prefix.ts";
@@ -58,6 +62,14 @@ export type CellEditing = {
   finish: (how: FinishHow) => void;
   /** Undoes or redoes the table's last change, once the edit has finished. */
   history: (direction: HistoryDirection) => void;
+  /** Set to the edit's undo and redo from outside the cell, while it lasts. */
+  historyRef: Ref<CellHistory>;
+  /**
+   * Told when the edit starts to change the cell, and when it no longer
+   * does, or ends: what its undo and redo from outside the cell can do
+   * depends on it (see `CellHistory`).
+   */
+  onModifiedChange: (modified: boolean) => void;
 };
 
 type EditableCellProps = {
@@ -172,7 +184,7 @@ type CellInputProps = CellEditing & { align?: "end" };
  * keeping the cell active; Tab submits and moves on. Undo and redo (Ctrl+Z,
  * Ctrl+Y) are the input's own in an edit started by typing, or once its text
  * has changed; otherwise they finish the edit and undo or redo the table's
- * last change. Leaving the cell
+ * last change, as from outside the cell (see `CellHistory`). Leaving the cell
  * submits too, but can't show an error there, so an invalid value is undone
  * instead. With a `menu`, it's a combobox: up and down move through the
  * options, and Enter, Tab or leaving picks the highlighted one.
@@ -196,11 +208,22 @@ function CellInput({
   submit,
   finish,
   history,
+  historyRef,
+  onModifiedChange,
   align,
 }: CellInputProps) {
   const [text, setText] = useState(initialText);
   const hasPrefix = initialPrefix !== undefined;
   const [prefix, setPrefix] = useState(initialPrefix?.text ?? "");
+  // Started by typing, or changed since: either way, no longer what the
+  // cell had.
+  const modified = typed || text !== initialText || prefix !== (initialPrefix?.text ?? "");
+  useEffect(() => {
+    if (!modified) return;
+    onModifiedChange(true);
+    return () => onModifiedChange(false);
+  }, [modified, onModifiedChange]);
+  useImperativeHandle(historyRef, () => ({ undoOrRedo }));
   const prefixRef = useRef<HTMLInputElement>(null);
   const [error, setError] = useState<string | null>(null);
   // Until the user types, the menu lists every option.
@@ -284,6 +307,33 @@ function CellInput({
     else if (text.trim() === "") trySubmit(text, false, how);
   }
 
+  /**
+   * What leaving the input submits. A highlighted option is picked, but
+   * never created: that takes Enter or a click on the create item.
+   */
+  function submitAsLeaving() {
+    const item = items[highlight];
+    return submit(
+      item?.kind === "option" ? item.value : text,
+      false,
+      hasPrefix ? prefix : undefined,
+    );
+  }
+
+  /** See `CellHistory`. */
+  function undoOrRedo(direction: HistoryDirection) {
+    if (!modified) {
+      done("stay");
+      history(direction);
+    } else if (direction === "undo") {
+      // Saving what comes to the cell's value again changes nothing, so it's
+      // the change before it that's undone, as if unmodified.
+      const saved = submitAsLeaving().ok;
+      done("stay");
+      if (saved) history("undo");
+    }
+  }
+
   function handleChange(value: string) {
     setText(value);
     setError(null);
@@ -296,10 +346,9 @@ function CellInput({
 
   function handleKeyDown(event: KeyboardEvent<HTMLInputElement>) {
     const direction = historyKey(event);
-    if (direction && !typed && text === initialText && prefix === (initialPrefix?.text ?? "")) {
+    if (direction && !modified) {
       event.preventDefault();
-      done("stay");
-      history(direction);
+      undoOrRedo(direction);
     } else if (event.key === "Escape") {
       event.preventDefault();
       done("stay");
@@ -320,14 +369,7 @@ function CellInput({
     // Moving to the cell's other input, in the same frame, doesn't leave it.
     const frame = event.currentTarget.parentElement!;
     if (finishedRef.current || frame.contains(event.relatedTarget as Node | null)) return;
-    // Leaving picks a highlighted option, but never creates one: that takes
-    // Enter or a click on the create item.
-    const item = items[highlight];
-    const result = submit(
-      item?.kind === "option" ? item.value : text,
-      false,
-      hasPrefix ? prefix : undefined,
-    );
+    const result = submitAsLeaving();
     // There's no cell left to show the error on, so say why it was undone.
     if (!result.ok) toast.error(`${result.error}. The change was undone.`);
     done("away");
