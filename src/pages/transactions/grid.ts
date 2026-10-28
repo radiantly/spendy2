@@ -158,19 +158,6 @@ export function contains(area: Bounds, cell: CellPosition) {
   );
 }
 
-/** Which sides of a cell are on a range's outline. */
-export type Edges = { top: boolean; bottom: boolean; left: boolean; right: boolean };
-
-/** Which sides of `cell` are on the outline of `area`. */
-export function edges(area: Bounds, cell: CellPosition): Edges {
-  return {
-    top: cell.row === area.top,
-    bottom: cell.row === area.bottom,
-    left: cell.column === area.left,
-    right: cell.column === area.right,
-  };
-}
-
 /**
  * Where the grid's cells are on screen, in viewport coordinates: the top of
  * the first row, the row height, and each column's left edge.

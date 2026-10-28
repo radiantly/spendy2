@@ -4,7 +4,6 @@ import {
   useRef,
   useState,
   type ComponentProps,
-  type CSSProperties,
   type FocusEvent,
   type KeyboardEvent,
   type MouseEvent,
@@ -12,7 +11,6 @@ import {
 } from "react";
 import { toast } from "sonner";
 import { mapOffset, textOffsetAtPoint } from "./caret.ts";
-import type { Edges } from "./grid.ts";
 import { historyKey, type HistoryDirection } from "../../lib/historyKey.ts";
 import { defaultHighlight, menuItems, type MenuConfig, type MenuItem } from "./menu.ts";
 import { splitChange, type Part } from "./prefix.ts";
@@ -72,8 +70,8 @@ type EditableCellProps = {
   editText?: string;
   active: boolean;
   selected: boolean;
-  /** For a cell in a range of several: which of its sides are on the range's outline. */
-  rangeEdges?: Edges;
+  /** In a range of several cells (which the grid outlines). */
+  inRange: boolean;
   /** Set while the cell is being edited. */
   editing?: CellEditing;
   /**
@@ -82,18 +80,6 @@ type EditableCellProps = {
    */
   onPress: (event: MouseEvent, offset: number | null) => void;
 };
-
-/** The outline of a range, drawn inside its outer cells. */
-function rangeOutline(sides: Edges): CSSProperties {
-  const line = "var(--color-focus)";
-  const shadows = [
-    sides.top && `inset 0 1px 0 ${line}`,
-    sides.bottom && `inset 0 -1px 0 ${line}`,
-    sides.left && `inset 1px 0 0 ${line}`,
-    sides.right && `inset -1px 0 0 ${line}`,
-  ].filter(Boolean);
-  return shadows.length > 0 ? { boxShadow: shadows.join(", ") } : {};
-}
 
 /**
  * A spreadsheet-style cell: plain text that turns into an input when edited,
@@ -108,7 +94,7 @@ function EditableCell({
   editText,
   active,
   selected,
-  rangeEdges,
+  inRange,
   editing,
   onPress,
 }: EditableCellProps) {
@@ -138,10 +124,16 @@ function EditableCell({
       aria-selected={selected}
       aria-readonly={editText === undefined || undefined}
       onMouseDown={handleMouseDown}
-      style={rangeEdges && rangeOutline(rangeEdges)}
+      // An edited cell is a field, and its outline red while what's in it is
+      // invalid. The field's background is the cell's: positioned content,
+      // like the edit's inputs, is painted over the cell's outline.
       className={`relative min-w-0 border-r border-b border-line px-2 last:border-r-0 ${
-        rangeEdges && !active ? "bg-focus/15" : ""
-      } ${active ? "outline-2 -outline-offset-2 outline-focus" : ""} ${align === "end" ? "text-right" : ""} ${tabular ? "tabular-nums" : ""}`}
+        inRange && !active ? "bg-focus/15" : ""
+      } ${editing ? "bg-surface" : ""} ${
+        active
+          ? "outline-2 -outline-offset-2 outline-focus has-aria-[invalid=true]:outline-danger"
+          : ""
+      } ${align === "end" ? "text-right" : ""} ${tabular ? "tabular-nums" : ""}`}
     >
       {editing ? (
         <CellInput {...editing} align={align} />
@@ -354,9 +346,7 @@ function CellInput({
     <>
       <div
         style={{ anchorName: EDITED_CELL }}
-        className={`absolute inset-0 flex cursor-text bg-surface px-2 outline-2 -outline-offset-2 ${
-          error !== null ? "outline-danger" : "outline-focus"
-        } ${align === "end" ? "justify-end" : ""}`}
+        className={`absolute inset-0 flex cursor-text px-2 ${align === "end" ? "justify-end" : ""}`}
       >
         {initialPrefix && (
           <>

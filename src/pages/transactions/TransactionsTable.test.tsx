@@ -143,6 +143,18 @@ async function activate(text: string, column: number) {
 
 const renderedRows = () =>
   document.querySelectorAll('[role="rowgroup"] + [role="rowgroup"] > [role="row"]');
+/** The colour a Tailwind text colour class gives. */
+function colorOfClass(className: string) {
+  const probe = document.createElement("span");
+  probe.className = className;
+  document.body.append(probe);
+  const color = getComputedStyle(probe).color;
+  probe.remove();
+  return color;
+}
+/** The outline the grid draws around a range of cells. */
+const rangeOutline = () =>
+  document.querySelector('[role="rowgroup"] + [role="rowgroup"] > [aria-hidden] > *');
 
 describe("TransactionsTable", () => {
   describe("virtualization", () => {
@@ -460,6 +472,21 @@ describe("TransactionsTable", () => {
         .toHaveTextContent("Enter an amount, like 12.50, or +12.50 for money in");
       await expect.element(amountInput()).toHaveAttribute("aria-invalid", "true");
       expect(onCommit).not.toHaveBeenCalled();
+    });
+
+    it("outlines the edited cell in red while its value is invalid", async () => {
+      await renderTable();
+      await editAtCharacter(page.getByText("$1,234.50"), 1);
+      const outline = () => getComputedStyle(activeCell()!).outlineColor;
+      const valid = outline();
+
+      await amountInput().fill("1.2.3");
+      await userEvent.keyboard("{Enter}");
+      await expect.element(page.getByRole("alert")).toBeVisible();
+
+      expect(outline()).toBe(colorOfClass("text-danger"));
+      await userEvent.keyboard("{Backspace}");
+      expect(outline()).toBe(valid);
     });
 
     it("undoes an invalid value on blur and says why", async () => {
@@ -1234,6 +1261,31 @@ describe("TransactionsTable", () => {
       expect(activeCell()).toBe(cellOf("Corner Market", COUNTERPARTY).element());
     });
 
+    it.each([
+      ["a column", "{ArrowDown}".repeat(5), "Shop 10", COUNTERPARTY],
+      [
+        "a range to the last column",
+        "{ArrowDown}{ArrowRight}{ArrowRight}{ArrowRight}",
+        "Shop 6",
+        REMARKS,
+      ],
+    ])(
+      "outlines %s around its cells' boxes, where the active cell's outline is",
+      async (_, keys, lastText, lastColumn) => {
+        await activate("Shop 5", COUNTERPARTY);
+
+        await userEvent.keyboard(`{Shift>}${keys}{/Shift}`);
+
+        const outline = rangeOutline()!.getBoundingClientRect();
+        const first = cellOf("Shop 5", COUNTERPARTY).element().getBoundingClientRect();
+        const last = cellOf(lastText, lastColumn).element().getBoundingClientRect();
+        // Firefox can differ in the last digits, adding up the columns a box spans.
+        expect([outline.left, outline.top, outline.right, outline.bottom]).toEqual(
+          [first.left, first.top, last.right, last.bottom].map((edge) => expect.closeTo(edge, 2)),
+        );
+      },
+    );
+
     it("drops the range with Escape", async () => {
       await activate("Corner Market", COUNTERPARTY);
       await userEvent.keyboard("{Shift>}{ArrowDown}{/Shift}");
@@ -1241,6 +1293,7 @@ describe("TransactionsTable", () => {
       await userEvent.keyboard("{Escape}");
 
       expect(selectedCells()).toEqual([cellOf("Corner Market", COUNTERPARTY).element()]);
+      expect(rangeOutline()).toBeNull();
     });
 
     it("drops the range when an arrow key moves the active cell", async () => {

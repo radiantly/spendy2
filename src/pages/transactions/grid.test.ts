@@ -6,7 +6,6 @@ import {
   collapsed,
   contains,
   covering,
-  edges,
   extend,
   isRange,
   move,
@@ -135,16 +134,13 @@ describe("bounds", () => {
     expect(bounds({ active: at(1, 2), head: at(4, 0) })).toEqual(expected);
   });
 
-  it("knows which cells it contains and which sides are on its outline", () => {
+  it("knows which cells it contains", () => {
     const area = bounds({ active: at(1, 0), head: at(4, 2) });
 
     expect(contains(area, at(1, 0))).toBe(true);
     expect(contains(area, at(4, 2))).toBe(true);
     expect(contains(area, at(5, 2))).toBe(false);
     expect(contains(area, at(2, 3))).toBe(false);
-    expect(edges(area, at(1, 0))).toEqual({ top: true, bottom: false, left: true, right: false });
-    expect(edges(area, at(2, 1))).toEqual({ top: false, bottom: false, left: false, right: false });
-    expect(edges(area, at(4, 2))).toEqual({ top: false, bottom: true, left: false, right: true });
   });
 });
 

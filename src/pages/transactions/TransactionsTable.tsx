@@ -33,7 +33,6 @@ import {
   collapsed,
   contains,
   covering,
-  edges,
   extend,
   isRange,
   move,
@@ -712,7 +711,7 @@ function TransactionsTable({
                     editText={editText}
                     active={selection !== null && samePosition(selection.active, position)}
                     selected={selected}
-                    rangeEdges={ranged && selected ? edges(area!, position) : undefined}
+                    inRange={ranged && selected}
                     editing={
                       isEditing && editor
                         ? {
@@ -741,7 +740,32 @@ function TransactionsTable({
             </div>
           );
         })}
+        {area && ranged && <RangeOutline area={area} />}
       </div>
+    </div>
+  );
+}
+
+/**
+ * The outline of a range: one rectangle over its cells' boxes, lines and
+ * all, as the active cell's outline is, so their edges meet.
+ */
+function RangeOutline({ area }: { area: Bounds }) {
+  return (
+    <div
+      aria-hidden
+      className="pointer-events-none absolute inset-x-0 grid"
+      style={{
+        gridTemplateColumns: GRID_TEMPLATE,
+        top: area.top * ROW_HEIGHT,
+        // A cell's box is its row and the line below it, which is the top of the next row.
+        height: (area.bottom - area.top + 1) * ROW_HEIGHT + 1,
+      }}
+    >
+      <div
+        className="outline-1 -outline-offset-1 outline-focus"
+        style={{ gridColumn: `${area.left + 1} / ${area.right + 2}` }}
+      />
     </div>
   );
 }
