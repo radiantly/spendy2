@@ -100,9 +100,9 @@ function OverviewPage() {
         </div>
         <div className="contents lg:flex lg:flex-col lg:gap-4">
           <CashFlowCard overview={overview} className="order-2 lg:order-none" />
-          <TransactionsOverviewCard overview={overview} className="order-3 lg:order-none" />
+          <IncomeSpendingCard overview={overview} className="order-3 lg:order-none" />
           <AccountsCard overview={overview} className="order-5 lg:order-none" />
-          <IncomeSpendingCard overview={overview} className="order-7 lg:order-none" />
+          <TransactionsOverviewCard overview={overview} className="order-7 lg:order-none" />
         </div>
       </div>
 

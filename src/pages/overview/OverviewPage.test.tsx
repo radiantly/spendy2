@@ -193,7 +193,9 @@ describe("OverviewPage", () => {
 
       await expect
         .element(card())
-        .toMatchTextContent(/^Transactions overviewuncategorized1foreign currency spends0See/);
+        .toMatchTextContent(
+          /^Transactions overview \(WIP\)uncategorized1foreign currency spends0See/,
+        );
       await expect
         .element(card().getByRole("link", { name: "See transactions →" }))
         .toHaveAttribute("href", "/transactions");
@@ -214,7 +216,9 @@ describe("OverviewPage", () => {
       // Café Sol, and Airport Taxi in USD.
       await expect
         .element(card())
-        .toMatchTextContent(/^Transactions overviewtransactions2foreign currency spends1See/);
+        .toMatchTextContent(
+          /^Transactions overview \(WIP\)transactions2foreign currency spends1See/,
+        );
     });
 
     it("counts as not converted those in accounts shown in the currency picked", async () => {
@@ -775,15 +779,19 @@ describe("OverviewPage", () => {
 
       const where = rect(region("Where it went"));
       const recent = rect(region("Recent"));
-      const accounts = rect(region("Accounts"));
+      const cashFlow = rect(region("Cash flow"));
       const chart = rect(region("Income vs. spending"));
+      const accounts = rect(region("Accounts"));
+      const transactions = rect(region("Transactions overview"));
       // Recent in the wide column under Where it went, the chart in the narrow one.
       expect(recent.left).toBe(where.left);
       expect(recent.top).toBeGreaterThan(where.bottom);
-      expect(chart.left).toBe(accounts.left);
+      expect(chart.left).toBe(cashFlow.left);
       expect(chart.width).toBeLessThan(recent.width);
-      // Straight after the accounts, however few there are.
-      expect(chart.top - accounts.bottom).toBe(16);
+      // Each straight after the one before, however tall the cards beside them.
+      expect(chart.top - cashFlow.bottom).toBe(16);
+      expect(accounts.top - chart.bottom).toBe(16);
+      expect(transactions.top - accounts.bottom).toBe(16);
     });
 
     it("stops growing at 1280px on a very wide screen, in the middle", async () => {
@@ -806,11 +814,11 @@ describe("OverviewPage", () => {
       const order = [
         "Spent",
         "Cash flow",
-        "Transactions overview",
+        "Income vs. spending",
         "Where it went",
         "Accounts",
         "Recent",
-        "Income vs. spending",
+        "Transactions overview",
       ];
       const tops = order.map(top);
       expect(tops).toEqual([...tops].sort((a, b) => a - b));

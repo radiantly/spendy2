@@ -33,7 +33,7 @@ function TransactionsOverviewCard({
       aria-label="Transactions overview"
       className={`flex flex-col gap-4 rounded-[28px] border border-line bg-surface p-6 ${className}`}
     >
-      <Eyebrow className="text-ink-muted">Transactions overview</Eyebrow>
+      <Eyebrow className="text-ink-muted">Transactions overview (WIP)</Eyebrow>
       <dl className="grid grid-cols-2 gap-3">
         {counts.map(({ count, label, color }) => (
           <div key={label} className="flex flex-col-reverse justify-end gap-1">
