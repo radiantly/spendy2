@@ -216,6 +216,13 @@ export function insertBinds(transaction: ListedTransaction, source: Uint8Array) 
 /** Sets a transaction's sort key. Bind `[sortKey, id]`. */
 export const UPDATE_SORT_KEY = `UPDATE transactions SET sort_key = ? WHERE id = ?`;
 
+/**
+ * Deletes transactions by id, and with them, as the schema has it, their
+ * conversions, others being duplicates of them, and categories only they
+ * used. Bind `[JSON.stringify(ids)]`.
+ */
+export const DELETE_TRANSACTIONS = `DELETE FROM transactions WHERE id IN (SELECT value FROM json_each(?))`;
+
 /** What a patch can set that isn't a column of transactions: the decimals are its currency's. */
 const NOT_STORED: ReadonlySet<string> = new Set<keyof TransactionRow>(["decimals"]);
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { TransactionRow } from "../../db/queries/transactions.ts";
-import { describeEdit, MAX_NAME_LENGTH, MAX_VALUE_LENGTH } from "./describe.ts";
+import { describeDelete, describeEdit, MAX_NAME_LENGTH, MAX_VALUE_LENGTH } from "./describe.ts";
 import type { TransactionChange } from "./TransactionsTable.tsx";
 
 const row = (overrides: Partial<TransactionRow> = {}): TransactionRow => ({
@@ -176,5 +176,23 @@ describe("describeEdit", () => {
         CONTEXT,
       ),
     ).toBe("changes to 2 cells in 1 transaction");
+  });
+});
+
+describe("describeDelete", () => {
+  it("names one transaction by its counterparty", () => {
+    expect(describeDelete([row()])).toBe("deleting Corner Market");
+  });
+
+  it("calls one with a longer counterparty just a transaction", () => {
+    expect(describeDelete([row({ counterparty: "x".repeat(MAX_NAME_LENGTH + 1) })])).toBe(
+      "deleting a transaction",
+    );
+  });
+
+  it("counts several", () => {
+    expect(describeDelete([row(), row({ id: "t2" }), row({ id: "t3" })])).toBe(
+      "deleting 3 transactions",
+    );
   });
 });

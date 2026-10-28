@@ -189,13 +189,15 @@ type TransactionsTableProps = {
   /**
    * The action bar floating over the table (see ActionBar): `canUndo` and
    * `canRedo` are whether there's a change to undo and one to redo, `add`
-   * adds a row (null while one can't be), and `render` renders the bar,
-   * given what its buttons do to the table. Without, there's none.
+   * adds a row (null while one can't be), `deleteRows` deletes rows (by
+   * their indexes in `rows`), and `render` renders the bar, given what its
+   * buttons do to the table. Without, there's none.
    */
   actionBar?: {
     canUndo: boolean;
     canRedo: boolean;
     add: ((at: AddAt) => void) | null;
+    deleteRows: (rows: number[]) => void;
     render: (actions: TableActions) => ReactNode;
   };
 };
@@ -492,14 +494,31 @@ function TransactionsTable({
     });
   }
 
+  /**
+   * The action bar's delete, of every row `selection` covers: an edit is
+   * settled first (see EditHandle). The active cell's column stays active,
+   * on the row that takes the first one's place, or the last there is.
+   */
+  function deleteSelectedRows(deleteRows: (rows: number[]) => void, selection: GridSelection) {
+    editHandleRef.current?.settle();
+    const { top, bottom } = bounds(selection);
+    deleteRows(Array.from({ length: bottom - top + 1 }, (_, index) => top + index));
+    setSelection(collapsed({ row: top, column: selection.active.column }));
+  }
+
   /** What the action bar's buttons do here (see `actionBar`). */
-  function barActions({ add, ...history }: NonNullable<typeof actionBar>): TableActions {
+  function barActions({
+    add,
+    deleteRows,
+    ...history
+  }: NonNullable<typeof actionBar>): TableActions {
     const { canUndo, canRedo } = historyAvailable(editModified, history);
     return {
       undo: canUndo ? () => undoOrRedo("undo") : null,
       redo: canRedo ? () => undoOrRedo("redo") : null,
       addAbove: add && (() => addRow(add, "above")),
       addBelow: add && (() => addRow(add, "below")),
+      deleteRows: selection && (() => deleteSelectedRows(deleteRows, selection)),
     };
   }
 

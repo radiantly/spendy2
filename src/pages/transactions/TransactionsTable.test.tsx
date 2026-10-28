@@ -1889,6 +1889,7 @@ describe("TransactionsTable", () => {
           canUndo,
           canRedo,
           add: null,
+          deleteRows: () => {},
           render: (actions) => <ActionBar {...actions} />,
         }}
       />
@@ -2091,6 +2092,7 @@ describe("TransactionsTable", () => {
           canUndo: false,
           canRedo: false,
           add,
+          deleteRows: () => {},
           render: (actions) => <ActionBar {...actions} />,
         }}
       />
@@ -2204,6 +2206,111 @@ describe("TransactionsTable", () => {
       await screen.rerender(withBar({ lastAdded: added }));
 
       expect(activeCell()).toBe(cellOf("Shop 1", REMARKS).element());
+    });
+  });
+
+  describe("the action bar's delete", () => {
+    const deleteButton = () => page.getByRole("button", { name: "Delete selected rows" });
+    let onDelete: Mock<(rows: number[]) => void>;
+    beforeEach(() => {
+      onDelete = vi.fn();
+    });
+
+    /** The table with its action bar, showing `shown`, deleting with `onDelete`. */
+    const withBar = (shown = rows) => (
+      <TransactionsTable
+        {...tableProps(shown)}
+        actionBar={{
+          canUndo: false,
+          canRedo: false,
+          add: null,
+          deleteRows: onDelete,
+          render: (actions) => <ActionBar {...actions} />,
+        }}
+      />
+    );
+
+    it("asks to delete the active cell's row, keeping focus in the grid", async () => {
+      await render(withBar());
+      await makeActive("Shop 2", CATEGORY);
+
+      await userEvent.click(deleteButton());
+
+      expect(onDelete.mock.calls).toEqual([[[2]]]);
+      await expect.element(grid()).toHaveFocus();
+    });
+
+    it("asks to delete every row a range covers", async () => {
+      await render(withBar());
+      await makeActive("Shop 3", CATEGORY);
+      await userEvent.keyboard("{Shift>}{ArrowUp}{ArrowUp}{ArrowLeft}{/Shift}");
+
+      await userEvent.click(deleteButton());
+
+      expect(onDelete.mock.calls).toEqual([[[1, 2, 3]]]);
+    });
+
+    it("is disabled while no cell is active", async () => {
+      await render(withBar());
+      await expect.element(deleteButton()).toHaveAttribute("aria-disabled", "true");
+
+      await pressDisabled(deleteButton());
+
+      expect(onDelete).not.toHaveBeenCalled();
+    });
+
+    it("saves an edit in progress first", async () => {
+      await render(withBar());
+      const calls: string[] = [];
+      onCommit.mockImplementation((changes) => void calls.push(JSON.stringify(changes)));
+      onDelete.mockImplementation((indexes) => void calls.push(JSON.stringify(indexes)));
+      await userEvent.dblClick(cellOf("Corner Market", COUNTERPARTY));
+      await userEvent.keyboard("{End}s");
+
+      await userEvent.click(deleteButton());
+
+      expect(calls).toEqual([
+        JSON.stringify([
+          { rowIndex: 0, field: "counterparty", patch: { counterparty: "Corner Markets" } },
+        ]),
+        JSON.stringify([0]),
+      ]);
+      await expect.element(input()).not.toBeInTheDocument();
+    });
+
+    it("leaves the active cell's column active on the row that takes the first one's place", async () => {
+      const screen = await render(withBar());
+      // From the bottom of the range up, so the active cell is in its last row.
+      await makeActive("Shop 3", CATEGORY);
+      await userEvent.keyboard("{Shift>}{ArrowUp}{ArrowRight}{/Shift}");
+
+      await userEvent.click(deleteButton());
+      await screen.rerender(withBar(rows.toSpliced(2, 2)));
+
+      expect(activeCell()).toBe(cellOf("Shop 4", CATEGORY).element());
+      expect(selectedCells()).toEqual([cellOf("Shop 4", CATEGORY).element()]);
+    });
+
+    it("makes the last row's cell active once the last rows are deleted", async () => {
+      const shown = rows.slice(0, 5);
+      const screen = await render(withBar(shown));
+      await makeActive("Shop 4", AMOUNT);
+
+      await userEvent.click(deleteButton());
+      await screen.rerender(withBar(shown.slice(0, 4)));
+
+      expect(activeCell()).toBe(cellOf("Shop 3", AMOUNT).element());
+    });
+
+    it("leaves no cell active once every row is deleted", async () => {
+      const screen = await render(withBar(rows.slice(0, 1)));
+      await makeActive("Corner Market", AMOUNT);
+
+      await userEvent.click(deleteButton());
+      await screen.rerender(withBar([]));
+
+      expect(activeCell()).toBeNull();
+      await expect.element(deleteButton()).toHaveAttribute("aria-disabled", "true");
     });
   });
 

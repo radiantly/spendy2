@@ -10,6 +10,7 @@ import type { Moved } from "./editHistory.ts";
 import {
   compareNewestFirst,
   DELETE_CONVERSION,
+  DELETE_TRANSACTIONS,
   GET_TRANSACTIONS,
   hasPatch,
   INSERT_CATEGORY,
@@ -45,10 +46,10 @@ export type Transactions = {
   /** Each row's position in `rows`, by id. Rows keep their positions. */
   positions: ReadonlyMap<string, number>;
   /**
-   * The positions of the rows removed since (adds undone), which aren't
-   * transactions any more. Each keeps its place and how it was, so a view
-   * worked out while it's gone still has a place for it, should it come back
-   * (the add redone). See `existing`.
+   * The positions of the rows removed since (deleted, or adds undone), which
+   * aren't transactions any more. Each keeps its place and how it was, so a
+   * view worked out while it's gone still has a place for it, should it come
+   * back (the delete undone, or the add redone). See `existing`.
    */
   removed: ReadonlySet<number>;
   /**
@@ -482,4 +483,89 @@ export async function addTransaction(
   }
   if (failure) throw failure.error;
   return id;
+}
+
+/**
+ * Takes the transactions with `ids` out straight away, then deletes them
+ * from the database, in one transaction, as one step to undo, which
+ * `description` describes. Their rows keep their places (see `removed`),
+ * so an undo puts them back where they were.
+ *
+ * The schema deletes their conversions with them, stops others being
+ * duplicates of them, and deletes categories only they used, so those
+ * others change here too, and the categories are read again. If the write
+ * fails, they're put back as the database has them, there's nothing to
+ * undo, and this rejects with why.
+ */
+export async function deleteTransactions(
+  queryClient: QueryClient,
+  database: Database,
+  history: DatabaseHistory,
+  ids: readonly string[],
+  description: string,
+) {
+  const { queryKey } = transactionsQuery(database);
+  const current = queryClient.getQueryData(queryKey);
+  if (current === undefined) throw new Error("The transactions haven't been read");
+  const deleted = new Set(ids);
+  const positions = ids.map((id) => current.positions.get(id)!);
+  const usedCategories = positions.some((position) => current.rows[position]!.category !== null);
+  const duplicates = existing(current)
+    .filter(
+      ({ id, duplicate_of }) =>
+        duplicate_of !== null && deleted.has(duplicate_of) && !deleted.has(id),
+    )
+    .map(({ id }) => id);
+  const edit: TransactionEdit = {
+    kind: "transaction",
+    // All of them, for an undo to select.
+    cells: ids.flatMap((id) => FIELDS.map((field) => ({ id, field }))),
+    transactions: [...ids, ...duplicates],
+    description,
+  };
+
+  const rows = [...current.rows];
+  for (const id of duplicates) {
+    const position = current.positions.get(id)!;
+    rows[position] = { ...rows[position]!, duplicate_of: null };
+  }
+  queryClient.setQueryData(queryKey, {
+    ...current,
+    rows,
+    removed: new Set([...current.removed, ...positions]),
+  });
+  let failure: { error: unknown } | undefined;
+  try {
+    try {
+      // As commitTransactions asks.
+      const written = database.batch([{ sql: DELETE_TRANSACTIONS, bind: [JSON.stringify(ids)] }]);
+      history.record({ changes: written, about: edit });
+      await written;
+    } catch (error) {
+      if (error instanceof ClosedError) throw error;
+      failure = { error };
+      const stored = listedTransactions(
+        await database.query(GET_TRANSACTIONS, [JSON.stringify(edit.transactions)]),
+      );
+      const storedById = new Map(stored.map((row) => [row.id, row]));
+      update(queryClient, database, (latest) => {
+        const restored = synced(latest, ids, stored);
+        const next = [...restored.rows];
+        // If a later edit marked one again, that edit's write decides it.
+        for (const id of duplicates) {
+          const position = restored.positions.get(id)!;
+          const row = next[position]!;
+          if (row.duplicate_of === null)
+            next[position] = { ...row, duplicate_of: storedById.get(id)?.duplicate_of ?? null };
+        }
+        return { ...restored, rows: next };
+      });
+    }
+    if (usedCategories) await refreshCategories(queryClient, database);
+  } catch (error) {
+    // The database closed (e.g. on logging out), and the page with it.
+    if (error instanceof ClosedError) return;
+    throw error;
+  }
+  if (failure) throw failure.error;
 }

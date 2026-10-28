@@ -9,6 +9,7 @@ import { toast } from "sonner";
 import {
   addTransaction,
   commitTransactions,
+  deleteTransactions,
   existing,
   transactionsQuery,
   type Placement,
@@ -20,7 +21,7 @@ import { today } from "../../lib/period.ts";
 import { useUndoRedo } from "../shell/historyKeys.ts";
 import ActionBar from "./ActionBar.tsx";
 import { ColumnMenu } from "./ColumnMenus.tsx";
-import { ADD_DESCRIPTION, describeEdit } from "./describe.ts";
+import { ADD_DESCRIPTION, describeDelete, describeEdit } from "./describe.ts";
 import { newTransaction } from "./newTransaction.ts";
 import TransactionsList from "./TransactionsList.tsx";
 import TransactionsTable, {
@@ -172,6 +173,24 @@ function TransactionsPage() {
     );
   };
 
+  /** Deletes the rows at `indexes`, saying so if they couldn't be deleted. */
+  const deleteRows = (indexes: readonly number[]) => {
+    // As the transactions are now, with an edit settled just before.
+    const latest = queryClient.getQueryData(query.queryKey)!;
+    const deleting = indexes.map((index) => latest.rows[latest.positions.get(rows[index]!.id)!]!);
+    deleteTransactions(
+      queryClient,
+      database,
+      history,
+      deleting.map(({ id }) => id),
+      describeDelete(deleting),
+    ).catch((error: unknown) => {
+      toast.error(
+        `Couldn't delete ${deleting.length === 1 ? "that transaction" : "those transactions"}: ${messageOf(error)}`,
+      );
+    });
+  };
+
   // With an account, there can be transactions to add, even without any yet.
   const showsTable = tableFits && (transactions.length > 0 || loaded.accounts.length > 0);
 
@@ -217,6 +236,7 @@ function TransactionsPage() {
             canUndo,
             canRedo,
             add: loaded.accounts.length > 0 ? add : null,
+            deleteRows,
             render: (actions) => <ActionBar {...actions} />,
           }}
         />

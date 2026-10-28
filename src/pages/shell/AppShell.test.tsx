@@ -1162,6 +1162,16 @@ async function focusGrid(text: string, column = COUNTERPARTY) {
   await expect.element(page.getByRole("grid")).toHaveFocus();
 }
 
+const button = (name: string) => page.getByRole("button", { name });
+/** The cell the grid points at as active. */
+const activeCell = () =>
+  document.getElementById(
+    page.getByRole("grid").element().getAttribute("aria-activedescendant") ?? "",
+  );
+/** The cell in `column` of the row `index` rows down. */
+const cellAt = (index: number, column: number) =>
+  page.getByRole("row").elements()[index + 1]!.querySelectorAll('[role="gridcell"]')[column];
+
 /** Saves, and runs `sql` on the database uploaded. */
 async function uploaded(sql: string) {
   await userEvent.click(saveButton());
@@ -1436,10 +1446,6 @@ describe("undo and redo on the transactions page", () => {
   });
 
   describe("anywhere", () => {
-    const activeCell = () =>
-      document.getElementById(
-        page.getByRole("grid").element().getAttribute("aria-activedescendant") ?? "",
-      );
     const recent = () => page.getByRole("region", { name: "Recent" });
 
     async function showOverview() {
@@ -1695,16 +1701,7 @@ describe("undo and redo on the transactions page", () => {
 });
 
 describe("adding rows on the transactions page", () => {
-  const button = (name: string) => page.getByRole("button", { name });
   const counterparties = () => columnTexts(COUNTERPARTY);
-  /** The cell the grid points at as active. */
-  const activeCell = () =>
-    document.getElementById(
-      page.getByRole("grid").element().getAttribute("aria-activedescendant") ?? "",
-    );
-  /** The cell in `column` of the row `index` rows down. */
-  const cellAt = (index: number, column: number) =>
-    page.getByRole("row").elements()[index + 1]!.querySelectorAll('[role="gridcell"]')[column];
 
   async function sortBy(header: string, option: string) {
     await userEvent.click(page.getByRole("button", { name: new RegExp(`^${header}`) }));
@@ -1847,5 +1844,76 @@ describe("adding rows on the transactions page", () => {
 
     await expect.element(page.getByText("No transactions yet.").shown()).toBeVisible();
     expect(button("Add row below").query()).toBeNull();
+  });
+});
+
+describe("deleting rows on the transactions page", () => {
+  const counterparties = () => columnTexts(COUNTERPARTY);
+  const deleteRows = () => userEvent.click(button("Delete selected rows"));
+
+  it("deletes the active cell's row, making the next row's cell active", async () => {
+    await opened();
+    await focusGrid("Corner Market", AMOUNT);
+
+    await deleteRows();
+
+    await expect.poll(counterparties).toEqual(["Café Lumen"]);
+    await expect.poll(() => activeCell() === cellAt(0, AMOUNT)).toBe(true);
+    expect(await uploaded("SELECT counterparty FROM transactions")).toEqual([
+      { counterparty: "Café Lumen" },
+    ]);
+  });
+
+  it("deletes every row a range covers, leaving the table to add to", async () => {
+    await opened();
+    await focusGrid("Corner Market");
+    await userEvent.keyboard("{Shift>}{ArrowDown}{/Shift}");
+
+    await deleteRows();
+
+    await expect.poll(counterparties).toEqual([]);
+    expect(activeCell()).toBeNull();
+    await expect.element(button("Add row below")).toBeVisible();
+    expect(await uploaded("SELECT count(*) AS count FROM transactions")).toEqual([{ count: 0 }]);
+  });
+
+  it("puts deleted rows back in place on undo, selected, leaving nothing to save, and deletes them again on redo", async () => {
+    await opened();
+    await focusGrid("Corner Market");
+    await deleteRows();
+    await expect.poll(counterparties).toEqual(["Café Lumen"]);
+
+    await userEvent.click(button("Undo"));
+
+    await expect.poll(counterparties).toEqual(["Corner Market", "Café Lumen"]);
+    await expect.poll(() => activeCell() === cellAt(0, DATE)).toBe(true);
+    await expect.element(saveButton()).not.toBeInTheDocument();
+    await userEvent.click(button("Redo"));
+    await expect.poll(counterparties).toEqual(["Café Lumen"]);
+  });
+
+  it("saves an edit in progress first, so an undo brings the row back as edited", async () => {
+    await opened();
+    await userEvent.dblClick(await cellOf("Corner Market", COUNTERPARTY));
+    await page.getByRole("textbox").fill("Corner Shop");
+
+    await deleteRows();
+    await expect.poll(counterparties).toEqual(["Café Lumen"]);
+    await userEvent.click(button("Undo"));
+
+    await expect.poll(counterparties).toEqual(["Corner Shop", "Café Lumen"]);
+  });
+
+  it("says what an undo of it did where that can't be seen", async () => {
+    await opened();
+    await focusGrid("Corner Market");
+    await deleteRows();
+    await expect.poll(counterparties).toEqual(["Café Lumen"]);
+    await userEvent.click(page.getByRole("link", { name: "Overview" }));
+    await expect.element(page.getByText("Where it went")).toBeVisible();
+
+    await userEvent.keyboard("{Control>}z{/Control}");
+
+    await expect.element(page.getByText("Undid deleting Corner Market").shown()).toBeVisible();
   });
 });

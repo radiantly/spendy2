@@ -10,6 +10,7 @@ import { compareNewestFirst, newestFirst } from "./queries/transactions.ts";
 import { createQueryClient } from "./queryClient.ts";
 import {
   addTransaction,
+  deleteTransactions,
   existing,
   keepTransactionsInSync,
   transactionsQuery,
@@ -57,6 +58,9 @@ afterEach(() => {
   database.close();
 });
 
+/** Reads the transactions for the page again. */
+const read = () => queryClient.fetchQuery({ ...transactionsQuery(database), staleTime: 0 });
+
 /**
  * Stores transactions on `DAY` named `counterparties`, oldest first,
  * numbered from 1, at `timestamp` if given, then reads them for the page.
@@ -73,12 +77,13 @@ async function stored(counterparties: string[], timestamp: number | null = null)
       };
     }),
   );
-  await queryClient.fetchQuery({ ...transactionsQuery(database), staleTime: 0 });
+  await read();
 }
 
 const cached = () => queryClient.getQueryData(transactionsQuery(database).queryKey)!;
-const idOf = (counterparty: string) =>
-  cached().rows.find((row) => row?.counterparty === counterparty)!.id;
+const rowOf = (counterparty: string) =>
+  cached().rows.find((row) => row.counterparty === counterparty)!;
+const idOf = (counterparty: string) => rowOf(counterparty).id;
 
 /** `DAY`'s transactions as stored, newest first, with their sort keys. */
 async function day() {
@@ -340,5 +345,135 @@ describe("addTransaction", () => {
       ]);
       expect(new Set(redone?.step.about.cells.map((cell) => cell.id))).toEqual(new Set([id]));
     });
+  });
+});
+
+describe("deleteTransactions", () => {
+  function remove(...counterparties: string[]) {
+    return deleteTransactions(
+      queryClient,
+      database,
+      history,
+      counterparties.map(idOf),
+      "deleting transactions",
+    );
+  }
+
+  /** Marks `copy` as a duplicate of `original`, and reads them again. */
+  async function markDuplicate(copy: string, original: string) {
+    await database.batch([
+      {
+        sql: "UPDATE transactions SET duplicate_of = ? WHERE id = ?",
+        bind: [idOf(original), idOf(copy)],
+      },
+    ]);
+    await read();
+  }
+
+  it("takes them out of the page's copy, and to undo, at once, keeping their places", async () => {
+    await stored(["A", "B", "C"]);
+    const position = cached().positions.get(idOf("B"))!;
+
+    const deleting = remove("B");
+
+    expect(cachedDay()).toEqual(["C 3", "A 1"]);
+    expect(cached().removed).toEqual(new Set([position]));
+    expect(cached().rows[position]!.counterparty).toBe("B");
+    expect(history.canUndo).toBe(true);
+    await deleting;
+    expect(await day()).toEqual(["C 3", "A 1"]);
+  });
+
+  it("deletes several as one step, which an undo puts back in place and a redo deletes again", async () => {
+    await stored(["A", "B", "C", "D"]);
+    await remove("B", "C");
+    expect(await day()).toEqual(["D 4", "A 1"]);
+
+    const undone = await history.undo();
+    await expect.poll(() => cached().lastUndoOrRedo).toBe(undone);
+    expect(cachedDay()).toEqual(["D 4", "C 3", "B 2", "A 1"]);
+    expect(await day()).toEqual(["D 4", "C 3", "B 2", "A 1"]);
+
+    const redone = await history.redo();
+    await expect.poll(() => cached().lastUndoOrRedo).toBe(redone);
+    expect(cachedDay()).toEqual(["D 4", "A 1"]);
+    expect(await day()).toEqual(["D 4", "A 1"]);
+  });
+
+  it("selects every cell of them when undone", async () => {
+    await stored(["A", "B"]);
+    await remove("A", "B");
+
+    const undone = await history.undo();
+
+    const cells = undone!.step.about.cells;
+    expect(cells).toHaveLength(12);
+    for (const id of [idOf("A"), idOf("B")])
+      expect(
+        cells
+          .filter((cell) => cell.id === id)
+          .map(({ field }) => field)
+          .sort(),
+      ).toEqual(["account_name", "amount", "category", "counterparty", "naive_date", "remarks"]);
+  });
+
+  it("deletes their conversions with them, which an undo brings back", async () => {
+    await stored(["A"]);
+    await database.batch([
+      { sql: "INSERT INTO conversions VALUES (?, 'EUR', -92)", bind: [idOf("A")] },
+    ]);
+    await read();
+
+    await remove("A");
+    expect(await database.query("SELECT * FROM conversions")).toEqual([]);
+    await history.undo();
+
+    await expect.poll(() => cachedDay()).toEqual(["A 1"]);
+    expect(rowOf("A").conversions).toEqual({ EUR: { amount: -92, decimals: 2 } });
+  });
+
+  it("stops others being duplicates of them, here too, which an undo marks again", async () => {
+    await stored(["Original", "Copy"]);
+    await markDuplicate("Copy", "Original");
+
+    const deleting = remove("Original");
+    expect(rowOf("Copy").duplicate_of).toBeNull();
+    await deleting;
+    expect(await database.query("SELECT duplicate_of FROM transactions")).toEqual([
+      { duplicate_of: null },
+    ]);
+    await history.undo();
+
+    await expect.poll(() => rowOf("Copy").duplicate_of).toBe(idOf("Original"));
+  });
+
+  it("deletes categories only they used, which the menus lose too, and an undo brings back", async () => {
+    await stored(["A", "B"]);
+    await database.batch([
+      { sql: "INSERT INTO categories VALUES ('Coffee', NULL)" },
+      { sql: "UPDATE transactions SET category = 'Coffee' WHERE id = ?", bind: [idOf("B")] },
+    ]);
+    await read();
+    const names = () => cached().categories.map(({ name }) => name);
+    expect(names()).toEqual(["Coffee"]);
+
+    await remove("B");
+    expect(names()).toEqual([]);
+    await history.undo();
+
+    await expect.poll(names).toEqual(["Coffee"]);
+  });
+
+  it("puts them back, as the database has them, when they can't be deleted, and says why", async () => {
+    await stored(["Original", "Copy"]);
+    await markDuplicate("Copy", "Original");
+    vi.spyOn(database, "batch").mockRejectedValueOnce(new Error("disk on fire"));
+
+    await expect(remove("Original")).rejects.toThrow("disk on fire");
+
+    expect(cachedDay()).toEqual(["Copy 2", "Original 1"]);
+    expect(cached().removed).toEqual(new Set());
+    expect(rowOf("Copy").duplicate_of).toBe(idOf("Original"));
+    expect(history.canUndo).toBe(false);
   });
 });

@@ -37,6 +37,11 @@ function plural(count: number, noun: string) {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
+/** A transaction in a sentence: its counterparty, or "a transaction" if that's long. */
+function nameOf({ counterparty }: TransactionRow) {
+  return counterparty.length > MAX_NAME_LENGTH ? "a transaction" : counterparty;
+}
+
 /** Whether `change` stores what emptying its cell would, like 0 for an amount. */
 function clears(
   { rowIndex, field, patch }: TransactionChange,
@@ -62,8 +67,7 @@ export function describeEdit(
   if (changes.length === 1 && change) {
     const before = rows[change.rowIndex]!;
     const after = { ...before, ...change.patch };
-    const counterparty = before.counterparty;
-    const name = counterparty.length > MAX_NAME_LENGTH ? "a transaction" : counterparty;
+    const name = nameOf(before);
     const field = fieldName(change.field);
     if (change.field === "remarks") return `a change to the ${field} of ${name}`;
     const from = shown(before, change.field);
@@ -83,4 +87,12 @@ export function describeEdit(
   const transactions = plural(new Set(changes.map(({ rowIndex }) => rowIndex)).size, "transaction");
   const cleared = changes.every((change) => clears(change, rows, context));
   return `${cleared ? "clearing" : "changes to"} ${cells} in ${transactions}`;
+}
+
+/** Describes deleting `rows`: "deleting Corner Market", or "deleting 3 transactions". */
+export function describeDelete(rows: readonly TransactionRow[]) {
+  const [row] = rows;
+  return rows.length === 1 && row
+    ? `deleting ${nameOf(row)}`
+    : `deleting ${plural(rows.length, "transaction")}`;
 }

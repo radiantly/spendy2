@@ -19,6 +19,7 @@ export type TableActions = {
   redo: (() => void) | null;
   addAbove: (() => void) | null;
   addBelow: (() => void) | null;
+  deleteRows: (() => void) | null;
 };
 
 /** How long the pointer rests on a button before its tooltip shows (ms). */
@@ -131,9 +132,9 @@ function Divider() {
 /**
  * A pill floating at the bottom of the window, over the table: a search of
  * the transactions, undo and redo, and actions on the selected rows. Only
- * undo, redo and adding rows are wired up so far.
+ * undo, redo, and adding and deleting rows are wired up so far.
  */
-function ActionBar({ undo, redo, addAbove, addBelow }: TableActions) {
+function ActionBar({ undo, redo, addAbove, addBelow, deleteRows }: TableActions) {
   const tooltips = useTooltips();
   return (
     <div className="pointer-events-none fixed inset-x-0 bottom-6 z-30 flex justify-center px-4">
@@ -162,7 +163,7 @@ function ActionBar({ undo, redo, addAbove, addBelow }: TableActions) {
         <IconButton label="Add row below" action={addBelow} tooltips={tooltips}>
           <TbRowInsertBottom />
         </IconButton>
-        <IconButton label="Delete selected rows" tooltips={tooltips}>
+        <IconButton label="Delete selected rows" action={deleteRows} tooltips={tooltips}>
           <TbTrash />
         </IconButton>
         <Divider />
