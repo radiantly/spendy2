@@ -11,6 +11,7 @@ import { useHoldUpdates, useOpenDatabase } from "../../db/useDatabase.ts";
 import { useBreakpoint } from "../../hooks/useBreakpoint.ts";
 import { today } from "../../lib/period.ts";
 import { useUndoRedo } from "../shell/historyKeys.ts";
+import ActionBar from "./ActionBar.tsx";
 import { ColumnMenu } from "./ColumnMenus.tsx";
 import { describeEdit } from "./describe.ts";
 import TransactionsList from "./TransactionsList.tsx";
@@ -100,8 +101,12 @@ function TransactionsPage() {
     );
   };
 
+  const showsTable = loaded.rows.length > 0 && tableFits;
+
   return (
-    <div className="flex flex-col gap-4 pb-8">
+    // With the table, the end of the page has room for the action bar
+    // floating over it, so the last rows can scroll out from under it.
+    <div className={`flex flex-col gap-4 ${showsTable ? "pb-28" : "pb-8"}`}>
       <h1 className="px-4 font-display text-3xl font-bold tracking-tight lg:px-8">Transactions</h1>
       {loaded.rows.length === 0 ? (
         <p className="px-4 text-ink-muted lg:px-8">No transactions yet.</p>
@@ -135,6 +140,7 @@ function TransactionsPage() {
           }}
         />
       )}
+      {showsTable && <ActionBar />}
     </div>
   );
 }
