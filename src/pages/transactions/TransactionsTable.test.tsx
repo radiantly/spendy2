@@ -55,11 +55,12 @@ beforeEach(async () => {
   window.scrollTo(0, 0);
 });
 
-function table(categories = CATEGORIES, shown = rows) {
+function table(categories = CATEGORIES, shown = rows, maxRowNumber = shown.length) {
   return (
     <>
       <TransactionsTable
         rows={shown}
+        maxRowNumber={maxRowNumber}
         categories={categories}
         accounts={ACCOUNTS}
         currencies={CURRENCIES}
@@ -105,10 +106,18 @@ const options = () =>
     .map((option) => option.textContent);
 const highlighted = () => page.getByRole("option", { selected: true });
 
+/** A row's cell in `column` (0-based), after its number. */
+const cellIn = (row: Element, column: number) => row.querySelectorAll('[role="gridcell"]')[column]!;
+/** The number shown before a row's cells. */
+const numberOf = (row: Element) => row.firstElementChild!;
+/** The number of the row showing `text`. */
+const numberFor = (text: string) =>
+  numberOf(page.getByText(text, { exact: true }).element().closest('[role="row"]')!);
+
 /** The cell in `column` (0-based) of the row showing `text`. */
 function cellOf(text: string, column: number) {
   const row = page.getByText(text, { exact: true }).element().closest('[role="row"]')!;
-  return page.elementLocator(row.children[column]!);
+  return page.elementLocator(cellIn(row, column));
 }
 const DATE = 0;
 const ACCOUNT = 1;
@@ -152,6 +161,16 @@ function colorOfClass(className: string) {
   probe.remove();
   return color;
 }
+/** The background colour a Tailwind class gives. */
+function backgroundOfClass(className: string) {
+  const probe = document.createElement("span");
+  probe.className = className;
+  document.body.append(probe);
+  const color = getComputedStyle(probe).backgroundColor;
+  probe.remove();
+  return color;
+}
+const backgroundOf = (element: Element) => getComputedStyle(element).backgroundColor;
 /** The outline the grid draws around a range of cells. */
 const rangeOutline = () =>
   document.querySelector('[role="rowgroup"] + [role="rowgroup"] > [aria-hidden] > *');
@@ -189,6 +208,201 @@ describe("TransactionsTable", () => {
       expect(page.getByText("Corner Market").element().closest('[role="row"]')!.clientHeight).toBe(
         ROW_HEIGHT,
       );
+    });
+  });
+
+  describe("row numbers", () => {
+    const numbers = () => [...renderedRows()].map((row) => numberOf(row).textContent);
+
+    it("numbers the rows from 1 in the order they're shown, before their cells", async () => {
+      await render(table(CATEGORIES, [rows[2]!, rows[0]!, rows[1]!]));
+
+      await expect.poll(numbers).toEqual(["1", "2", "3"]);
+      const row = renderedRows()[0]!;
+      expect(cellIn(row, COUNTERPARTY).textContent).toBe("Shop 2");
+      expect(row.querySelectorAll('[role="gridcell"]').length).toBe(REMARKS + 1);
+      // Screen readers have the row's place from aria-rowindex.
+      expect(numberOf(row).getAttribute("aria-hidden")).toBe("true");
+    });
+
+    it("fits the largest number", async () => {
+      await renderTable();
+
+      window.scrollTo(0, document.documentElement.scrollHeight);
+      await expect.poll(numbers).toContain(String(ROW_COUNT));
+
+      const widest = numberOf(renderedRows()[renderedRows().length - 1]!);
+      expect(widest.textContent).toBe(String(ROW_COUNT));
+      expect(widest.scrollWidth).toBeLessThanOrEqual(widest.clientWidth);
+    });
+
+    it("keeps the columns where they are, however many rows are shown", async () => {
+      const screen = await render(table(CATEGORIES, rows, ROW_COUNT));
+      const dateLeft = () => headers()[DATE]!.getBoundingClientRect().left;
+      const before = dateLeft();
+
+      await screen.rerender(table(CATEGORIES, rows.slice(0, 3), ROW_COUNT));
+
+      await expect.poll(numbers).toEqual(["1", "2", "3"]);
+      expect(dateLeft()).toBe(before);
+    });
+
+    it("moves through the cells from the first column, past the numbers", async () => {
+      await activate("Corner Market", COUNTERPARTY);
+
+      await userEvent.keyboard("{Home}");
+
+      expect(activeCell()).toBe(cellOf("Corner Market", DATE).element());
+    });
+  });
+
+  describe("selecting rows", () => {
+    /** The cells of the rows showing `texts`. */
+    const cellsOf = (...texts: string[]) =>
+      texts.flatMap((text) => [
+        ...page
+          .getByText(text, { exact: true })
+          .element()
+          .closest('[role="row"]')!
+          .querySelectorAll('[role="gridcell"]'),
+      ]);
+
+    it("selects a row with a press on its number, its first cell active", async () => {
+      await renderTable();
+
+      await userEvent.click(page.elementLocator(numberFor("Shop 1")));
+
+      expect(selectedCells()).toEqual(cellsOf("Shop 1"));
+      expect(activeCell()).toBe(cellOf("Shop 1", DATE).element());
+      await expect.element(grid()).toHaveFocus();
+    });
+
+    it("extends to the rows from the active cell's with Shift, from their first cells", async () => {
+      await activate("Shop 1", COUNTERPARTY);
+
+      await userEvent.click(page.elementLocator(numberFor("Shop 3")), { modifiers: ["Shift"] });
+
+      expect(selectedCells()).toEqual(cellsOf("Shop 1", "Shop 2", "Shop 3"));
+      expect(activeCell()).toBe(cellOf("Shop 1", DATE).element());
+    });
+
+    it("selects the rows a drag from a number passes, wherever across them it goes", async () => {
+      await renderTable();
+
+      await mouse.down(pointIn(numberFor("Shop 1")));
+      await mouse.move(pointIn(numberFor("Shop 2")));
+      await mouse.move(pointIn(cellOf("Shop 3", CATEGORY).element()));
+      await mouse.up(pointIn(cellOf("Shop 3", CATEGORY).element()));
+
+      expect(selectedCells()).toEqual(cellsOf("Shop 1", "Shop 2", "Shop 3"));
+      expect(activeCell()).toBe(cellOf("Shop 1", DATE).element());
+    });
+
+    it("saves an edit when a number is pressed", async () => {
+      await renderTable();
+      await editAtCharacter(page.getByText("Corner Market"), 0);
+      await input().fill("Corner Shop");
+
+      await userEvent.click(page.elementLocator(numberFor("Shop 2")));
+
+      expect(onCommit).toHaveBeenCalledWith([
+        { rowIndex: 0, field: "counterparty", patch: { counterparty: "Corner Shop" } },
+      ]);
+      await expect.element(input()).not.toBeInTheDocument();
+      expect(selectedCells()).toEqual(cellsOf("Shop 2"));
+    });
+
+    // As for any range: the transaction itself stays.
+    it("clears a selected row's cells that can be empty with Delete", async () => {
+      await renderTable();
+      await userEvent.click(page.elementLocator(numberFor("Corner Market")));
+
+      await userEvent.keyboard("{Delete}");
+
+      expect(onCommit).toHaveBeenCalledWith([
+        { rowIndex: 0, field: "category", patch: { category: null } },
+        { rowIndex: 0, field: "amount", patch: usd(0) },
+      ]);
+    });
+
+    it("scrolls the page while a drag from a number is held at the bottom of the window", async () => {
+      await renderTable();
+      const start = pointIn(numberFor("Shop 5"));
+      const edge = { x: start.x, y: window.innerHeight - 2 };
+
+      await mouse.down(start);
+      await mouse.move(edge);
+      // It scrolls a little each animation frame, which a busy machine slows down.
+      await expect.poll(() => window.scrollY, { timeout: 5000 }).toBeGreaterThan(ROW_HEIGHT * 10);
+      await mouse.up(edge);
+
+      expect(selectedCells().length).toBeGreaterThan(10 * (REMARKS + 1));
+      expect(activeCell()).toBe(cellOf("Shop 5", DATE).element());
+    });
+
+    it("doesn't scroll the page for a press on a number near the bottom of the window", async () => {
+      await renderTable();
+      const lastVisible = [...renderedRows()]
+        .filter((row) => row.getBoundingClientRect().bottom <= window.innerHeight)
+        .at(-1)!;
+      const box = numberOf(lastVisible).getBoundingClientRect();
+      const point = { x: box.left + 5, y: box.bottom - 2 };
+
+      await mouse.down(point);
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      await mouse.up(point);
+
+      expect(window.scrollY).toBe(0);
+      expect(selectedCells()).toEqual([...lastVisible.querySelectorAll('[role="gridcell"]')]);
+    });
+  });
+
+  describe("highlights", () => {
+    const TINT = () => backgroundOfClass("bg-focus/8");
+    const NONE = "rgba(0, 0, 0, 0)";
+    const headerOf = (column: number) => headers()[column]!;
+    const tinted = (element: Element) => backgroundOf(element) === TINT();
+
+    it("tints the active cell's row, number and column header, but not the active cell", async () => {
+      await activate("Shop 1", COUNTERPARTY);
+
+      expect(tinted(numberFor("Shop 1"))).toBe(true);
+      expect(tinted(headerOf(COUNTERPARTY))).toBe(true);
+      expect(tinted(cellOf("Shop 1", DATE).element())).toBe(true);
+      expect(tinted(cellOf("Shop 1", REMARKS).element())).toBe(true);
+      expect(backgroundOf(cellOf("Shop 1", COUNTERPARTY).element())).toBe(NONE);
+      expect(backgroundOf(numberFor("Shop 2"))).toBe(NONE);
+      expect(backgroundOf(headerOf(DATE))).toBe(NONE);
+      expect(backgroundOf(cellOf("Shop 2", COUNTERPARTY).element())).toBe(NONE);
+    });
+
+    it("tints a range's numbers and headers, but not the active cell's row", async () => {
+      await activate("Shop 1", COUNTERPARTY);
+
+      await userEvent.keyboard("{Shift>}{ArrowDown}{ArrowDown}{ArrowRight}{/Shift}");
+
+      expect(
+        ["Corner Market", "Shop 1", "Shop 2", "Shop 3", "Shop 4"].map((text) =>
+          tinted(numberFor(text)),
+        ),
+      ).toEqual([false, true, true, true, false]);
+      expect(headers().map(tinted)).toEqual([false, false, true, true, false, false]);
+      expect(backgroundOf(cellOf("Shop 1", DATE).element())).toBe(NONE);
+      expect(backgroundOf(cellOf("Shop 2", COUNTERPARTY).element())).toBe(
+        backgroundOfClass("bg-focus/15"),
+      );
+    });
+
+    it("highlights nothing without an active cell", async () => {
+      await activate("Corner Market", COUNTERPARTY);
+
+      // Up from the first row makes the column's header active instead.
+      await userEvent.keyboard("{ArrowUp}");
+
+      expect(activeCell()).toBe(headerOf(COUNTERPARTY));
+      expect(headers().some(tinted)).toBe(false);
+      expect(backgroundOf(numberFor("Corner Market"))).toBe(NONE);
+      expect(backgroundOf(cellOf("Corner Market", DATE).element())).toBe(NONE);
     });
   });
 
@@ -938,6 +1152,7 @@ describe("TransactionsTable", () => {
       await render(
         <TransactionsTable
           rows={[]}
+          maxRowNumber={0}
           categories={CATEGORIES}
           accounts={ACCOUNTS}
           currencies={CURRENCIES}
@@ -1448,6 +1663,7 @@ describe("TransactionsTable", () => {
     const tableShowing = (moved: Moved<Edit> | null) => (
       <TransactionsTable
         rows={rows}
+        maxRowNumber={rows.length}
         categories={CATEGORIES}
         accounts={ACCOUNTS}
         currencies={CURRENCIES}
@@ -1567,6 +1783,7 @@ describe("TransactionsTable", () => {
       await screen.rerender(
         <TransactionsTable
           rows={rows.slice(0, 2)}
+          maxRowNumber={2}
           categories={CATEGORIES}
           accounts={ACCOUNTS}
           currencies={CURRENCIES}
@@ -1588,6 +1805,7 @@ describe("TransactionsTable", () => {
       const screen = await render(
         <TransactionsTable
           rows={rows}
+          maxRowNumber={rows.length}
           categories={CATEGORIES}
           accounts={ACCOUNTS}
           currencies={CURRENCIES}
@@ -1885,7 +2103,7 @@ describe("TransactionsTable", () => {
       const lastVisible = [...renderedRows()]
         .filter((row) => row.getBoundingClientRect().bottom <= window.innerHeight)
         .at(-1)!;
-      const box = lastVisible.children[COUNTERPARTY]!.getBoundingClientRect();
+      const box = cellIn(lastVisible, COUNTERPARTY).getBoundingClientRect();
       const point = { x: box.left + 5, y: box.bottom - 2 };
 
       await mouse.down(point);
@@ -2178,7 +2396,7 @@ describe("TransactionsTable", () => {
       const lastVisible = [...renderedRows()]
         .filter((row) => row.getBoundingClientRect().bottom <= window.innerHeight)
         .at(-1)!;
-      const cell = page.elementLocator(lastVisible.children[ACCOUNT]!);
+      const cell = page.elementLocator(cellIn(lastVisible, ACCOUNT));
 
       await userEvent.dblClick(cell);
 
@@ -2196,7 +2414,7 @@ describe("TransactionsTable", () => {
           return top > window.innerHeight / 3 && top < window.innerHeight / 2;
         });
       await expect.poll(inTopHalf).toBeDefined();
-      const cell = inTopHalf()!.children[ACCOUNT]!;
+      const cell = cellIn(inTopHalf()!, ACCOUNT);
       await userEvent.dblClick(page.elementLocator(cell));
       const menu = () => page.getByRole("listbox").element().parentElement!.getBoundingClientRect();
       await expect.element(page.getByRole("listbox")).toBeVisible();
@@ -2215,7 +2433,7 @@ describe("TransactionsTable", () => {
         .filter((row) => row.getBoundingClientRect().bottom <= window.innerHeight)
         .at(-1)!;
 
-      await userEvent.dblClick(page.elementLocator(lastVisible.children[ACCOUNT]!));
+      await userEvent.dblClick(page.elementLocator(cellIn(lastVisible, ACCOUNT)));
 
       const menu = page.getByRole("listbox").element().parentElement!;
       const header = page.getByRole("columnheader").first().element().getBoundingClientRect();
@@ -2229,7 +2447,7 @@ describe("TransactionsTable", () => {
       const lastVisible = [...renderedRows()]
         .filter((row) => row.getBoundingClientRect().bottom <= window.innerHeight)
         .at(-1)!;
-      const cell = lastVisible.children[AMOUNT]!;
+      const cell = cellIn(lastVisible, AMOUNT);
       await userEvent.dblClick(page.elementLocator(cell));
 
       await amountInput().fill("1.2.3");
@@ -2247,6 +2465,7 @@ describe("TransactionsTable", () => {
       await render(
         <TransactionsTable
           rows={rows.slice(0, 5)}
+          maxRowNumber={5}
           categories={many}
           accounts={ACCOUNTS}
           currencies={CURRENCIES}

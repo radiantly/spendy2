@@ -54,7 +54,16 @@ export const ROW_HEIGHT = 28;
 /** A row and the line above it, so the header has the same space inside as a row. */
 export const HEADER_HEIGHT = ROW_HEIGHT + 1;
 
-const GRID_TEMPLATE = columns.map((column) => column.meta!.track).join(" ");
+const COLUMN_TRACKS = columns.map((column) => column.meta!.track).join(" ");
+
+/**
+ * The grid's tracks: the row numbers' first, as wide as `digits` of them
+ * (tabular, so a `ch` each) with the cell's padding and line, then the
+ * columns'.
+ */
+function gridTemplate(digits: number) {
+  return `calc(${digits}ch + 1rem + 1px) ${COLUMN_TRACKS}`;
+}
 
 const ARROWS: Record<string, Direction> = {
   ArrowUp: "up",
@@ -94,17 +103,22 @@ const caretIn = (part: EditStart["part"], offset: number): EditStart => ({
   selection: [offset, offset],
 });
 
-/** A press on a cell, followed until the mouse button is released. */
+/** A press on a cell, or a row's number, followed until the mouse button is released. */
 type Drag = {
   /** The cell the range starts from; the pointer back over it selects just it. */
   origin: CellPosition;
+  /**
+   * Whether it selects whole rows, from a press on a row's number: from the
+   * origin's (in the first column) to the one the pointer is over.
+   */
+  rows: boolean;
   /**
    * Where text selection started in the origin cell's input, to select from
    * while the pointer is over that cell. Null when the press doesn't select
    * text (it wasn't an edit, or it selected a word or everything).
    */
   textAnchor: number | null;
-  /** Whether the pointer is over another cell, selecting a range. */
+  /** Whether the pointer is over another cell (or row, selecting rows), selecting a range. */
   ranging: boolean;
 };
 
@@ -124,7 +138,10 @@ const columnOf = (field: CellEditor["field"]) =>
   columns.findIndex((column) => column.meta!.editor?.field === field);
 
 type TransactionsTableProps = {
+  /** In the order they're shown, and numbered in it from 1. */
   rows: TransactionRow[];
+  /** The most rows there can be: the numbers' column fits theirs, however many are shown. */
+  maxRowNumber: number;
   categories: readonly string[];
   accounts: readonly string[];
   currencies: readonly Currency[];
@@ -158,6 +175,7 @@ type TransactionsTableProps = {
  */
 function TransactionsTable({
   rows,
+  maxRowNumber,
   categories,
   accounts,
   currencies,
@@ -201,6 +219,9 @@ function TransactionsTable({
   const gridId = useId();
   const cellId = (cell: CellPosition) => `${gridId}-${cell.row}-${cell.column}`;
   const headerId = (column: number) => `${gridId}-header-${column}`;
+  // The header cells are always rendered, and line up with their columns'.
+  const headerOf = (column: number) => document.getElementById(headerId(column))!;
+  const template = gridTemplate(String(maxRowNumber).length);
 
   const gridRef = useRef<HTMLDivElement>(null);
   const headerRowRef = useRef<HTMLDivElement>(null);
@@ -267,11 +288,12 @@ function TransactionsTable({
 
   /** Scrolls the page sideways, if it has to, so `column` is in view. */
   function revealColumn(column: number) {
-    // The header cells are always rendered, and line up with the column's.
-    const box = headerRowRef.current!.children[column]!.getBoundingClientRect();
+    const box = headerOf(column).getBoundingClientRect();
     const width = document.documentElement.clientWidth;
-    if (box.left < 0) window.scrollBy(box.left, 0);
-    else if (box.right > width) window.scrollBy(box.right - width, 0);
+    // In whole pixels, rounded so all of the column comes into view: WebKit
+    // drops the fraction of a scroll, and columns can start partway into a pixel.
+    if (box.left < 0) window.scrollBy(Math.floor(box.left), 0);
+    else if (box.right > width) window.scrollBy(Math.ceil(box.right - width), 0);
   }
 
   /** Moves on from `column`'s header to its first cell, if there are rows. */
@@ -502,8 +524,12 @@ function TransactionsTable({
   const drag = useMouseDrag({
     move: ({ x, y }) => {
       const current = dragRef.current!;
-      const cell = cellAtPoint(layout(), size, x, y);
-      current.ranging = !samePosition(cell, current.origin);
+      const pointed = cellAtPoint(layout(), size, x, y);
+      // Selecting rows, the range runs to the last cell of the pointer's row.
+      const cell = current.rows ? { row: pointed.row, column: size.columns - 1 } : pointed;
+      current.ranging = current.rows
+        ? pointed.row !== current.origin.row
+        : !samePosition(cell, current.origin);
       setSelection((selected) => {
         const next = { active: current.origin, head: cell };
         return selected &&
@@ -531,9 +557,7 @@ function TransactionsTable({
     return {
       top: bodyRef.current!.getBoundingClientRect().top,
       rowHeight: ROW_HEIGHT,
-      columnLefts: [...headerRowRef.current!.children].map(
-        (header) => header.getBoundingClientRect().left,
-      ),
+      columnLefts: columns.map((_, column) => headerOf(column).getBoundingClientRect().left),
     };
   }
 
@@ -559,6 +583,7 @@ function TransactionsTable({
       setSelection({ active: selection.active, head: cell });
       dragRef.current = {
         origin: selection.active,
+        rows: false,
         textAnchor: null,
         ranging: !samePosition(cell, selection.active),
       };
@@ -574,7 +599,7 @@ function TransactionsTable({
         textAnchor = event.shiftKey ? selectionAnchor(input) : offset;
         selectBetween(input, textAnchor, offset);
       }
-      dragRef.current = { origin: cell, textAnchor, ranging: false };
+      dragRef.current = { origin: cell, rows: false, textAnchor, ranging: false };
     } else {
       // An empty cell has nothing to select, so pressing it edits it. Others
       // are edited by pressing again once active (so a double-click edits).
@@ -587,13 +612,37 @@ function TransactionsTable({
       if (edits) startEditing(cell, { start: caretIn("text", at) });
       else setSelection(collapsed(cell));
       const textAnchor = edits ? at : null;
-      dragRef.current = { origin: cell, textAnchor, ranging: false };
+      dragRef.current = { origin: cell, rows: false, textAnchor, ranging: false };
     }
     drag(point);
   }
 
+  /**
+   * A press on a row's number selects the row, its first cell active; with
+   * Shift, the rows from the active cell's to it. Dragging on selects the
+   * rows up to the one the pointer is over.
+   */
+  function handleRowPress(row: number, event: MouseEvent) {
+    if (event.button !== 0) return;
+    // The grid selects, not the browser: it would select the numbers' text.
+    event.preventDefault();
+    // Moving focus here first ends any edit, submitting it.
+    focusGrid();
+    const from = event.shiftKey && selection ? selection.active.row : row;
+    const origin = { row: from, column: 0 };
+    setSelection({ active: origin, head: { row, column: size.columns - 1 } });
+    dragRef.current = { origin, rows: true, textAnchor: null, ranging: row !== from };
+    drag({ x: event.clientX, y: event.clientY });
+  }
+
   const area = selection && bounds(selection);
   const ranged = selection !== null && isRange(selection);
+  // The selected cells' rows and columns: their numbers and headers are
+  // tinted, as the active cell's row is (see EditableCell).
+  const rowSelected = (row: number) => area !== null && row >= area.top && row <= area.bottom;
+  const columnSelected = (column: number) =>
+    area !== null && column >= area.left && column <= area.right;
+  const tint = "bg-focus/8";
 
   return (
     <div
@@ -634,8 +683,10 @@ function TransactionsTable({
             role="row"
             aria-rowindex={1}
             className="grid border-y border-line"
-            style={{ gridTemplateColumns: GRID_TEMPLATE, height: HEADER_HEIGHT }}
+            style={{ gridTemplateColumns: template, height: HEADER_HEIGHT }}
           >
+            {/* Over the row numbers. */}
+            <div aria-hidden className="border-r border-line" />
             {group.headers.map((header, column) => {
               const { headerMenu } = header.column.columnDef.meta!;
               const label = <table.FlexRender header={header} />;
@@ -651,8 +702,10 @@ function TransactionsTable({
                   }
                   onMouseDown={(event) => handleHeaderPress(column, event)}
                   className={`flex items-center truncate border-r border-line font-medium text-ink-muted last:border-r-0 ${
-                    headerMenu && menus ? "" : "px-2"
-                  } ${activeHeader === column ? "outline-2 -outline-offset-2 outline-focus" : ""}`}
+                    columnSelected(column) ? tint : ""
+                  } ${headerMenu && menus ? "" : "px-2"} ${
+                    activeHeader === column ? "outline-2 -outline-offset-2 outline-focus" : ""
+                  }`}
                 >
                   {headerMenu && menus
                     ? menus.render(headerMenu, {
@@ -686,7 +739,7 @@ function TransactionsTable({
               aria-rowindex={item.index + 2}
               className="absolute inset-x-0 grid leading-7"
               style={{
-                gridTemplateColumns: GRID_TEMPLATE,
+                gridTemplateColumns: template,
                 height: ROW_HEIGHT,
                 // Placed with top, not a transform: the edited cell's popups
                 // are anchored to it (see EditableCell), and Firefox places
@@ -694,6 +747,17 @@ function TransactionsTable({
                 top: item.start - scrollMargin,
               }}
             >
+              {/* Screen readers have the row's place from aria-rowindex, and
+                  the keyboard selects a row with Home, then Shift+End. */}
+              <div
+                aria-hidden
+                onMouseDown={(event) => handleRowPress(item.index, event)}
+                className={`truncate border-r border-b border-line px-2 text-right text-ink-muted tabular-nums ${
+                  rowSelected(item.index) ? tint : ""
+                }`}
+              >
+                {item.index + 1}
+              </div>
               {leafColumns.map((leafColumn, column) => {
                 const meta = leafColumn.columnDef.meta!;
                 const editor = meta.editor;
@@ -712,6 +776,9 @@ function TransactionsTable({
                     active={selection !== null && samePosition(selection.active, position)}
                     selected={selected}
                     inRange={ranged && selected}
+                    inActiveRow={
+                      selection !== null && !ranged && selection.active.row === item.index
+                    }
                     editing={
                       isEditing && editor
                         ? {
@@ -740,7 +807,7 @@ function TransactionsTable({
             </div>
           );
         })}
-        {area && ranged && <RangeOutline area={area} />}
+        {area && ranged && <RangeOutline area={area} template={template} />}
       </div>
     </div>
   );
@@ -748,15 +815,16 @@ function TransactionsTable({
 
 /**
  * The outline of a range: one rectangle over its cells' boxes, lines and
- * all, as the active cell's outline is, so their edges meet.
+ * all, as the active cell's outline is, so their edges meet. `template` is
+ * the grid's (see `gridTemplate`).
  */
-function RangeOutline({ area }: { area: Bounds }) {
+function RangeOutline({ area, template }: { area: Bounds; template: string }) {
   return (
     <div
       aria-hidden
       className="pointer-events-none absolute inset-x-0 grid"
       style={{
-        gridTemplateColumns: GRID_TEMPLATE,
+        gridTemplateColumns: template,
         top: area.top * ROW_HEIGHT,
         // A cell's box is its row and the line below it, which is the top of the next row.
         height: (area.bottom - area.top + 1) * ROW_HEIGHT + 1,
@@ -764,7 +832,8 @@ function RangeOutline({ area }: { area: Bounds }) {
     >
       <div
         className="outline-1 -outline-offset-1 outline-focus"
-        style={{ gridColumn: `${area.left + 1} / ${area.right + 2}` }}
+        // Grid lines count from 1, and the row numbers' track comes first.
+        style={{ gridColumn: `${area.left + 2} / ${area.right + 3}` }}
       />
     </div>
   );

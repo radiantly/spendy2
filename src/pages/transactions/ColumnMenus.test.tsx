@@ -67,6 +67,7 @@ function Table({
   return (
     <TransactionsTable
       rows={rows}
+      maxRowNumber={rows.length}
       categories={names.categories}
       accounts={ACCOUNTS}
       currencies={[]}

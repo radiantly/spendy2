@@ -110,6 +110,8 @@ function TransactionsPage() {
       ) : (
         <TransactionsTable
           rows={rows}
+          // Every transaction, so filtering doesn't move the columns.
+          maxRowNumber={loaded.rows.length}
           categories={categories}
           accounts={accounts}
           currencies={currencies}

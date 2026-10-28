@@ -72,6 +72,8 @@ type EditableCellProps = {
   selected: boolean;
   /** In a range of several cells (which the grid outlines). */
   inRange: boolean;
+  /** In the active cell's row, while it's the only cell selected. */
+  inActiveRow: boolean;
   /** Set while the cell is being edited. */
   editing?: CellEditing;
   /**
@@ -95,10 +97,15 @@ function EditableCell({
   active,
   selected,
   inRange,
+  inActiveRow,
   editing,
   onPress,
 }: EditableCellProps) {
   const textRef = useRef<HTMLSpanElement>(null);
+  // A range's cells are tinted; without one, the active cell's row is, more
+  // lightly, as are its number and header (see TransactionsTable). The active
+  // cell itself has its outline.
+  const tint = active ? "" : inRange ? "bg-focus/15" : inActiveRow ? "bg-focus/8" : "";
 
   function handleMouseDown(event: MouseEvent) {
     if (event.button !== 0) return;
@@ -127,9 +134,9 @@ function EditableCell({
       // An edited cell is a field, and its outline red while what's in it is
       // invalid. The field's background is the cell's: positioned content,
       // like the edit's inputs, is painted over the cell's outline.
-      className={`relative min-w-0 border-r border-b border-line px-2 last:border-r-0 ${
-        inRange && !active ? "bg-focus/15" : ""
-      } ${editing ? "bg-surface" : ""} ${
+      className={`relative min-w-0 border-r border-b border-line px-2 last:border-r-0 ${tint} ${
+        editing ? "bg-surface" : ""
+      } ${
         active
           ? "outline-2 -outline-offset-2 outline-focus has-aria-[invalid=true]:outline-danger"
           : ""

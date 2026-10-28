@@ -90,6 +90,14 @@ const CATEGORY = 3;
 const AMOUNT = 4;
 const REMARKS = 5;
 
+/** The text of each row's cell in `column` (0-based), top to bottom. */
+const columnTexts = (column: number) =>
+  page
+    .getByRole("row")
+    .elements()
+    .slice(1)
+    .map((row) => row.querySelectorAll('[role="gridcell"]')[column]!.textContent);
+
 /** The cell in `column` (0-based) of the row showing `text`, once it's shown. */
 async function cellOf(text: string, column: number) {
   const cell = page.getByRole("row").filter({ hasText: text }).getByRole("gridcell").nth(column);
@@ -280,12 +288,7 @@ describe("TransactionsPage", () => {
     await renderApp("/transactions");
 
     await expect.element(page.getByRole("grid")).toBeVisible();
-    const counterparties = page
-      .getByRole("row")
-      .elements()
-      .slice(1)
-      .map((row) => row.children[2]!.textContent);
-    expect(counterparties).toEqual(["Corner Market", "Café Lumen"]);
+    expect(columnTexts(COUNTERPARTY)).toEqual(["Corner Market", "Café Lumen"]);
   });
 
   it("marks an edit as unsaved and saves it", async () => {
@@ -516,12 +519,14 @@ describe("TransactionsPage", () => {
   });
 
   describe("sorting and filtering", () => {
-    const counterparties = () =>
+    const counterparties = () => columnTexts(COUNTERPARTY);
+    /** The number shown before each row's cells, top to bottom. */
+    const numbers = () =>
       page
         .getByRole("row")
         .elements()
         .slice(1)
-        .map((row) => row.children[COUNTERPARTY]!.textContent);
+        .map((row) => row.firstElementChild!.textContent);
     const headerButton = (name: string) =>
       page.getByRole("button", { name: new RegExp(`^${name}`) });
 
@@ -545,6 +550,19 @@ describe("TransactionsPage", () => {
       await pick("Category", "checkbox", "Groceries");
 
       await expect.poll(counterparties).toEqual(["Café Lumen"]);
+    });
+
+    it("numbers the rows again as they're sorted and filtered", async () => {
+      await opened();
+      expect(numbers()).toEqual(["1", "2"]);
+
+      await pick("Counterparty", "radio", "A to Z");
+      await expect.poll(counterparties).toEqual(["Café Lumen", "Corner Market"]);
+      expect(numbers()).toEqual(["1", "2"]);
+
+      await pick("Category", "checkbox", "(no category)");
+      await expect.poll(counterparties).toEqual(["Corner Market"]);
+      expect(numbers()).toEqual(["1"]);
     });
 
     it("keeps the headers when every transaction is filtered out", async () => {
