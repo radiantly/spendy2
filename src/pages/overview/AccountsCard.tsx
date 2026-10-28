@@ -40,7 +40,7 @@ function AccountsCard({ overview, className = "" }: { overview: Overview; classN
                     <div key={label} className={amount === 0 ? "text-ink-muted" : color}>
                       <dt className="sr-only">{label}</dt>
                       <dd>
-                        {formatMoney(amount, account.currency, { whole: true, signed: true })}
+                        {formatMoney(amount, account.currency, { whole: true, sign: "both" })}
                       </dd>
                     </div>
                   ))}

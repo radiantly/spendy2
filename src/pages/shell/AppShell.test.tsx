@@ -721,9 +721,9 @@ describe("TransactionsPage", () => {
     it("stores an edited amount rounded to its currency's stored decimals", async () => {
       await opened();
 
-      await editAmount("-46.20", "-12.345");
+      await editAmount("$46.20", "12.345");
 
-      await expect.element(page.getByText("-12.35", { exact: true }).shown()).toBeVisible();
+      await expect.element(page.getByText("$12.35", { exact: true }).shown()).toBeVisible();
       expect(await storedAmount()).toEqual([{ amount: -1235 }]);
     });
 
@@ -731,27 +731,27 @@ describe("TransactionsPage", () => {
       await opened();
       const update = holdNextUpdate();
 
-      await editAmount("-46.20", "-12.5");
+      await editAmount("$46.20", "12.5");
       update.fail();
 
       await expect
         .element(page.getByText("Couldn't change that transaction: disk on fire").shown())
         .toBeVisible();
-      await expect.element(page.getByText("-46.20", { exact: true }).shown()).toBeVisible();
+      await expect.element(page.getByText("$46.20", { exact: true }).shown()).toBeVisible();
     });
 
     it("doesn't let a failed edit undo a later edit of the amount", async () => {
       await opened();
       const update = holdNextUpdate();
 
-      await editAmount("-46.20", "-12.5");
-      await editAmount("-12.50", "-7.5");
+      await editAmount("$46.20", "12.5");
+      await editAmount("$12.50", "7.5");
       update.fail();
 
       await expect
         .element(page.getByText("Couldn't change that transaction: disk on fire").shown())
         .toBeVisible();
-      await expect.element(page.getByText("-7.50", { exact: true }).shown()).toBeVisible();
+      await expect.element(page.getByText("$7.50", { exact: true }).shown()).toBeVisible();
       expect(await storedAmount()).toEqual([{ amount: -750 }]);
     });
 
@@ -759,12 +759,12 @@ describe("TransactionsPage", () => {
       await loggedIn(await storedDatabase(WITH_CONVERSIONS));
       await renderApp("/transactions");
 
-      await userEvent.dblClick(page.getByText("-46.20", { exact: true }).shown());
+      await userEvent.dblClick(page.getByText("$46.20", { exact: true }).shown());
       await userEvent.keyboard("EUR{Enter}");
 
       await expect
         .poll(async () => (await cellOf("Corner Market", AMOUNT)).element().textContent)
-        .toBe("EUR -46.20");
+        .toBe("€46.20");
       await userEvent.click(saveButton());
       await expect.element(saveButton()).not.toBeInTheDocument();
       const [, blob] = vi.mocked(uploadDatabase).mock.calls[0]!;
@@ -1235,11 +1235,11 @@ describe("undo and redo on the transactions page", () => {
   it("undoes an amount", async () => {
     await opened();
     await editCounterparty("Corner Market", "Corner Shop");
-    await editAmount("-46.20", "-12.5");
+    await editAmount("$46.20", "12.5");
 
     await undo();
 
-    await expect.element(inTable("-46.20")).toBeVisible();
+    await expect.element(inTable("$46.20")).toBeVisible();
     expect(
       await uploaded(`SELECT counterparty, amount FROM transactions WHERE id = '${NEWER}'`),
     ).toEqual([{ counterparty: "Corner Shop", amount: -4620 }]);
@@ -1250,14 +1250,14 @@ describe("undo and redo on the transactions page", () => {
     await renderApp("/transactions");
     // Something else to save, once the change of currency is undone.
     await editCounterparty("Café Lumen", "Café Sol");
-    await userEvent.dblClick(page.getByText("-46.20", { exact: true }).shown());
+    await userEvent.dblClick(page.getByText("$46.20", { exact: true }).shown());
     await userEvent.keyboard("EUR{Enter}");
     const amount = async () => (await cellOf("Corner Market", AMOUNT)).element().textContent;
-    await expect.poll(amount).toBe("EUR -46.20");
+    await expect.poll(amount).toBe("€46.20");
 
     await undo();
 
-    await expect.poll(amount).toBe("USD -46.20");
+    await expect.poll(amount).toBe("$46.20");
     expect(
       await uploaded(
         `SELECT transactions.currency, transactions.amount,

@@ -301,9 +301,13 @@ function TransactionsTable({
     setEditing({ cell, ...start });
   }
 
-  /** Whether `cell` can be edited and has nothing in it. */
+  /**
+   * Whether `cell` can be edited and shows nothing. (What it edits can be
+   * more: an amount too small for its currency's usual decimals.)
+   */
   function isEmpty(cell: CellPosition) {
-    return editorOf(cell.column)?.editText(rows[cell.row]!) === "";
+    const meta = columns[cell.column]!.meta!;
+    return meta.editor !== undefined && meta.display(rows[cell.row]!) === "";
   }
 
   /**
@@ -544,11 +548,8 @@ function TransactionsTable({
     activateHeader(column);
   }
 
-  function handlePress(
-    cell: CellPosition,
-    event: MouseEvent,
-    at: { part: EditStart["part"]; offset: number } | null,
-  ) {
+  /** `at` is where in the cell's edit text it was pressed (see EditableCell). */
+  function handlePress(cell: CellPosition, event: MouseEvent, at: number | null) {
     const point: Point = { x: event.clientX, y: event.clientY };
     const input = inputRef.current;
     const isEditing = editing !== null && samePosition(editing.cell, cell) && input !== null;
@@ -584,9 +585,9 @@ function TransactionsTable({
           (selection !== null && !isRange(selection) && samePosition(selection.active, cell)));
       // Moving focus here first ends any other edit, submitting it.
       focusGrid();
-      if (edits) startEditing(cell, { start: caretIn(at.part, at.offset) });
+      if (edits) startEditing(cell, { start: caretIn("text", at) });
       else setSelection(collapsed(cell));
-      const textAnchor = edits && at.part === "text" ? at.offset : null;
+      const textAnchor = edits ? at : null;
       dragRef.current = { origin: cell, textAnchor, ranging: false };
     }
     drag(point);
@@ -626,7 +627,7 @@ function TransactionsTable({
       }}
       className="cursor-default text-sm outline-none"
     >
-      <div role="rowgroup" className="sticky top-0 z-20 bg-surface">
+      <div role="rowgroup" className="sticky top-0 z-20 bg-canvas">
         {table.getHeaderGroups().map((group) => (
           <div
             key={group.id}
@@ -701,7 +702,6 @@ function TransactionsTable({
                 const selected = area !== null && contains(area, position);
                 const isEditing = isEditingRow && editing.cell.column === column;
                 const editText = editor?.editText(row);
-                const editPrefix = editor?.prefix?.editText(row);
                 return (
                   <EditableCell
                     key={leafColumn.id}
@@ -710,7 +710,6 @@ function TransactionsTable({
                     align={meta.align}
                     tabular={meta.tabular}
                     editText={editText}
-                    editPrefix={editPrefix}
                     active={selection !== null && samePosition(selection.active, position)}
                     selected={selected}
                     rangeEdges={ranged && selected ? edges(area!, position) : undefined}
@@ -720,7 +719,7 @@ function TransactionsTable({
                             text: editing.text ?? editText!,
                             label: String(leafColumn.columnDef.header),
                             prefix: editor.prefix && {
-                              text: editing.prefix ?? editPrefix!,
+                              text: editing.prefix ?? editor.prefix.editText(row),
                               label: editor.prefix.label,
                             },
                             start: editing.start,

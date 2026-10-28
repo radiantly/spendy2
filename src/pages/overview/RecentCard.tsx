@@ -60,7 +60,7 @@ function RecentCard({ overview, className = "" }: { overview: Overview; classNam
                 <span
                   className={`text-sm font-medium ${transaction.amount > 0 ? "text-gain" : ""}`}
                 >
-                  {formatMoney(transaction, transaction.currency, { signed: true })}
+                  {formatMoney(transaction, transaction.currency, { sign: "both" })}
                 </span>
                 {transaction.conversion_amount !== null &&
                   transaction.conversion_decimals !== null && (
@@ -72,7 +72,7 @@ function RecentCard({ overview, className = "" }: { overview: Overview; classNam
                           decimals: transaction.conversion_decimals,
                         },
                         currency,
-                        { signed: true },
+                        { sign: "both" },
                       )}
                     </span>
                   )}

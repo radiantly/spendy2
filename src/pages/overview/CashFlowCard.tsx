@@ -37,7 +37,7 @@ function CashFlowCard({ overview, className = "" }: { overview: Overview; classN
       </div>
       <p className="text-sm leading-relaxed text-white/90">
         {income > 0 ? `You spent ${share}% of what came in. ` : "Nothing came in. "}
-        <strong>{formatMoney(net, currency, { whole: true, signed: true })}</strong> net.
+        <strong>{formatMoney(net, currency, { whole: true, sign: "both" })}</strong> net.
       </p>
     </section>
   );

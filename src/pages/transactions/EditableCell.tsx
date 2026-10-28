@@ -11,7 +11,6 @@ import {
   type RefObject,
 } from "react";
 import { toast } from "sonner";
-import type { CellDisplay } from "./columns.ts";
 import { mapOffset, textOffsetAtPoint } from "./caret.ts";
 import type { Edges } from "./grid.ts";
 import { historyKey, type HistoryDirection } from "../../lib/historyKey.ts";
@@ -65,13 +64,12 @@ export type CellEditing = {
 
 type EditableCellProps = {
   id: string;
-  display: CellDisplay;
+  /** What the cell shows. */
+  display: string;
   align?: "end";
   tabular?: boolean;
   /** The text an edit starts with. Absent for read-only cells. */
   editText?: string;
-  /** The prefix an edit starts with, for a cell whose prefix is edited too. */
-  editPrefix?: string;
   active: boolean;
   selected: boolean;
   /** For a cell in a range of several: which of its sides are on the range's outline. */
@@ -79,11 +77,10 @@ type EditableCellProps = {
   /** Set while the cell is being edited. */
   editing?: CellEditing;
   /**
-   * The mouse went down on the cell. `at` is where in the edit text (or
-   * the prefix) it was pressed, for an editable cell that isn't being
-   * edited yet.
+   * The mouse went down on the cell. `offset` is where in the edit text it
+   * was pressed, for an editable cell that isn't being edited yet.
    */
-  onPress: (event: MouseEvent, at: { part: Part; offset: number } | null) => void;
+  onPress: (event: MouseEvent, offset: number | null) => void;
 };
 
 /** The outline of a range, drawn inside its outer cells. */
@@ -109,39 +106,29 @@ function EditableCell({
   align,
   tabular,
   editText,
-  editPrefix,
   active,
   selected,
   rangeEdges,
   editing,
   onPress,
 }: EditableCellProps) {
-  const prefixRef = useRef<HTMLSpanElement>(null);
-  const valueRef = useRef<HTMLSpanElement>(null);
-
-  /** Where in `edited` the press was, by where it was in `element`'s `displayed` text. */
-  const offsetIn = (element: HTMLElement, displayed: string, edited: string, event: MouseEvent) =>
-    mapOffset(displayed, textOffsetAtPoint(element, event.clientX, event.clientY), edited);
+  const textRef = useRef<HTMLSpanElement>(null);
 
   function handleMouseDown(event: MouseEvent) {
     if (event.button !== 0) return;
     // The grid places the caret and selects text itself, so it can carry
     // on doing so when a drag leaves the cell and comes back.
     event.preventDefault();
-    const prefix = prefixRef.current;
-    const at =
+    // Where in the edit text the press was, by where it was in the cell's.
+    const offset =
       editText === undefined || editing
         ? null
-        : editPrefix !== undefined && prefix?.contains(event.target as Node)
-          ? {
-              part: "prefix" as const,
-              offset: offsetIn(prefix, display.prefix!, editPrefix, event),
-            }
-          : {
-              part: "text" as const,
-              offset: offsetIn(valueRef.current!, display.text, editText, event),
-            };
-    onPress(event, at);
+        : mapOffset(
+            display,
+            textOffsetAtPoint(textRef.current!, event.clientX, event.clientY),
+            editText,
+          );
+    onPress(event, offset);
   }
 
   return (
@@ -160,12 +147,7 @@ function EditableCell({
         <CellInput {...editing} align={align} />
       ) : (
         <div className="truncate">
-          {display.prefix && (
-            <span ref={prefixRef} className="text-ink-muted">
-              {display.prefix}
-            </span>
-          )}
-          <span ref={valueRef}>{display.text}</span>
+          <span ref={textRef}>{display}</span>
         </div>
       )}
     </div>
@@ -362,7 +344,8 @@ function CellInput({
     "aria-errormessage": showError ? errorId : undefined,
   };
   // With a prefix, each input is only as wide as its text, so the prefix and
-  // the text sit together, as the cell shows them; empty, as wide as a character.
+  // the text sit together like words, and the text where the cell showed it;
+  // empty, as wide as a character.
   const inputClass = `cursor-text bg-transparent outline-none ${
     hasPrefix ? "min-w-[1ch] [field-sizing:content]" : "min-w-0"
   } ${paused ? "caret-transparent selection:bg-transparent" : ""}`;
@@ -389,7 +372,7 @@ function CellInput({
               {...invalid}
               className={`text-ink-muted focus:text-ink ${inputClass}`}
             />
-            {/* The space before the text, as wide as the cell shows it. */}
+            {/* The space before the text, the font's own. */}
             <span aria-hidden className="whitespace-pre">
               {" "}
             </span>

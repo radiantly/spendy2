@@ -24,9 +24,9 @@
   --color-surface: #ffffff;
   --color-field: #f4f1ea;
   --color-line: #e9e5dc;
-  --color-ink: #0e0e10;
+  --color-ink: #0f0f0f;
   --color-ink-muted: #77777f;
-  --color-ink-on-lime: #0e0e10;
+  --color-ink-on-lime: #0f0f0f;
   --color-focus: var(--color-lime);
   --color-danger: #c2410c;
   /* Money coming in, and warnings, as text on the page. */
@@ -47,7 +47,7 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --color-canvas: #0e0e10;
+    --color-canvas: #0f0f0f;
     --color-surface: #18181b;
     --color-field: #232328;
     --color-line: #26262b;

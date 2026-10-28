@@ -5,9 +5,9 @@ import type {
   TransactionPatch,
   TransactionRow,
 } from "../../db/queries/transactions.ts";
+import { formatMoney, roundsToZero } from "../../lib/money.ts";
 import {
   amountEditText,
-  formatAmountValue,
   mapResult,
   parseAccount,
   parseAmount,
@@ -21,20 +21,14 @@ import {
 import type { MenuConfig } from "./menu.ts";
 import type { MenuColumn } from "./view.ts";
 
-/**
- * What a cell shows. `prefix` is shown but not edited, like the currency in
- * `USD 10.00`.
- */
-export type CellDisplay = { prefix?: string; text: string };
-
 export type CellEditor = {
   field: EditableTransactionField;
   /** The text the input starts with. */
   editText: (row: TransactionRow) => string;
   /**
-   * Makes the cell's prefix editable too, like the currency in `USD 10.00`,
-   * in an input of its own (see prefix.ts): the prefix an edit starts with,
-   * and the input's label.
+   * Gives the edit a prefix before the text, in an input of its own, like
+   * the currency in `USD 10.00` (see prefix.ts): the prefix an edit starts
+   * with, and the input's label.
    */
   prefix?: { editText: (row: TransactionRow) => string; label: string };
   /**
@@ -88,7 +82,8 @@ export type TransactionColumnMeta = {
   align?: "end";
   /** For numbers: tabular figures, so digits line up. */
   tabular?: boolean;
-  display: (row: TransactionRow) => CellDisplay;
+  /** What the cell shows. */
+  display: (row: TransactionRow) => string;
   /** Absent for read-only columns. */
   editor?: CellEditor;
   /** For a column the transactions can be sorted or filtered by: its header's menu. */
@@ -106,7 +101,7 @@ export const columns = helper.columns([
       track: "minmax(6.5rem, 7rem)",
       tabular: true,
       headerMenu: "date",
-      display: (row) => ({ text: row.naive_date }),
+      display: (row) => row.naive_date,
       editor: {
         field: "naive_date",
         editText: (row) => row.naive_date,
@@ -119,7 +114,7 @@ export const columns = helper.columns([
     meta: {
       track: "minmax(7rem, 1.2fr)",
       headerMenu: "account",
-      display: (row) => ({ text: row.account_name }),
+      display: (row) => row.account_name,
       editor: {
         field: "account_name",
         editText: (row) => row.account_name,
@@ -134,7 +129,7 @@ export const columns = helper.columns([
     meta: {
       track: "minmax(8rem, 2fr)",
       headerMenu: "counterparty",
-      display: (row) => ({ text: row.counterparty }),
+      display: (row) => row.counterparty,
       editor: {
         field: "counterparty",
         editText: (row) => row.counterparty,
@@ -147,7 +142,7 @@ export const columns = helper.columns([
     meta: {
       track: "minmax(7rem, 1.2fr)",
       headerMenu: "category",
-      display: (row) => ({ text: row.category ?? "" }),
+      display: (row) => row.category ?? "",
       editor: {
         field: "category",
         editText: (row) => row.category ?? "",
@@ -169,10 +164,9 @@ export const columns = helper.columns([
       align: "end",
       tabular: true,
       headerMenu: "amount",
-      display: (row) => ({
-        prefix: `${row.currency} `,
-        text: formatAmountValue(row, row.currency),
-      }),
+      // Zero shows as nothing, like any cleared cell: clearing an amount stores 0.
+      display: (row) =>
+        roundsToZero(row, row.currency) ? "" : formatMoney(row, row.currency, { sign: "in" }),
       editor: {
         field: "amount",
         // The number; the currency is the prefix.
@@ -186,7 +180,7 @@ export const columns = helper.columns([
     header: "Remarks",
     meta: {
       track: "minmax(8rem, 2.5fr)",
-      display: (row) => ({ text: row.remarks ?? "" }),
+      display: (row) => row.remarks ?? "",
       editor: {
         field: "remarks",
         editText: (row) => row.remarks ?? "",

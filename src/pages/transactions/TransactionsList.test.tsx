@@ -104,16 +104,20 @@ describe("TransactionsList", () => {
   it("shows the counterparty's initial, its category and account, and the amount", async () => {
     await show([transaction({ counterparty: "aldi süd" })]);
 
-    await expect
-      .element(only())
-      .toHaveTextContent("Aaldi südGroceries · Everyday CheckingUSD -94.74");
+    await expect.element(only()).toHaveTextContent("Aaldi südGroceries · Everyday Checking$94.74");
   });
 
   it("shows money in with a plus, in green", async () => {
     await show([transaction({ amount: 325049, counterparty: "Acme Corp Payroll" })]);
 
-    await expect.element(only()).toMatchTextContent("USD +3,250.49");
-    expect(colorOf("USD +3,250.49")).toBe(colorOfClass("text-gain"));
+    await expect.element(only()).toMatchTextContent("+$3,250.49");
+    expect(colorOf("+$3,250.49")).toBe(colorOfClass("text-gain"));
+  });
+
+  it("shows zero, where the table shows nothing", async () => {
+    await show([transaction({ amount: 0 })]);
+
+    await expect.element(only()).toMatchTextContent(/Everyday Checking\$0\.00$/);
   });
 
   it("says Uncategorized in red where the category would be", async () => {
@@ -143,8 +147,8 @@ describe("TransactionsList", () => {
       }),
     ]);
 
-    await expect.element(only()).toMatchTextContent(/USD -10\.00\s*EUR -9\.20$/);
-    expect(colorOf("EUR -9.20")).toBe(colorOfClass("text-ink-muted"));
+    await expect.element(only()).toMatchTextContent(/\$10\.00\s*€9\.20$/);
+    expect(colorOf("€9.20")).toBe(colorOfClass("text-ink-muted"));
   });
 
   it("says when it has no amount in its account's currency", async () => {
@@ -155,19 +159,19 @@ describe("TransactionsList", () => {
       }),
     ]);
 
-    await expect.element(only()).toMatchTextContent(/USD -94\.74\s*Not converted$/);
+    await expect.element(only()).toMatchTextContent(/\$94\.74\s*Not converted$/);
     expect(colorOf("Not converted")).toBe(colorOfClass("text-warning"));
   });
 
   it.each([
-    ["in its account's currency", { account_name: "Travel Card", currency: "EUR" }],
-    ["in an account without a display currency", { account_name: "Global Brokerage" }],
-  ])("shows just the amount for one %s", async (_name, overrides) => {
+    ["in its account's currency", { account_name: "Travel Card", currency: "EUR" }, /€94\.74$/],
+    ["in an account without a display currency", { account_name: "Global Brokerage" }, /\$94\.74$/],
+  ])("shows just the amount for one %s", async (_name, overrides, amount) => {
     await show([
       transaction({ ...overrides, conversions: { GBP: { amount: -7500, decimals: 2 } } }),
     ]);
 
-    await expect.element(only()).toMatchTextContent(/-94\.74$/);
+    await expect.element(only()).toMatchTextContent(amount);
   });
 
   it("finds the account ignoring case", async () => {
@@ -178,7 +182,7 @@ describe("TransactionsList", () => {
       }),
     ]);
 
-    await expect.element(only()).toMatchTextContent(/EUR -87\.00$/);
+    await expect.element(only()).toMatchTextContent(/€87\.00$/);
   });
 
   it("renders only the items near the viewport", async () => {

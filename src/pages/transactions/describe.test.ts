@@ -52,12 +52,27 @@ describe("describeEdit", () => {
     [
       "an amount, with its currency",
       { field: "amount", patch: { currency: "USD", amount: -1250, decimals: 2 } },
-      "amount of Corner Market: USD -46.20 → USD -12.50",
+      "amount of Corner Market: $46.20 → $12.50",
+    ],
+    [
+      "an amount made money in",
+      { field: "amount", patch: { currency: "USD", amount: 4620, decimals: 2 } },
+      "amount of Corner Market: $46.20 → +$46.20",
     ],
     [
       "an amount in another currency",
       { field: "amount", patch: { currency: "JPY", amount: -1250, decimals: 0 } },
-      "amount of Corner Market: USD -46.20 → JPY -1,250",
+      "amount of Corner Market: $46.20 → ¥1,250",
+    ],
+    [
+      "an amount cleared, as an empty cell",
+      { field: "amount", patch: { currency: "USD", amount: 0, decimals: 2 } },
+      "amount of Corner Market: $46.20 → none",
+    ],
+    [
+      "an amount in a currency without a symbol",
+      { field: "amount", patch: { currency: "CHF", amount: -1250, decimals: 2 } },
+      "amount of Corner Market: $46.20 → CHF 12.50",
     ],
     [
       "a date",
@@ -76,6 +91,15 @@ describe("describeEdit", () => {
     ],
   ])("describes %s with its values", (_, change, expected) => {
     expect(describeOne(change)).toBe(expected);
+  });
+
+  it("names the currency of an empty amount that changes only its currency", () => {
+    expect(
+      describeOne(
+        { field: "amount", patch: { currency: "EUR", amount: 0, decimals: 2 } },
+        row({ amount: 0 }),
+      ),
+    ).toBe("currency of Corner Market: USD → EUR");
   });
 
   it("only says the remarks changed, without their values", () => {
@@ -127,7 +151,7 @@ describe("describeEdit", () => {
     ).toBe("clearing 3 cells in 2 transactions");
   });
 
-  // Delete on a range sets its amounts to 0, which shows as USD 0.00, not empty
+  // Delete on a range sets its amounts to 0, which is stored as a number, not empty
   it("counts amounts set to 0 in a cleared range as cleared", () => {
     expect(
       describeEdit(

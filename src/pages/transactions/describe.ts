@@ -26,8 +26,8 @@ function shorten(text: string, max: number) {
 
 /** What `row`'s cell for `field` shows, "none" if it's empty. */
 function shown(row: TransactionRow, field: Field) {
-  const { prefix = "", text } = columnOf(field).meta!.display(row);
-  return text === "" ? "none" : shorten(`${prefix}${text}`, MAX_VALUE_LENGTH);
+  const text = columnOf(field).meta!.display(row);
+  return text === "" ? "none" : shorten(text, MAX_VALUE_LENGTH);
 }
 
 function plural(count: number, noun: string) {
@@ -63,13 +63,17 @@ export function describeEdit(
     const name = counterparty.length > MAX_NAME_LENGTH ? "a transaction" : counterparty;
     const field = fieldName(change.field);
     if (change.field === "remarks") return `a change to the ${field} of ${name}`;
+    const from = shown(before, change.field);
+    const to = shown(after, change.field);
+    // Where the amount reads the same, like an empty one (0), only the
+    // currency shows the change.
+    if (change.field === "amount" && from === to && before.currency !== after.currency)
+      return `currency of ${name}: ${before.currency} → ${after.currency}`;
     const isNew =
       change.field === "category" &&
       after.category !== null &&
       findName(categories, after.category) === undefined;
-    return `${field} of ${name}: ${shown(before, change.field)} → ${shown(after, change.field)}${
-      isNew ? " (new)" : ""
-    }`;
+    return `${field} of ${name}: ${from} → ${to}${isNew ? " (new)" : ""}`;
   }
 
   const cells = plural(changes.length, "cell");

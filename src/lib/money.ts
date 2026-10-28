@@ -27,6 +27,16 @@ export function currencyDecimals(currency: string) {
 }
 
 /**
+ * Whether a stored amount is zero at its currency's usual decimals, as
+ * `formatMoney` rounds it: 0.004 USD is, 0.005 isn't.
+ */
+export function roundsToZero({ amount, decimals }: Amount, currency: string) {
+  const hidden = decimals - currencyDecimals(currency);
+  // Half of the smallest unit shown rounds away from zero, to that unit.
+  return Math.abs(amount) < (hidden > 0 ? 10 ** hidden / 2 : 1);
+}
+
+/**
  * What `Intl.NumberFormat` should format: a stored amount as its exact
  * decimal, so it rounds without a float in between (1.005 to 1.01, where the
  * float 1.005 is just below it).
@@ -38,36 +48,61 @@ export function formattable(amount: number | Amount) {
 export type MoneyFormat = {
   /** Rounded to whole units: `$1,983` rather than `$1,982.75`. */
   whole?: boolean;
-  /** Show `+` on positive amounts too. */
-  signed?: boolean;
+  /**
+   * Which amounts show their sign: money out, `-$5.00` (the default); both,
+   * `-$5.00` and `+$5.00`; or money in, `+$5.00`, where most amounts are
+   * money out and a minus on each would be noise, so money out is `$5.00`.
+   */
+  sign?: "out" | "both" | "in";
 };
+
+/** The number's part of `formatMoney`'s options. */
+function numberOptions(
+  amount: number | Amount,
+  currency: string,
+  { whole, sign = "out" }: MoneyFormat,
+): Intl.NumberFormatOptions {
+  const decimals = whole ? 0 : currencyDecimals(currency);
+  const moneyIn = (typeof amount === "number" ? amount : amount.amount) > 0;
+  const signDisplay: Record<typeof sign, Intl.NumberFormatOptions["signDisplay"]> = {
+    out: "auto",
+    both: "exceptZero",
+    in: moneyIn ? "exceptZero" : "never",
+  };
+  return {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+    signDisplay: signDisplay[sign],
+  };
+}
 
 /**
  * An amount with its currency's symbol, `-$46.20`, or its code where it has
- * none, `CHF 12.00`. Text that isn't a currency code goes after the number,
- * `12.00 points`. A stored amount is rounded exactly; a number (like a total
- * summed in SQL) is in whole units of the currency.
+ * none, `CHF 12.00`. Other dollars have symbols of their own, `CA$`, so `$`
+ * is only ever the US dollar. Text that isn't a currency code goes after the
+ * number, `12.00 points`. A stored amount is rounded exactly; a number (like
+ * a total summed in SQL) is in whole units of the currency.
  */
-export function formatMoney(
-  amount: number | Amount,
-  currency: string,
-  { whole, signed }: MoneyFormat = {},
-) {
-  const decimals = whole ? 0 : currencyDecimals(currency);
-  const options: Intl.NumberFormatOptions = {
-    minimumFractionDigits: decimals,
-    maximumFractionDigits: decimals,
-    signDisplay: signed ? "exceptZero" : "auto",
-  };
-  const value = formattable(amount);
+export function formatMoney(amount: number | Amount, currency: string, format: MoneyFormat = {}) {
   try {
     return new Intl.NumberFormat("en-US", {
-      ...options,
+      ...numberOptions(amount, currency, format),
       style: "currency",
       currency,
-      currencyDisplay: "narrowSymbol",
-    }).format(value);
+      currencyDisplay: "symbol",
+    }).format(formattable(amount));
   } catch {
-    return `${new Intl.NumberFormat("en-US", options).format(value)} ${currency}`;
+    return `${formatMoneyNumber(amount, currency, format)} ${currency}`;
   }
+}
+
+/** `formatMoney`'s number without the currency: `-46.20`, or `46.20` and `+46.20` for `sign: "in"`. */
+export function formatMoneyNumber(
+  amount: number | Amount,
+  currency: string,
+  format: MoneyFormat = {},
+) {
+  return new Intl.NumberFormat("en-US", numberOptions(amount, currency, format)).format(
+    formattable(amount),
+  );
 }

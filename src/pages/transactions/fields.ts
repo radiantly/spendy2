@@ -5,7 +5,7 @@
  */
 
 import type { Currency } from "../../db/queries/transactions.ts";
-import { currencyDecimals, decimalString, formattable, type Amount } from "../../lib/money.ts";
+import { decimalString, type Amount } from "../../lib/money.ts";
 
 export type ParseResult<T> = { ok: true; value: T } | { ok: false; error: string };
 
@@ -17,53 +17,46 @@ export function mapResult<T, U>(result: ParseResult<T>, map: (value: T) => U): P
   return result.ok ? ok(map(result.value)) : result;
 }
 
-/** The number part of `formatAmount`: `1,234.50`, with the currency's usual decimals. */
-export function formatAmountValue(amount: Amount, currency: string) {
-  const decimals = currencyDecimals(currency);
-  return new Intl.NumberFormat("en-US", {
-    minimumFractionDigits: decimals,
-    maximumFractionDigits: decimals,
-  }).format(formattable(amount));
-}
-
-/** For display: `USD 1,234.50`, with the currency's usual decimals. */
-export function formatAmount(amount: Amount, currency: string) {
-  return `${currency} ${formatAmountValue(amount, currency)}`;
-}
-
 /**
- * For editing: just the number, without the currency (`1,234.50`). Grouped
- * as the cell shows it, so the number doesn't move when an edit starts;
- * typing doesn't regroup it, and `parseAmount` ignores the commas. Exactly
- * as stored, even with more decimals than the currency is usually shown
- * with, so editing it doesn't round it.
+ * For editing: just the number, without the currency, signed as the cell
+ * shows it: `1,234.50` for money out, `+1,234.50` for money in. Grouped as
+ * the cell shows it, so the number doesn't move when an edit starts; typing
+ * doesn't regroup it, and `parseAmount` ignores the commas. Exactly as
+ * stored, even with more decimals than the currency is usually shown with,
+ * so editing it doesn't round it. Zero is empty, as `parseAmount` reads
+ * empty, so a cleared amount edits as a cleared cell.
  */
 export function amountEditText(amount: Amount) {
+  if (amount.amount === 0) return "";
   return new Intl.NumberFormat("en-US", {
     minimumFractionDigits: amount.decimals,
     maximumFractionDigits: amount.decimals,
+    signDisplay: amount.amount > 0 ? "exceptZero" : "never",
   }).format(decimalString(amount));
 }
 
 const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER);
 
 /**
- * Parses `-1,234.5` into an amount stored with `decimals`: -123450 with 2.
- * More decimals than that are rounded, half away from zero, as the display
- * rounds. Empty is 0, so an amount can be cleared.
+ * Parses an amount, signed as the cell shows it, into one stored with
+ * `decimals`: `1,234.5` is money out, -123450 with 2, and `+1,234.5` money
+ * in, 123450. A minus is the same as no sign, so `-1,234.5` copied from
+ * elsewhere is money out too. More decimals than that are rounded, half away
+ * from zero, as the display rounds. Empty is 0, so an amount can be cleared.
  */
 export function parseAmount(text: string, decimals: number): ParseResult<number> {
   if (text.trim() === "") return ok(0);
   const match = /^([+-]?)(\d*)(?:\.(\d*))?$/.exec(text.replaceAll(",", "").trim());
-  if (!match || (match[2] === "" && !match[3])) return fail("Enter a number, like -12.50");
+  if (!match || (match[2] === "" && !match[3]))
+    return fail("Enter an amount, like 12.50, or +12.50 for money in");
 
   const [, sign, whole, fraction = ""] = match;
   // BigInt, as Number would round a too-large one to a safe integer.
   let units = BigInt(`${whole}${fraction.slice(0, decimals).padEnd(decimals, "0")}` || "0");
   if ((fraction[decimals] ?? "0") >= "5") units++;
   if (units > MAX_SAFE) return fail("That amount is too large");
-  // `|| 0` turns -0 (from rounding a small negative amount away) into 0.
-  return ok(sign === "-" ? -Number(units) || 0 : Number(units));
+  // `|| 0` turns -0 (from 0, or a small amount rounded away) into 0.
+  return ok(sign === "+" ? Number(units) : -Number(units) || 0);
 }
 
 /** A local date as `YYYY-MM-DD`, the format the schema checks with `date()`. */

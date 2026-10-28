@@ -5,8 +5,8 @@ import {
   type AccountCurrency,
   type ListedTransaction,
 } from "../../db/queries/transactions.ts";
-import type { Amount } from "../../lib/money.ts";
-import { findName, formatAmountValue } from "./fields.ts";
+import { formatMoney } from "../../lib/money.ts";
+import { findName } from "./fields.ts";
 
 /** Fixed, so the virtualizer knows where everything is without measuring. */
 export const DAY_HEIGHT = 40;
@@ -142,12 +142,6 @@ function DayHeading({ date, weekday }: { date: string; weekday: string }) {
   );
 }
 
-/** `+3,250.49` for money in, `-94.74` for money out. */
-function signedAmount(amount: Amount, currency: string) {
-  const value = formatAmountValue(amount, currency);
-  return amount.amount > 0 ? `+${value}` : value;
-}
-
 /** What goes where the category usually is. */
 function label(transaction: ListedTransaction) {
   if (transaction.duplicate_of !== null) return { text: "Duplicate", className: "" };
@@ -182,8 +176,7 @@ function TransactionItem({
       </div>
       <div className="flex shrink-0 flex-col items-end gap-0.5 font-mono">
         <span className={transaction.amount > 0 ? "text-gain" : ""}>
-          <span className="text-xs text-ink-muted">{transaction.currency}</span>{" "}
-          {signedAmount(transaction, transaction.currency)}
+          {formatMoney(transaction, transaction.currency, { sign: "in" })}
         </span>
         {displayCurrency !== null && transaction.currency !== displayCurrency && (
           <Conversion transaction={transaction} currency={displayCurrency} />
@@ -206,7 +199,7 @@ function Conversion({
     <span className="font-sans text-xs text-warning">Not converted</span>
   ) : (
     <span className="text-xs text-ink-muted">
-      {currency} {signedAmount(converted, currency)}
+      {formatMoney(converted, currency, { sign: "in" })}
     </span>
   );
 }
