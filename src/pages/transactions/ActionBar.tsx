@@ -3,16 +3,32 @@ import {
   TbArrowBackUp,
   TbArrowForwardUp,
   TbArrowsLeftRight,
+  TbCheck,
   TbFileIsr,
   TbRowInsertBottom,
   TbRowInsertTop,
   TbSearch,
   TbTrash,
+  TbX,
 } from "react-icons/tb";
+import type { MarkKind } from "./marks.ts";
+
+/**
+ * While the selected rows are being marked as `kind`, and the row to mark
+ * them against is picked: `picked` is that row's number (null while none
+ * is), and `mark` marks them against it (null while that would change
+ * nothing). `cancel` stops.
+ */
+export type PickingActions = {
+  kind: MarkKind;
+  picked: { row: number; mark: (() => void) | null } | null;
+  cancel: () => void;
+};
 
 /**
  * What the bar's buttons do to the table (see TransactionsTable's
- * `actionBar`): each null while it can't be done.
+ * `actionBar`): each null while it can't be done. Marking as a duplicate or
+ * a transfer starts `picking` the row to mark against.
  */
 export type TableActions = {
   undo: (() => void) | null;
@@ -20,6 +36,9 @@ export type TableActions = {
   addAbove: (() => void) | null;
   addBelow: (() => void) | null;
   deleteRows: (() => void) | null;
+  markDuplicate: (() => void) | null;
+  markTransfer: (() => void) | null;
+  picking: PickingActions | null;
 };
 
 /** How long the pointer rests on a button before its tooltip shows (ms). */
@@ -130,11 +149,32 @@ function Divider() {
 }
 
 /**
- * A pill floating at the bottom of the window, over the table: a search of
- * the transactions, undo and redo, and actions on the selected rows. Only
- * undo, redo, and adding and deleting rows are wired up so far.
+ * What the confirm button's tooltip says: what it marks, and against which
+ * row once one is picked, though that would change nothing.
  */
-function ActionBar({ undo, redo, addAbove, addBelow, deleteRows }: TableActions) {
+function confirmLabel({ kind, picked }: PickingActions) {
+  if (kind === "duplicate")
+    return picked ? `Mark as duplicate of row ${picked.row}` : "Mark as duplicate";
+  return picked ? `Mark as transfer with row ${picked.row}` : "Mark as transfer";
+}
+
+/**
+ * A pill floating at the bottom of the window, over the table: a search of
+ * the transactions, undo and redo, and actions on the selected rows. Marking
+ * as a duplicate or a transfer turns those two buttons into cancel and
+ * confirm while the row to mark against is picked. All but the search are
+ * wired up so far.
+ */
+function ActionBar({
+  undo,
+  redo,
+  addAbove,
+  addBelow,
+  deleteRows,
+  markDuplicate,
+  markTransfer,
+  picking,
+}: TableActions) {
   const tooltips = useTooltips();
   return (
     <div className="pointer-events-none fixed inset-x-0 bottom-6 z-30 flex justify-center px-4">
@@ -167,12 +207,34 @@ function ActionBar({ undo, redo, addAbove, addBelow, deleteRows }: TableActions)
           <TbTrash />
         </IconButton>
         <Divider />
-        <IconButton label="Mark as duplicate" tooltips={tooltips}>
-          <TbFileIsr />
-        </IconButton>
-        <IconButton label="Mark as transfer" tooltips={tooltips}>
-          <TbArrowsLeftRight />
-        </IconButton>
+        {/* In the same places, so a tooltip shown stays on its button. */}
+        {picking ? (
+          <>
+            <IconButton
+              label={`Cancel marking as ${picking.kind}`}
+              action={picking.cancel}
+              tooltips={tooltips}
+            >
+              <TbX />
+            </IconButton>
+            <IconButton
+              label={confirmLabel(picking)}
+              action={picking.picked?.mark ?? null}
+              tooltips={tooltips}
+            >
+              <TbCheck />
+            </IconButton>
+          </>
+        ) : (
+          <>
+            <IconButton label="Mark as duplicate" action={markDuplicate} tooltips={tooltips}>
+              <TbFileIsr />
+            </IconButton>
+            <IconButton label="Mark as transfer" action={markTransfer} tooltips={tooltips}>
+              <TbArrowsLeftRight />
+            </IconButton>
+          </>
+        )}
       </div>
     </div>
   );

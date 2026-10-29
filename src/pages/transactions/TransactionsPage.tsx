@@ -11,6 +11,7 @@ import {
   commitTransactions,
   deleteTransactions,
   existing,
+  markTransactions,
   transactionsQuery,
   type Placement,
   type Transactions,
@@ -21,7 +22,8 @@ import { today } from "../../lib/period.ts";
 import { useUndoRedo } from "../shell/historyKeys.ts";
 import ActionBar from "./ActionBar.tsx";
 import { ColumnMenu } from "./ColumnMenus.tsx";
-import { ADD_DESCRIPTION, describeDelete, describeEdit } from "./describe.ts";
+import { ADD_DESCRIPTION, describeDelete, describeEdit, describeMark } from "./describe.ts";
+import { duplicateMarks, transferMarks, type MarkKind } from "./marks.ts";
 import { newTransaction } from "./newTransaction.ts";
 import TransactionsList from "./TransactionsList.tsx";
 import TransactionsTable, {
@@ -191,6 +193,32 @@ function TransactionsPage() {
     });
   };
 
+  /**
+   * What marking the transactions `marked` (by id) as `kind` against
+   * `picked` does (see marks.ts): stores the marks, saying so if they
+   * couldn't be. Null if it would change nothing. While a row is picked, the
+   * table asks on every render, so working the marks out is kept quick.
+   */
+  const mark = (kind: MarkKind, marked: readonly string[], picked: string) => {
+    const transactionOf = (id: string) => loaded.rows[loaded.positions.get(id)!]!;
+    const marks =
+      kind === "duplicate"
+        ? duplicateMarks(loaded, marked, picked)
+        : transferMarks(transactionOf(marked[0]!), transactionOf(picked));
+    if (marks.length === 0) return null;
+    return () => {
+      markTransactions(queryClient, database, history, {
+        marks,
+        marked,
+        description: describeMark(kind, marked.map(transactionOf)),
+      }).catch((error: unknown) => {
+        toast.error(
+          `Couldn't mark ${marked.length === 1 ? "that transaction" : "those transactions"}: ${messageOf(error)}`,
+        );
+      });
+    };
+  };
+
   // With an account, there can be transactions to add, even without any yet.
   const showsTable = tableFits && (transactions.length > 0 || loaded.accounts.length > 0);
 
@@ -237,6 +265,7 @@ function TransactionsPage() {
             canRedo,
             add: loaded.accounts.length > 0 ? add : null,
             deleteRows,
+            mark,
             render: (actions) => <ActionBar {...actions} />,
           }}
         />

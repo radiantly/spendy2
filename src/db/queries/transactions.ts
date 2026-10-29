@@ -176,6 +176,18 @@ export const UPDATE_TRANSACTION = {
 } as const satisfies Record<EditableTransactionField, string>;
 
 /**
+ * What a transaction is to others, as marking it sets: the transaction it's
+ * a duplicate of, and the account it's a transfer with.
+ */
+export type TransactionMarkField = "duplicate_of" | "transfer_account";
+
+/** Each mark's UPDATE. Bind `[value, id]`. */
+export const UPDATE_MARK = {
+  duplicate_of: `UPDATE transactions SET duplicate_of = ? WHERE id = ?`,
+  transfer_account: `UPDATE transactions SET transfer_account = ? WHERE id = ?`,
+} as const satisfies Record<TransactionMarkField, string>;
+
+/**
  * Deletes a transaction's conversion to a currency. A transaction can't be
  * converted to its own currency, so this goes before setting its currency to
  * one it has a conversion to. Bind `[id, currency]`.

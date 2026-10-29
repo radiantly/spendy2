@@ -23,6 +23,7 @@ import {
   LIST_TRANSACTIONS,
   listedTransactions,
   patchFrom,
+  UPDATE_MARK,
   UPDATE_SORT_KEY,
   UPDATE_TRANSACTION,
   updateBinds,
@@ -30,6 +31,7 @@ import {
   type Currency,
   type EditableTransactionField,
   type ListedTransaction,
+  type TransactionMarkField,
   type TransactionPatch,
 } from "./queries/transactions.ts";
 import type { CategoryParent } from "./queries/overview.ts";
@@ -129,10 +131,10 @@ function update(
 }
 
 /** `current` with each update's row patched, in turn, with what `patchFor` returns for it. */
-function patched(
+function patched<Update extends { id: string }>(
   current: Transactions,
-  updates: readonly TransactionUpdate[],
-  patchFor: (update: TransactionUpdate, row: ListedTransaction) => Partial<ListedTransaction>,
+  updates: readonly Update[],
+  patchFor: (update: Update, row: ListedTransaction) => Partial<ListedTransaction>,
 ): Transactions {
   const rows = [...current.rows];
   for (const update of updates) {
@@ -562,6 +564,75 @@ export async function deleteTransactions(
       });
     }
     if (usedCategories) await refreshCategories(queryClient, database);
+  } catch (error) {
+    // The database closed (e.g. on logging out), and the page with it.
+    if (error instanceof ClosedError) return;
+    throw error;
+  }
+  if (failure) throw failure.error;
+}
+
+/** A mark to set on a transaction: its `field` set to `value`. */
+export type TransactionMark = { id: string; field: TransactionMarkField; value: string | null };
+
+/** What `mark` changes in its transaction's row. */
+function markedBy({ field, value }: Pick<TransactionMark, "field" | "value">) {
+  return field === "duplicate_of" ? { duplicate_of: value } : { transfer_account: value };
+}
+
+/**
+ * Shows `marks` straight away, then writes them to the database, in one
+ * transaction, as one step to undo, which `description` describes. `marked`
+ * are the transactions that were marked, which an undo or redo selects;
+ * others the marks change (a transfer's other side, say) aren't selected. If
+ * the write fails, the marks go back to what the database has, there's
+ * nothing to undo, and this rejects with why.
+ */
+export async function markTransactions(
+  queryClient: QueryClient,
+  database: Database,
+  history: DatabaseHistory,
+  {
+    marks,
+    marked,
+    description,
+  }: { marks: readonly TransactionMark[]; marked: readonly string[]; description: string },
+) {
+  const ids = marks.map(({ id }) => id);
+  const edit: TransactionEdit = {
+    kind: "transaction",
+    // All of them, for an undo or redo to select.
+    cells: marked.flatMap((id) => FIELDS.map((field) => ({ id, field }))),
+    transactions: [...new Set([...marked, ...ids])],
+    description,
+  };
+
+  update(queryClient, database, (current) => patched(current, marks, markedBy));
+  let failure: { error: unknown } | undefined;
+  try {
+    try {
+      // As commitTransactions asks.
+      const written = database.batch(
+        marks.map(({ id, field, value }) => ({ sql: UPDATE_MARK[field], bind: [value, id] })),
+      );
+      history.record({ changes: written, about: edit });
+      await written;
+    } catch (error) {
+      if (error instanceof ClosedError) throw error;
+      failure = { error };
+      const stored = new Map(
+        listedTransactions(await database.query(GET_TRANSACTIONS, [JSON.stringify(ids)])).map(
+          (row) => [row.id, row],
+        ),
+      );
+      // If a later mark changed one again, that mark's write decides it.
+      update(queryClient, database, (current) =>
+        patched(current, marks, ({ id, field, value }, row) => {
+          const before = stored.get(id);
+          return before && row[field] === value ? markedBy({ field, value: before[field] }) : {};
+        }),
+      );
+    }
   } catch (error) {
     // The database closed (e.g. on logging out), and the page with it.
     if (error instanceof ClosedError) return;

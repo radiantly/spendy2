@@ -1,4 +1,11 @@
-import { createRef, useImperativeHandle, useState, type ComponentProps, type Ref } from "react";
+import {
+  Activity,
+  createRef,
+  useImperativeHandle,
+  useState,
+  type ComponentProps,
+  type Ref,
+} from "react";
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { page, userEvent, type Locator } from "vitest/browser";
 import { render } from "vitest-browser-react";
@@ -8,6 +15,7 @@ import type { Moved } from "../../db/editHistory.ts";
 import type { Currency, EditedCell, TransactionRow } from "../../db/queries/transactions.ts";
 import { mouse, pointIn } from "../../test/mouse.ts";
 import ActionBar from "./ActionBar.tsx";
+import type { MarkKind } from "./marks.ts";
 import TransactionsTable, { ROW_HEIGHT, type AddAt, type Added } from "./TransactionsTable.tsx";
 
 const ROW_COUNT = 100_000;
@@ -1890,6 +1898,7 @@ describe("TransactionsTable", () => {
           canRedo,
           add: null,
           deleteRows: () => {},
+          mark: () => null,
           render: (actions) => <ActionBar {...actions} />,
         }}
       />
@@ -2093,6 +2102,7 @@ describe("TransactionsTable", () => {
           canRedo: false,
           add,
           deleteRows: () => {},
+          mark: () => null,
           render: (actions) => <ActionBar {...actions} />,
         }}
       />
@@ -2225,6 +2235,7 @@ describe("TransactionsTable", () => {
           canRedo: false,
           add: null,
           deleteRows: onDelete,
+          mark: () => null,
           render: (actions) => <ActionBar {...actions} />,
         }}
       />
@@ -2311,6 +2322,427 @@ describe("TransactionsTable", () => {
 
       expect(activeCell()).toBeNull();
       await expect.element(deleteButton()).toHaveAttribute("aria-disabled", "true");
+    });
+  });
+
+  describe("the action bar's marking as a duplicate or a transfer", () => {
+    const button = (name: string) => page.getByRole("button", { name, exact: true });
+    const duplicateButton = () => button("Mark as duplicate");
+    const transferButton = () => button("Mark as transfer");
+    const cancelButton = (kind: MarkKind) => button(`Cancel marking as ${kind}`);
+    const rowOf = (text: string) =>
+      page.getByText(text, { exact: true }).element().closest('[role="row"]')!;
+    const cellsOf = (text: string) => [...rowOf(text).querySelectorAll('[role="gridcell"]')];
+    const markedTint = () => backgroundOfClass("bg-amber/20");
+    /** The toast explaining picking for `kind`, by its title. */
+    const help = (kind: MarkKind) => page.getByText(`Marking as ${kind}`, { exact: true });
+
+    /** What confirming marked: as what, which rows, and against which. */
+    let marked: { kind: MarkKind; marked: string[]; picked: string }[];
+    let mark: Mock<NonNullable<TableProps["actionBar"]>["mark"]>;
+    beforeEach(() => {
+      marked = [];
+      // Marking against a row changes something, unless it's one of those marked.
+      mark = vi.fn((kind, rows, picked) =>
+        rows.includes(picked) ? null : () => void marked.push({ kind, marked: [...rows], picked }),
+      );
+    });
+
+    /** The table with its action bar, showing `shown`, and `moved` as the last undo or redo. */
+    const withBar = (shown = rows, moved: Moved<Edit> | null = null) => (
+      <>
+        {tableWithBar(shown, moved)}
+        <Toaster />
+      </>
+    );
+
+    /** `withBar`'s table, without its toaster. */
+    const tableWithBar = (shown = rows, moved: Moved<Edit> | null = null) => (
+      <TransactionsTable
+        {...tableProps(shown, { lastUndoOrRedo: moved })}
+        actionBar={{
+          canUndo: true,
+          canRedo: false,
+          add: () => {},
+          deleteRows: () => {},
+          mark,
+          render: (actions) => <ActionBar {...actions} />,
+        }}
+      />
+    );
+
+    /** Renders the table with its bar, and starts marking `text`'s row as `kind`. */
+    async function startMarking(kind: MarkKind, text = "Shop 2") {
+      const screen = await render(withBar());
+      await makeActive(text, CATEGORY);
+      await userEvent.click(kind === "duplicate" ? duplicateButton() : transferButton());
+      return screen;
+    }
+
+    it("is disabled while no cell is active", async () => {
+      await render(withBar());
+
+      await expect.element(duplicateButton()).toHaveAttribute("aria-disabled", "true");
+      await expect.element(transferButton()).toHaveAttribute("aria-disabled", "true");
+    });
+
+    it("turns the two buttons into cancel and confirm, keeping focus in the grid", async () => {
+      await startMarking("duplicate");
+
+      await expect.element(cancelButton("duplicate")).toBeInTheDocument();
+      // Confirm, named for what it marks, with no row picked to mark against yet.
+      await expect.element(duplicateButton()).toHaveAttribute("aria-disabled", "true");
+      await expect.element(transferButton()).not.toBeInTheDocument();
+      await expect.element(grid()).toHaveFocus();
+    });
+
+    it("picks no row at first, so only the rows being marked stand out", async () => {
+      await startMarking("duplicate");
+
+      expect(selectedCells()).toEqual([]);
+      expect(activeCell()).toBeNull();
+      expect(rangeOutline()).toBeNull();
+      expect(mark).not.toHaveBeenCalled();
+    });
+
+    it("leaves no header active, though one was last", async () => {
+      await render(withBar());
+      await makeActive("Corner Market", CATEGORY);
+      // Up to the header, and back down.
+      await userEvent.keyboard("{ArrowUp}{ArrowDown}");
+
+      await userEvent.click(duplicateButton());
+
+      expect(grid().element().getAttribute("aria-activedescendant")).toBeNull();
+    });
+
+    it("picks nothing when the grid's tabbed back into", async () => {
+      await startMarking("duplicate");
+
+      await userEvent.keyboard("{Tab}");
+      await expect.element(grid()).not.toHaveFocus();
+      await userEvent.keyboard("{Shift>}{Tab}{/Shift}");
+
+      await expect.element(grid()).toHaveFocus();
+      expect(selectedCells()).toEqual([]);
+    });
+
+    it("tints the rows being marked, across the row, until it stops", async () => {
+      await render(withBar());
+      await makeActive("Shop 3", CATEGORY);
+      await userEvent.keyboard("{Shift>}{ArrowUp}{ArrowUp}{/Shift}");
+
+      await userEvent.click(duplicateButton());
+
+      const tinted = ["Shop 1", "Shop 2", "Shop 3", "Shop 4"].map(
+        (text) => backgroundOf(rowOf(text)) === markedTint(),
+      );
+      expect(tinted).toEqual([true, true, true, false]);
+      await userEvent.keyboard("{Escape}");
+      expect(backgroundOf(rowOf("Shop 1"))).not.toBe(markedTint());
+    });
+
+    it("picks a row pressed, without editing it, and confirm marks against it", async () => {
+      await startMarking("duplicate");
+
+      await userEvent.dblClick(cellOf("Shop 5", COUNTERPARTY));
+      await expect.element(input()).not.toBeInTheDocument();
+      // As the whole row selected, with no cell in it outlined as active.
+      expect(selectedCells()).toEqual(cellsOf("Shop 5"));
+      expect(cellsOf("Shop 5").map((cell) => getComputedStyle(cell).outlineStyle)).toEqual(
+        Array(6).fill("none"),
+      );
+      await userEvent.click(button("Mark as duplicate of row 6"));
+
+      expect(marked).toEqual([{ kind: "duplicate", marked: ["t2"], picked: "t5" }]);
+      await expect.element(cancelButton("duplicate")).not.toBeInTheDocument();
+      expect(activeCell()).toBe(cellOf("Shop 5", COUNTERPARTY).element());
+      expect(selectedCells()).toEqual([cellOf("Shop 5", COUNTERPARTY).element()]);
+    });
+
+    it("picks a row by its number", async () => {
+      await startMarking("duplicate");
+
+      await userEvent.click(page.elementLocator(numberFor("Shop 4")));
+
+      expect(selectedCells()).toEqual(cellsOf("Shop 4"));
+      await expect
+        .element(button("Mark as duplicate of row 5"))
+        .not.toHaveAttribute("aria-disabled");
+    });
+
+    it("shows the row picked as one, its number tinted as its cells, lined only above and below", async () => {
+      await startMarking("duplicate");
+
+      await userEvent.click(cellOf("Shop 5", DATE));
+
+      const number = numberFor("Shop 5");
+      expect(backgroundOf(number)).toBe(backgroundOfClass("bg-focus/15"));
+      expect(cellsOf("Shop 5").map(backgroundOf)).toEqual(Array(6).fill(backgroundOf(number)));
+      const lines = rangeOutline()!;
+      const box = lines.getBoundingClientRect();
+      const first = number.getBoundingClientRect();
+      const last = cellOf("Shop 5", REMARKS).element().getBoundingClientRect();
+      // Firefox can differ in the last digits, adding up the columns a box spans.
+      expect([box.left, box.top, box.right, box.bottom]).toEqual(
+        [first.left, first.top, last.right, last.bottom].map((edge) => expect.closeTo(edge, 2)),
+      );
+      const style = getComputedStyle(lines);
+      expect([
+        style.borderTopWidth,
+        style.borderBottomWidth,
+        style.borderLeftWidth,
+        style.borderRightWidth,
+        style.outlineStyle,
+      ]).toEqual(["1px", "1px", "0px", "0px", "none"]);
+      expect([style.borderTopColor, style.borderBottomColor]).toEqual(
+        Array(2).fill(colorOfClass("text-focus")),
+      );
+    });
+
+    it("moves the pick with the keys from the row being marked, with Shift too, and Enter marks against it", async () => {
+      await startMarking("duplicate");
+
+      await userEvent.keyboard("{ArrowDown}");
+      expect(selectedCells()).toEqual(cellsOf("Shop 3"));
+      await userEvent.keyboard("{Shift>}{ArrowDown}{/Shift}");
+      expect(selectedCells()).toEqual(cellsOf("Shop 4"));
+      await userEvent.keyboard("{Enter}");
+
+      expect(marked).toEqual([{ kind: "duplicate", marked: ["t2"], picked: "t4" }]);
+    });
+
+    it("starts the keys from the cell that was active, of several rows being marked", async () => {
+      await render(withBar());
+      await makeActive("Shop 3", CATEGORY);
+      await userEvent.keyboard("{Shift>}{ArrowUp}{ArrowUp}{/Shift}");
+      await userEvent.click(duplicateButton());
+
+      await userEvent.keyboard("{ArrowUp}");
+
+      expect(selectedCells()).toEqual(cellsOf("Shop 2"));
+    });
+
+    it("picks the first row with a key, when the rows being marked aren't shown", async () => {
+      const screen = await startMarking("duplicate");
+      await screen.rerender(withBar(rows.slice(5, 10)));
+
+      await userEvent.keyboard("{ArrowDown}");
+
+      expect(selectedCells()).toEqual(cellsOf("Shop 5"));
+    });
+
+    it("doesn't mark on Enter while no row is picked, or the one picked would change nothing", async () => {
+      await startMarking("duplicate");
+
+      await userEvent.keyboard("{Enter}");
+      await userEvent.click(cellOf("Shop 2", DATE));
+      await userEvent.keyboard("{Enter}");
+
+      expect(marked).toEqual([]);
+      await expect.element(cancelButton("duplicate")).toBeInTheDocument();
+    });
+
+    it.each([
+      ["duplicate", "Mark as duplicate of row 3"],
+      ["transfer", "Mark as transfer with row 3"],
+    ] as const)(
+      "says what confirming a %s marks against the row picked, disabled where that would change nothing",
+      async (kind, label) => {
+        await startMarking(kind);
+
+        await userEvent.click(cellOf("Shop 2", DATE));
+
+        await expect.element(button(label)).toHaveAttribute("aria-disabled", "true");
+      },
+    );
+
+    it("marks every row a range covers", async () => {
+      await render(withBar());
+      await makeActive("Shop 3", CATEGORY);
+      await userEvent.keyboard("{Shift>}{ArrowUp}{ArrowUp}{ArrowLeft}{/Shift}");
+      await userEvent.click(duplicateButton());
+
+      await userEvent.click(cellOf("Shop 6", DATE));
+      await userEvent.click(button("Mark as duplicate of row 7"));
+
+      expect(marked).toEqual([{ kind: "duplicate", marked: ["t1", "t2", "t3"], picked: "t6" }]);
+    });
+
+    it.each([
+      ["Escape", () => userEvent.keyboard("{Escape}")],
+      ["Cancel", () => userEvent.click(cancelButton("duplicate"))],
+    ])("%s stops without marking, back to the selection it started from", async (_, stop) => {
+      await render(withBar());
+      await makeActive("Shop 3", CATEGORY);
+      await userEvent.keyboard("{Shift>}{ArrowUp}{ArrowLeft}{/Shift}");
+      const selected = selectedCells();
+      await userEvent.click(duplicateButton());
+      await userEvent.click(cellOf("Shop 6", DATE));
+
+      await stop();
+
+      expect(marked).toEqual([]);
+      await expect.element(cancelButton("duplicate")).not.toBeInTheDocument();
+      expect(selectedCells()).toEqual(selected);
+      expect(activeCell()).toBe(cellOf("Shop 3", CATEGORY).element());
+    });
+
+    it("goes back to the selection it started from where its rows have moved to", async () => {
+      const screen = await startMarking("duplicate");
+      const shown = rows.slice(0, 10).toReversed();
+      await screen.rerender(withBar(shown));
+
+      await userEvent.keyboard("{Escape}");
+
+      expect(activeCell()).toBe(cellOf("Shop 2", CATEGORY).element());
+    });
+
+    it("starts marking a transfer from one row only", async () => {
+      await render(withBar());
+      await makeActive("Shop 3", CATEGORY);
+      await userEvent.keyboard("{Shift>}{ArrowLeft}{/Shift}");
+      await expect.element(transferButton()).not.toHaveAttribute("aria-disabled");
+
+      await userEvent.keyboard("{Shift>}{ArrowUp}{/Shift}");
+      await expect.element(transferButton()).toHaveAttribute("aria-disabled", "true");
+      await pressDisabled(transferButton());
+
+      await expect.element(cancelButton("transfer")).not.toBeInTheDocument();
+    });
+
+    it("says what confirming a transfer marks, then against which row", async () => {
+      await startMarking("transfer");
+      await expect.element(cancelButton("transfer")).toBeInTheDocument();
+      await expect.element(transferButton()).toHaveAttribute("aria-disabled", "true");
+
+      await userEvent.click(cellOf("Shop 3", AMOUNT));
+      await userEvent.click(button("Mark as transfer with row 4"));
+
+      expect(marked).toEqual([{ kind: "transfer", marked: ["t2"], picked: "t3" }]);
+    });
+
+    it("can't add or delete rows while picking, but can undo", async () => {
+      await startMarking("duplicate");
+
+      for (const name of ["Add row above", "Add row below", "Delete selected rows"])
+        await expect.element(button(name)).toHaveAttribute("aria-disabled", "true");
+      await expect.element(button("Undo")).not.toHaveAttribute("aria-disabled");
+    });
+
+    it("stops at an undo or redo, which selects what it changed", async () => {
+      const screen = await startMarking("duplicate");
+
+      await screen.rerender(
+        withBar(rows, {
+          direction: "undo",
+          step: {
+            changes: Promise.resolve(new Uint8Array()),
+            about: {
+              kind: "transaction",
+              cells: [{ id: "t7", field: "remarks" }],
+              transactions: ["t7"],
+              description: "an edit",
+            },
+          },
+        }),
+      );
+
+      await expect.element(cancelButton("duplicate")).not.toBeInTheDocument();
+      expect(activeCell()).toBe(cellOf("Shop 7", REMARKS).element());
+      expect(backgroundOf(rowOf("Shop 2"))).not.toBe(markedTint());
+      await expect.element(help("duplicate")).not.toBeInTheDocument();
+    });
+
+    it("saves an edit in progress first", async () => {
+      await render(withBar());
+      await userEvent.dblClick(cellOf("Corner Market", COUNTERPARTY));
+      await userEvent.keyboard("{End}s");
+
+      await userEvent.click(duplicateButton());
+
+      expect(onCommit.mock.calls).toEqual([
+        [[{ rowIndex: 0, field: "counterparty", patch: { counterparty: "Corner Markets" } }]],
+      ]);
+      await expect.element(input()).not.toBeInTheDocument();
+      await expect.element(cancelButton("duplicate")).toBeInTheDocument();
+    });
+
+    describe("explaining it in a toast", () => {
+      it("shows one while picking, until it stops", async () => {
+        await startMarking("duplicate");
+
+        await expect.element(help("duplicate")).toBeInTheDocument();
+        await expect
+          .element(page.getByText("Select the transaction that this is a duplicate of."))
+          .toBeInTheDocument();
+        await userEvent.keyboard("{Escape}");
+
+        await expect.element(help("duplicate")).not.toBeInTheDocument();
+      });
+
+      it("shows one every time, once something has been marked too", async () => {
+        await startMarking("duplicate");
+        await userEvent.click(cellOf("Shop 5", DATE));
+        await userEvent.keyboard("{Enter}");
+        await expect.element(help("duplicate")).not.toBeInTheDocument();
+
+        await userEvent.click(duplicateButton());
+
+        await expect.element(help("duplicate")).toBeInTheDocument();
+      });
+
+      it("shows one for a transfer", async () => {
+        await startMarking("transfer");
+
+        await expect.element(help("transfer")).toBeInTheDocument();
+        await expect
+          .element(page.getByText("Pick the transaction from the other side of the transfer."))
+          .toBeInTheDocument();
+      });
+
+      it("cancels when it's closed, back to the selection it started from", async () => {
+        await render(withBar());
+        await makeActive("Shop 3", CATEGORY);
+        await userEvent.keyboard("{Shift>}{ArrowUp}{ArrowLeft}{/Shift}");
+        const selected = selectedCells();
+        await userEvent.click(duplicateButton());
+        await userEvent.click(cellOf("Shop 6", DATE));
+
+        const close = page.getByRole("button", { name: "Close toast" });
+        // The pointer coming over the toasts can move them (sonner expands
+        // them), so it's over them first: the click then waits till they're still.
+        await userEvent.hover(close);
+        await userEvent.click(close);
+
+        await expect.element(cancelButton("duplicate")).not.toBeInTheDocument();
+        expect(marked).toEqual([]);
+        expect(selectedCells()).toEqual(selected);
+        await expect.element(help("duplicate")).not.toBeInTheDocument();
+      });
+
+      it("goes while the page is hidden, which doesn't cancel, and comes back with it", async () => {
+        // The toaster is outside the pages, as the app has it.
+        const app = (mode: "visible" | "hidden") => (
+          <>
+            <Activity mode={mode}>{tableWithBar()}</Activity>
+            <Toaster />
+          </>
+        );
+        const screen = await render(app("visible"));
+        await makeActive("Shop 2", CATEGORY);
+        await userEvent.click(duplicateButton());
+        await expect.element(help("duplicate")).toBeInTheDocument();
+
+        await screen.rerender(app("hidden"));
+        await expect.element(help("duplicate")).not.toBeInTheDocument();
+        // Sonner says it was dismissed a frame or so later.
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        await screen.rerender(app("visible"));
+
+        await expect.element(cancelButton("duplicate")).toBeInTheDocument();
+        await expect.element(help("duplicate")).toBeInTheDocument();
+      });
     });
   });
 

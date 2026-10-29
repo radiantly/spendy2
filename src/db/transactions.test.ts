@@ -13,9 +13,11 @@ import {
   deleteTransactions,
   existing,
   keepTransactionsInSync,
+  markTransactions,
   transactionsQuery,
   type NewTransaction,
   type Placement,
+  type TransactionMark,
 } from "./transactions.ts";
 
 vi.mock("../api/database.ts", () => ({
@@ -474,6 +476,113 @@ describe("deleteTransactions", () => {
     expect(cachedDay()).toEqual(["Copy 2", "Original 1"]);
     expect(cached().removed).toEqual(new Set());
     expect(rowOf("Copy").duplicate_of).toBe(idOf("Original"));
+    expect(history.canUndo).toBe(false);
+  });
+});
+
+describe("markTransactions", () => {
+  /** Makes `copies` duplicates of `original`, marking them (see `markTransactions`). */
+  function markDuplicates(copies: string[], original: string) {
+    return mark(
+      copies.map((copy) => ({ id: idOf(copy), field: "duplicate_of", value: idOf(original) })),
+      copies,
+    );
+  }
+
+  function mark(marks: TransactionMark[], marked: string[]) {
+    return markTransactions(queryClient, database, history, {
+      marks,
+      marked: marked.map(idOf),
+      description: "marking transactions",
+    });
+  }
+
+  /** `Out` in Checking and `In` in Savings, read for the page. */
+  async function storedTransfer() {
+    await stored(["Out", "In"]);
+    await database.batch([
+      { sql: "INSERT INTO accounts VALUES ('Savings', 'USD', 'Bank', NULL)" },
+      { sql: "UPDATE transactions SET account_name = 'Savings' WHERE id = ?", bind: [idOf("In")] },
+    ]);
+    await read();
+  }
+
+  const transfers = () => [rowOf("Out").transfer_account, rowOf("In").transfer_account];
+
+  it("shows them in the page's copy, and to undo, at once, then stores them", async () => {
+    await stored(["Original", "Copy"]);
+
+    const marking = markDuplicates(["Copy"], "Original");
+
+    expect(rowOf("Copy").duplicate_of).toBe(idOf("Original"));
+    expect(history.canUndo).toBe(true);
+    await marking;
+    expect(
+      await database.query("SELECT duplicate_of FROM transactions WHERE id = ?", [idOf("Copy")]),
+    ).toEqual([{ duplicate_of: idOf("Original") }]);
+  });
+
+  it("marks both sides of a transfer as one step, which an undo and a redo read again", async () => {
+    await storedTransfer();
+    await mark(
+      [
+        { id: idOf("Out"), field: "transfer_account", value: "Savings" },
+        { id: idOf("In"), field: "transfer_account", value: "Checking" },
+      ],
+      ["Out"],
+    );
+    expect(transfers()).toEqual(["Savings", "Checking"]);
+
+    const undone = await history.undo();
+    await expect.poll(() => cached().lastUndoOrRedo).toBe(undone);
+    expect(transfers()).toEqual([null, null]);
+
+    const redone = await history.redo();
+    await expect.poll(() => cached().lastUndoOrRedo).toBe(redone);
+    expect(transfers()).toEqual(["Savings", "Checking"]);
+  });
+
+  it("selects every cell of those marked, and only those, when undone", async () => {
+    await stored(["Original", "Copy", "Other"]);
+    await mark(
+      [
+        { id: idOf("Copy"), field: "duplicate_of", value: idOf("Original") },
+        { id: idOf("Other"), field: "duplicate_of", value: idOf("Original") },
+      ],
+      ["Copy"],
+    );
+
+    const undone = await history.undo();
+
+    const cells = undone!.step.about.cells;
+    expect(new Set(cells.map(({ id }) => id))).toEqual(new Set([idOf("Copy")]));
+    expect(cells.map(({ field }) => field).sort()).toEqual([
+      "account_name",
+      "amount",
+      "category",
+      "counterparty",
+      "naive_date",
+      "remarks",
+    ]);
+    // Though both are read again.
+    await expect.poll(() => rowOf("Other").duplicate_of).toBeNull();
+  });
+
+  it("puts them back, as the database has them, when they can't be stored, and says why", async () => {
+    await stored(["Original", "Copy", "Other"]);
+    await database.batch([
+      {
+        sql: "UPDATE transactions SET duplicate_of = ? WHERE id = ?",
+        bind: [idOf("Copy"), idOf("Other")],
+      },
+    ]);
+    await read();
+    vi.spyOn(database, "batch").mockRejectedValueOnce(new Error("disk on fire"));
+
+    await expect(markDuplicates(["Copy", "Other"], "Original")).rejects.toThrow("disk on fire");
+
+    expect(rowOf("Copy").duplicate_of).toBeNull();
+    expect(rowOf("Other").duplicate_of).toBe(idOf("Copy"));
     expect(history.canUndo).toBe(false);
   });
 });

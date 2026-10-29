@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { TransactionRow } from "../../db/queries/transactions.ts";
-import { describeDelete, describeEdit, MAX_NAME_LENGTH, MAX_VALUE_LENGTH } from "./describe.ts";
+import {
+  describeDelete,
+  describeEdit,
+  describeMark,
+  MAX_NAME_LENGTH,
+  MAX_VALUE_LENGTH,
+} from "./describe.ts";
 import type { TransactionChange } from "./TransactionsTable.tsx";
 
 const row = (overrides: Partial<TransactionRow> = {}): TransactionRow => ({
@@ -193,6 +199,27 @@ describe("describeDelete", () => {
   it("counts several", () => {
     expect(describeDelete([row(), row({ id: "t2" }), row({ id: "t3" })])).toBe(
       "deleting 3 transactions",
+    );
+  });
+});
+
+describe("describeMark", () => {
+  it.each([
+    ["duplicate", "marking Corner Market as a duplicate"],
+    ["transfer", "marking Corner Market as a transfer"],
+  ] as const)("names one transaction marked as a %s by its counterparty", (kind, text) => {
+    expect(describeMark(kind, [row()])).toBe(text);
+  });
+
+  it("calls one with a longer counterparty just a transaction", () => {
+    expect(
+      describeMark("duplicate", [row({ counterparty: "x".repeat(MAX_NAME_LENGTH + 1) })]),
+    ).toBe("marking a transaction as a duplicate");
+  });
+
+  it("counts several", () => {
+    expect(describeMark("duplicate", [row(), row({ id: "t2" }), row({ id: "t3" })])).toBe(
+      "marking 3 transactions as duplicates",
     );
   });
 });

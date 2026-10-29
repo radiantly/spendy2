@@ -1,4 +1,6 @@
 import {
+  useEffect,
+  useEffectEvent,
   useId,
   useLayoutEffect,
   useRef,
@@ -9,6 +11,7 @@ import {
 } from "react";
 import { useTable } from "@tanstack/react-table";
 import { defaultRangeExtractor, useWindowVirtualizer, type Range } from "@tanstack/react-virtual";
+import { toast } from "sonner";
 import type { Moved } from "../../db/editHistory.ts";
 import type { Edit } from "../../db/databaseContext.ts";
 import {
@@ -46,6 +49,7 @@ import {
   type Motion,
 } from "./grid.ts";
 import type { HeaderMenuHandle, HeaderProps } from "./HeaderMenu.tsx";
+import type { MarkKind } from "./marks.ts";
 import { partFor } from "./prefix.ts";
 import { useMouseDrag, type Point } from "./useMouseDrag.ts";
 import type { MenuColumn, Sort } from "./view.ts";
@@ -149,6 +153,42 @@ export type AddAt = { row: number | null; side: "above" | "below"; column: numbe
 /** A row added where `AddAt` asked: its transaction's id, and the column to select. */
 export type Added = { id: string; column: number };
 
+/** A cell held by its row's transaction, to find again once the rows have changed. */
+type HeldCell = { id: string; column: number };
+
+/**
+ * Rows being marked from the action bar (see `actionBar`), while the row
+ * they're marked against is picked: the active cell's, once there is one.
+ * At first there's none, so only the rows being marked stand out.
+ */
+type Picking = {
+  kind: MarkKind;
+  /** By id, as sorting and filtering can move them while picking. */
+  marked: string[];
+  /** The selection picking started from, which cancelling goes back to. */
+  from: { active: HeldCell; head: HeldCell };
+  /**
+   * The latest undo or redo when it started. Another ends it, as it can take
+   * away rows being marked.
+   */
+  since: Moved<Edit> | null;
+};
+
+/**
+ * The toast explaining picking, for each kind (see `Picking`): shown while
+ * picking. Closing it cancels.
+ */
+const PICKING_HELP: Record<MarkKind, { title: string; description: string }> = {
+  duplicate: {
+    title: "Marking as duplicate",
+    description: "Select the transaction that this is a duplicate of.",
+  },
+  transfer: {
+    title: "Marking as transfer",
+    description: "Pick the transaction from the other side of the transfer.",
+  },
+};
+
 type TransactionsTableProps = {
   /** In the order they're shown, and numbered in it from 1. */
   rows: TransactionRow[];
@@ -190,14 +230,17 @@ type TransactionsTableProps = {
    * The action bar floating over the table (see ActionBar): `canUndo` and
    * `canRedo` are whether there's a change to undo and one to redo, `add`
    * adds a row (null while one can't be), `deleteRows` deletes rows (by
-   * their indexes in `rows`), and `render` renders the bar, given what its
-   * buttons do to the table. Without, there's none.
+   * their indexes in `rows`), `mark` is what marking the rows `marked` (by
+   * id) as `kind` against the row `picked` does, null while it would change
+   * nothing, and `render` renders the bar, given what its buttons do to the
+   * table. Without, there's none.
    */
   actionBar?: {
     canUndo: boolean;
     canRedo: boolean;
     add: ((at: AddAt) => void) | null;
     deleteRows: (rows: number[]) => void;
+    mark: (kind: MarkKind, marked: readonly string[], picked: string) => (() => void) | null;
     render: (actions: TableActions) => ReactNode;
   };
 };
@@ -256,6 +299,38 @@ function TransactionsTable({
   // Up from the first row reaches the headers, where their menus open.
   const [headerColumn, setHeaderColumn] = useState<number | null>(null);
   const activeHeader = selection === null ? headerColumn : null;
+  const [started, setPicking] = useState<Picking | null>(null);
+  const picking = started?.since === lastUndoOrRedo ? started : null;
+  // While picking, the active cell's row is the one picked, and this marks
+  // against it, unless that would change nothing.
+  const pickedRow = picking && selection ? selection.active.row : null;
+  const markPicked =
+    picking && pickedRow !== null && actionBar
+      ? actionBar.mark(picking.kind, picking.marked, rows[pickedRow]!.id)
+      : null;
+  // Picking explains itself in a toast until it ends, however it does.
+  // Closing the toast cancels, as the action bar's cancel does.
+  const cancelFromToast = useEffectEvent(() => {
+    if (picking) cancelPicking(picking);
+  });
+  useEffect(() => {
+    if (picking === null) return;
+    const { title, description } = PICKING_HELP[picking.kind];
+    // Sonner says it was dismissed when it's taken away here too.
+    let takenAway = false;
+    const id = toast(title, {
+      description,
+      duration: Infinity,
+      closeButton: true,
+      onDismiss: () => {
+        if (!takenAway) cancelFromToast();
+      },
+    });
+    return () => {
+      takenAway = true;
+      toast.dismiss(id);
+    };
+  }, [picking]);
   const gridId = useId();
   const cellId = (cell: CellPosition) => `${gridId}-${cell.row}-${cell.column}`;
   const headerId = (column: number) => `${gridId}-header-${column}`;
@@ -506,6 +581,50 @@ function TransactionsTable({
     setSelection(collapsed({ row: top, column: selection.active.column }));
   }
 
+  /**
+   * The action bar's mark as a duplicate or a transfer, of every row
+   * `selection` covers: an edit is settled first (see EditHandle), then the
+   * row to mark them against is picked, with none picked at first.
+   */
+  function startPicking(kind: MarkKind, selection: GridSelection) {
+    editHandleRef.current?.settle();
+    const { top, bottom } = bounds(selection);
+    const held = ({ row, column }: CellPosition) => ({ id: rows[row]!.id, column });
+    setPicking({
+      kind,
+      marked: rows.slice(top, bottom + 1).map(({ id }) => id),
+      from: { active: held(selection.active), head: held(selection.head) },
+      since: lastUndoOrRedo,
+    });
+    setSelection(null);
+    // Nor is a header active, though one may have been last.
+    setHeaderColumn(null);
+    focusGrid();
+  }
+
+  /** Marks the rows against the one picked, which stays selected. */
+  function confirmPicking(mark: () => void) {
+    mark();
+    setPicking(null);
+  }
+
+  /** Where `cell` is now, if its row is still shown. */
+  function whereHeld({ id, column }: HeldCell): CellPosition | null {
+    const row = rows.findIndex((row) => row.id === id);
+    return row === -1 ? null : { row, column };
+  }
+
+  /**
+   * Stops picking without marking: the selection goes back to where picking
+   * started, if its rows are still shown, or else stays as it is.
+   */
+  function cancelPicking({ from }: Picking) {
+    setPicking(null);
+    const active = whereHeld(from.active);
+    const head = whereHeld(from.head);
+    if (active && head) select({ active, head }, active);
+  }
+
   /** What the action bar's buttons do here (see `actionBar`). */
   function barActions({
     add,
@@ -513,12 +632,26 @@ function TransactionsTable({
     ...history
   }: NonNullable<typeof actionBar>): TableActions {
     const { canUndo, canRedo } = historyAvailable(editModified, history);
+    // While picking, rows can't be added or deleted, nor others marked.
+    const usable = picking === null ? selection : null;
+    const oneRow = usable && bounds(usable).top === bounds(usable).bottom ? usable : null;
     return {
       undo: canUndo ? () => undoOrRedo("undo") : null,
       redo: canRedo ? () => undoOrRedo("redo") : null,
-      addAbove: add && (() => addRow(add, "above")),
-      addBelow: add && (() => addRow(add, "below")),
-      deleteRows: selection && (() => deleteSelectedRows(deleteRows, selection)),
+      addAbove: picking === null && add ? () => addRow(add, "above") : null,
+      addBelow: picking === null && add ? () => addRow(add, "below") : null,
+      deleteRows: usable && (() => deleteSelectedRows(deleteRows, usable)),
+      markDuplicate: usable && (() => startPicking("duplicate", usable)),
+      // A transfer is between two transactions: this one, and the one picked.
+      markTransfer: oneRow && (() => startPicking("transfer", oneRow)),
+      picking: picking && {
+        kind: picking.kind,
+        picked:
+          pickedRow !== null
+            ? { row: pickedRow + 1, mark: markPicked && (() => confirmPicking(markPicked)) }
+            : null,
+        cancel: () => cancelPicking(picking),
+      },
     };
   }
 
@@ -526,7 +659,41 @@ function TransactionsTable({
     // Keys typed into a cell's input, or a header's menu, are theirs.
     if (event.target !== event.currentTarget) return;
     if (activeHeader !== null) handleHeaderKey(event, activeHeader);
+    else if (picking !== null) handlePickingKey(event, picking);
     else if (selection !== null) handleCellKey(event, selection);
+  }
+
+  /**
+   * Keys while picking a row (see `Picking`): movement keys move the active
+   * cell, and with it the row picked, Shift making no range. Before a row is
+   * picked, they move from the cell that was active when picking started, or
+   * if its row isn't shown, pick the first row. Up from the first row goes
+   * on to the headers, as usual. Enter marks against the row picked, and
+   * Escape stops picking.
+   */
+  function handlePickingKey(event: KeyboardEvent, picking: Picking) {
+    const motion = motionFor(event, pageRows());
+    if (motion && size.rows > 0) {
+      event.preventDefault();
+      const from = selection?.active ?? whereHeld(picking.from.active);
+      if (from === null) {
+        const first = { row: 0, column: picking.from.active.column };
+        select(collapsed(first), first);
+        return;
+      }
+      if (motion.kind === "step" && motion.direction === "up" && from.row === 0) {
+        activateHeader(from.column);
+        return;
+      }
+      const next = move(collapsed(from), motion, size);
+      select(next, next.active, motion.kind === "rows" ? motion.count : 0);
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      if (markPicked) confirmPicking(markPicked);
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      cancelPicking(picking);
+    }
   }
 
   /**
@@ -679,6 +846,12 @@ function TransactionsTable({
     const input = inputRef.current;
     const isEditing = editing !== null && samePosition(editing.cell, cell) && input !== null;
 
+    if (picking) {
+      // Picks its row: nothing is edited or ranged while picking.
+      focusGrid();
+      setSelection(collapsed(cell));
+      return;
+    }
     if (event.shiftKey && selection && !isEditing) {
       // Extends the range from the active cell, ending any edit.
       focusGrid();
@@ -722,7 +895,7 @@ function TransactionsTable({
   /**
    * A press on a row's number selects the row, its first cell active; with
    * Shift, the rows from the active cell's to it. Dragging on selects the
-   * rows up to the one the pointer is over.
+   * rows up to the one the pointer is over. While picking, it picks the row.
    */
   function handleRowPress(row: number, event: MouseEvent) {
     if (event.button !== 0) return;
@@ -730,6 +903,10 @@ function TransactionsTable({
     event.preventDefault();
     // Moving focus here first ends any edit, submitting it.
     focusGrid();
+    if (picking) {
+      setSelection(collapsed({ row, column: 0 }));
+      return;
+    }
     const from = event.shiftKey && selection ? selection.active.row : row;
     const origin = { row: from, column: 0 };
     setSelection({ active: origin, head: { row, column: size.columns - 1 } });
@@ -737,14 +914,23 @@ function TransactionsTable({
     drag({ x: event.clientX, y: event.clientY });
   }
 
-  const area = selection && bounds(selection);
-  const ranged = selection !== null && isRange(selection);
+  // The row picked shows as the whole row selected, with no cell active in
+  // it, and its number as its cells (see RangeOutline).
+  const area =
+    pickedRow !== null
+      ? { top: pickedRow, bottom: pickedRow, left: 0, right: size.columns - 1 }
+      : selection && bounds(selection);
+  const ranged = pickedRow !== null || (selection !== null && isRange(selection));
+  // The rows being marked are tinted yellow, apart from the selection's lime.
+  const marked = new Set(picking?.marked);
   // The selected cells' rows and columns: their numbers and headers are
   // tinted, as the active cell's row is (see EditableCell).
   const rowSelected = (row: number) => area !== null && row >= area.top && row <= area.bottom;
   const columnSelected = (column: number) =>
     area !== null && column >= area.left && column <= area.right;
   const tint = "bg-focus/8";
+  // As a range's cells are (see EditableCell).
+  const pickedTint = "bg-focus/15";
 
   return (
     <>
@@ -765,11 +951,14 @@ function TransactionsTable({
         onFocus={(event) => {
           // Tabbing into the grid starts at its first cell, or without rows,
           // its first header. A click focuses it too, but one on a cell or a
-          // header makes that active, and one elsewhere, nothing.
+          // header makes that active, and one elsewhere, nothing. While
+          // picking, it picks nothing: the keys start from the rows being
+          // marked (see handlePickingKey).
           if (
             event.target !== event.currentTarget ||
             selection !== null ||
             activeHeader !== null ||
+            picking !== null ||
             !event.currentTarget.matches(":focus-visible")
           )
             return;
@@ -840,7 +1029,9 @@ function TransactionsTable({
                 key={item.key}
                 role="row"
                 aria-rowindex={item.index + 2}
-                className="absolute inset-x-0 grid leading-7"
+                className={`absolute inset-x-0 grid leading-7 ${
+                  marked.has(row.id) ? "bg-amber/20" : ""
+                }`}
                 style={{
                   gridTemplateColumns: template,
                   height: ROW_HEIGHT,
@@ -856,7 +1047,7 @@ function TransactionsTable({
                   aria-hidden
                   onMouseDown={(event) => handleRowPress(item.index, event)}
                   className={`truncate border-r border-b border-line px-2 text-right text-ink-muted tabular-nums ${
-                    rowSelected(item.index) ? tint : ""
+                    item.index === pickedRow ? pickedTint : rowSelected(item.index) ? tint : ""
                   }`}
                 >
                   {item.index + 1}
@@ -876,7 +1067,11 @@ function TransactionsTable({
                       align={meta.align}
                       tabular={meta.tabular}
                       editText={editText}
-                      active={selection !== null && samePosition(selection.active, position)}
+                      active={
+                        picking === null &&
+                        selection !== null &&
+                        samePosition(selection.active, position)
+                      }
                       selected={selected}
                       inRange={ranged && selected}
                       inActiveRow={
@@ -912,7 +1107,9 @@ function TransactionsTable({
               </div>
             );
           })}
-          {area && ranged && <RangeOutline area={area} template={template} />}
+          {area && ranged && (
+            <RangeOutline area={area} template={template} picked={pickedRow !== null} />
+          )}
         </div>
       </div>
       {/* After the grid, so it's after it from the keyboard too. */}
@@ -924,9 +1121,18 @@ function TransactionsTable({
 /**
  * The outline of a range: one rectangle over its cells' boxes, lines and
  * all, as the active cell's outline is, so their edges meet. `template` is
- * the grid's (see `gridTemplate`).
+ * the grid's (see `gridTemplate`). The row picked while marking (see
+ * `Picking`) is `picked`: lined only above and below, across its number too.
  */
-function RangeOutline({ area, template }: { area: Bounds; template: string }) {
+function RangeOutline({
+  area,
+  template,
+  picked,
+}: {
+  area: Bounds;
+  template: string;
+  picked: boolean;
+}) {
   return (
     <div
       aria-hidden
@@ -939,9 +1145,9 @@ function RangeOutline({ area, template }: { area: Bounds; template: string }) {
       }}
     >
       <div
-        className="outline-1 -outline-offset-1 outline-focus"
+        className={picked ? "border-y border-focus" : "outline-1 -outline-offset-1 outline-focus"}
         // Grid lines count from 1, and the row numbers' track comes first.
-        style={{ gridColumn: `${area.left + 2} / ${area.right + 3}` }}
+        style={{ gridColumn: picked ? "1 / -1" : `${area.left + 2} / ${area.right + 3}` }}
       />
     </div>
   );

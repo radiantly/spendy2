@@ -6,6 +6,7 @@
 import { hasPatch, type TransactionRow } from "../../db/queries/transactions.ts";
 import { columns, type EditContext } from "./columns.ts";
 import { findName } from "./fields.ts";
+import type { MarkKind } from "./marks.ts";
 import type { TransactionChange } from "./TransactionsTable.tsx";
 
 /** Longer counterparties make the description "of a transaction". */
@@ -95,4 +96,15 @@ export function describeDelete(rows: readonly TransactionRow[]) {
   return rows.length === 1 && row
     ? `deleting ${nameOf(row)}`
     : `deleting ${plural(rows.length, "transaction")}`;
+}
+
+/**
+ * Describes marking `rows` as `kind`: "marking Corner Market as a
+ * duplicate", or "marking 3 transactions as duplicates".
+ */
+export function describeMark(kind: MarkKind, rows: readonly TransactionRow[]) {
+  const [row] = rows;
+  return rows.length === 1 && row
+    ? `marking ${nameOf(row)} as a ${kind}`
+    : `marking ${plural(rows.length, "transaction")} as ${kind}s`;
 }
