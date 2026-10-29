@@ -1222,6 +1222,15 @@ describe("TransactionsTable", () => {
       expect(onCommit).not.toHaveBeenCalled();
     });
 
+    it("does nothing on Enter on a header, without menus", async () => {
+      await activate("Corner Market", COUNTERPARTY);
+
+      await userEvent.keyboard("{ArrowUp}{Enter}");
+
+      expect(activeCell()).toBe(headers()[COUNTERPARTY]);
+      expect(page.getByRole("dialog").query()).toBeNull();
+    });
+
     it("starts at the first header when a grid without rows is tabbed into", async () => {
       await render(
         <TransactionsTable

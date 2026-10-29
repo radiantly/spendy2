@@ -9,9 +9,9 @@ import { nameFinder } from "./fields.ts";
 
 export type SortDirection = "ascending" | "descending";
 
-export type SortColumn = "date" | "account" | "counterparty" | "category";
+export type SortColumn = "date" | "account" | "counterparty" | "category" | "remarks";
 
-/** The columns whose headers have a menu (see ColumnMenus). */
+/** The columns, by their headers' menus (see ColumnMenus). */
 export type MenuColumn = SortColumn | "amount";
 
 /** One column at a time sorts the transactions. */
@@ -104,7 +104,7 @@ const collator = new Intl.Collator(undefined, { numeric: true });
 /**
  * Sorts `order` (positions in `rows`, newest first) by a text column, keeping
  * the transactions with the same text newest first. Transactions without the
- * text (no category) go last either way.
+ * text (no category, or no remarks) go last either way.
  *
  * A counting sort: each distinct text is ranked once, and the transactions
  * are placed by their text's rank, in the order they come. Comparing the
@@ -165,6 +165,8 @@ export function viewOrder(
       return sortByText(rows, order, (row) => row.counterparty, direction);
     case "category":
       return sortByText(rows, order, listed.category, direction);
+    case "remarks":
+      return sortByText(rows, order, (row) => row.remarks, direction);
   }
 }
 

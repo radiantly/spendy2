@@ -169,6 +169,19 @@ describe("viewOrder", () => {
         shown([none, food, rent], { sort: { column: "category", direction: "descending" } }),
       ).toEqual(ids([rent, food, none]));
     });
+
+    it("sorts by remarks, putting transactions without them last, either way", () => {
+      const none = row({ remarks: null, naive_date: "2026-10-12" });
+      const refund = row({ remarks: "Refund" });
+      const gift = row({ remarks: "gift" });
+
+      expect(
+        shown([none, refund, gift], { sort: { column: "remarks", direction: "ascending" } }),
+      ).toEqual(ids([gift, refund, none]));
+      expect(
+        shown([none, refund, gift], { sort: { column: "remarks", direction: "descending" } }),
+      ).toEqual(ids([refund, gift, none]));
+    });
   });
 
   describe("filtering by date", () => {

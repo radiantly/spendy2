@@ -60,6 +60,8 @@ export function ColumnMenu({ column, accounts, categories, values, ...props }: C
       return <CategoryMenu {...props} categories={categories} used={values.categories} />;
     case "amount":
       return <AmountMenu {...props} currencies={values.currencies} />;
+    case "remarks":
+      return <RemarksMenu {...props} />;
   }
 }
 
@@ -453,6 +455,14 @@ function AmountMenu({
           ))}
         </CheckAll>
       </MenuGroup>
+    </HeaderMenu>
+  );
+}
+
+function RemarksMenu({ header, view, onViewChange }: MenuProps) {
+  return (
+    <HeaderMenu {...header} column="remarks" sorted={sortedBy(view, "remarks")} filtered={false}>
+      <TextSort column="remarks" view={view} onViewChange={onViewChange} />
     </HeaderMenu>
   );
 }

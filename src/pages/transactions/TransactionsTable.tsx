@@ -344,7 +344,7 @@ function TransactionsTable({
   const inputRef = useRef<HTMLInputElement>(null);
   // What can be done to the edit from outside its cell.
   const editHandleRef = useRef<EditHandle>(null);
-  // The menus of the headers with them, by column.
+  // The headers' menus, by column, while they have them (see `menus`).
   const menusRef = useRef<(HeaderMenuHandle | null)[]>([]);
   const dragRef = useRef<Drag | null>(null);
 
@@ -699,7 +699,7 @@ function TransactionsTable({
   /**
    * Keys on an active header: Left and Right (and Home and End) move along
    * the headers, Down goes back to the first row, and Enter, Space or
-   * Alt+Down open the column's menu, if it has one.
+   * Alt+Down open the column's menu, while the headers have them.
    */
   function handleHeaderKey(event: KeyboardEvent, column: number) {
     const last = columns.length - 1;
@@ -987,19 +987,15 @@ function TransactionsTable({
                     key={header.id}
                     id={headerId(column)}
                     role="columnheader"
-                    aria-sort={
-                      headerMenu && menus?.sort.column === headerMenu
-                        ? menus.sort.direction
-                        : undefined
-                    }
+                    aria-sort={menus?.sort.column === headerMenu ? menus.sort.direction : undefined}
                     onMouseDown={(event) => handleHeaderPress(column, event)}
                     className={`flex items-center truncate border-r border-line font-medium text-ink-muted last:border-r-0 ${
                       columnSelected(column) ? tint : ""
-                    } ${headerMenu && menus ? "" : "px-2"} ${
+                    } ${menus ? "" : "px-2"} ${
                       activeHeader === column ? "outline-2 -outline-offset-2 outline-focus" : ""
                     }`}
                   >
-                    {headerMenu && menus
+                    {menus
                       ? menus.render(headerMenu, {
                           label,
                           menuRef: (menu) => {

@@ -86,8 +86,8 @@ export type TransactionColumnMeta = {
   display: (row: TransactionRow) => string;
   /** Absent for read-only columns. */
   editor?: CellEditor;
-  /** For a column the transactions can be sorted or filtered by: its header's menu. */
-  headerMenu?: MenuColumn;
+  /** Its header's menu, for sorting or filtering the transactions by the column. */
+  headerMenu: MenuColumn;
 };
 
 export const features = tableFeatures({ columnMeta: {} as TransactionColumnMeta });
@@ -180,6 +180,7 @@ export const columns = helper.columns([
     header: "Remarks",
     meta: {
       track: "minmax(8rem, 2.5fr)",
+      headerMenu: "remarks",
       display: (row) => row.remarks ?? "",
       editor: {
         field: "remarks",

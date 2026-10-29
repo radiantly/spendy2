@@ -176,15 +176,6 @@ describe("opening and closing", () => {
     await expect.element(menu("Category")).toBeVisible();
   });
 
-  it("does nothing on Enter on a header without a menu", async () => {
-    await renderTable();
-    await userEvent.click(page.getByText("Shop 1", { exact: true }));
-    await userEvent.keyboard("{ArrowUp}{End}{Enter}");
-
-    expect(active()).toBe(header("Remarks").element());
-    expect(page.getByRole("dialog").query()).toBeNull();
-  });
-
   it("saves an edit when a header is pressed", async () => {
     await renderTable();
     await userEvent.dblClick(page.getByText("Shop 2", { exact: true }));
@@ -637,5 +628,17 @@ describe("the amount menu", () => {
     await open("Amount");
 
     expect(page.getByRole("group", { name: "Sort" }).query()).toBeNull();
+  });
+});
+
+describe("the remarks menu", () => {
+  it("only sorts", async () => {
+    await renderTable();
+    await open("Remarks");
+
+    await userEvent.click(radio("A to Z"));
+
+    expect(view.sort).toEqual({ column: "remarks", direction: "ascending" });
+    expect(page.getByRole("checkbox").query()).toBeNull();
   });
 });
