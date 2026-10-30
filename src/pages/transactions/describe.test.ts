@@ -4,6 +4,7 @@ import {
   describeDelete,
   describeEdit,
   describeMark,
+  describeUnmark,
   MAX_NAME_LENGTH,
   MAX_VALUE_LENGTH,
 } from "./describe.ts";
@@ -222,6 +223,15 @@ describe("describeMark", () => {
   it("counts several", () => {
     expect(describeMark("duplicate", [row(), row({ id: "t2" }), row({ id: "t3" })])).toBe(
       "marking 3 transactions as duplicates",
+    );
+  });
+});
+
+describe("describeUnmark", () => {
+  it("names one transaction, or counts several", () => {
+    expect(describeUnmark("transfer", [row()])).toBe("unmarking Corner Market as a transfer");
+    expect(describeUnmark("duplicate", [row(), row({ id: "t2" })])).toBe(
+      "unmarking 2 transactions as duplicates",
     );
   });
 });

@@ -98,13 +98,26 @@ export function describeDelete(rows: readonly TransactionRow[]) {
     : `deleting ${plural(rows.length, "transaction")}`;
 }
 
+/** Describes `doing` something to `rows` as `kind`, e.g. "marking 3 transactions as duplicates". */
+function describeMarking(doing: string, kind: MarkKind, rows: readonly TransactionRow[]) {
+  const [row] = rows;
+  return rows.length === 1 && row
+    ? `${doing} ${nameOf(row)} as a ${kind}`
+    : `${doing} ${plural(rows.length, "transaction")} as ${kind}s`;
+}
+
 /**
  * Describes marking `rows` as `kind`: "marking Corner Market as a
  * duplicate", or "marking 3 transactions as duplicates".
  */
 export function describeMark(kind: MarkKind, rows: readonly TransactionRow[]) {
-  const [row] = rows;
-  return rows.length === 1 && row
-    ? `marking ${nameOf(row)} as a ${kind}`
-    : `marking ${plural(rows.length, "transaction")} as ${kind}s`;
+  return describeMarking("marking", kind, rows);
+}
+
+/**
+ * Describes unmarking `rows` as `kind`: "unmarking Corner Market as a
+ * duplicate", or "unmarking 3 transactions as duplicates".
+ */
+export function describeUnmark(kind: MarkKind, rows: readonly TransactionRow[]) {
+  return describeMarking("unmarking", kind, rows);
 }

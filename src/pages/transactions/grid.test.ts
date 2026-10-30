@@ -9,6 +9,7 @@ import {
   extend,
   isRange,
   move,
+  rowsCovered,
   tab,
   target,
   type Direction,
@@ -132,6 +133,11 @@ describe("bounds", () => {
     expect(bounds({ active: at(1, 0), head: at(4, 2) })).toEqual(expected);
     expect(bounds({ active: at(4, 2), head: at(1, 0) })).toEqual(expected);
     expect(bounds({ active: at(1, 2), head: at(4, 0) })).toEqual(expected);
+  });
+
+  it("gives the rows a selection covers, top to bottom, whichever way round", () => {
+    expect(rowsCovered({ active: at(4, 2), head: at(2, 0) })).toEqual([2, 3, 4]);
+    expect(rowsCovered(collapsed(at(3, 1)))).toEqual([3]);
   });
 
   it("knows which cells it contains", () => {

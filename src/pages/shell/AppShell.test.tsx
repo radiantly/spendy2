@@ -336,6 +336,24 @@ describe("TransactionsPage", () => {
     await expect.poll(() => shown).toBe("reimbursable");
   });
 
+  it("unmarks a duplicate from the action bar, which an undo marks again", async () => {
+    await loggedIn(
+      await storedDatabase(`${TWO_TRANSACTIONS};
+        UPDATE transactions SET duplicate_of = '${NEWER}' WHERE id = '${OLDER}'`),
+    );
+    await renderApp("/transactions");
+    const remarks = await cellOf("Café Lumen", REMARKS);
+    await expect.element(remarks).toHaveTextContent("Duplicate of transaction 1.");
+    await userEvent.click(page.getByText("Café Lumen").shown());
+
+    await userEvent.click(page.getByRole("button", { name: "Unmark as duplicate" }));
+
+    await expect.poll(() => remarks.element().textContent).toBe("");
+    await expect.element(saveButton()).toBeInTheDocument();
+    await userEvent.keyboard("{Control>}z{/Control}");
+    await expect.element(remarks).toHaveTextContent("Duplicate of transaction 1.");
+  });
+
   it("keeps the changes unsaved when saving conflicts", async () => {
     await loggedIn(await storedDatabase(TWO_TRANSACTIONS));
     vi.mocked(uploadDatabase).mockResolvedValue({ success: false, code: "CONFLICT" });

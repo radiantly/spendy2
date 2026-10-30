@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ListedTransaction } from "../../db/queries/transactions.ts";
 import type { TransactionMark } from "../../db/transactions.ts";
-import { duplicateMarks, marksNote, transferMarks } from "./marks.ts";
+import { duplicateMarks, isMarked, marksNote, transferMarks, unmarks } from "./marks.ts";
 
 function transaction(overrides: Partial<ListedTransaction> = {}): ListedTransaction {
   return {
@@ -217,5 +217,25 @@ describe("marksNote", () => {
     expect(
       marksNote(transaction({ transfer_account: "Savings", duplicate_of: "t2" }), rowNumberOf),
     ).toBe("Transfer to Savings. Duplicate of transaction 456.");
+  });
+});
+
+describe("unmarks", () => {
+  const rows = [
+    transaction({ id: "A", duplicate_of: "X", transfer_account: "Savings" }),
+    transaction({ id: "B", transfer_account: "Savings" }),
+  ];
+
+  it("unmarks those marked as the kind, leaving the rest", () => {
+    expect(unmarks("duplicate", rows)).toEqual([duplicate("A", null)]);
+    expect(unmarks("transfer", rows)).toEqual([
+      { id: "A", field: "transfer_account", value: null },
+      { id: "B", field: "transfer_account", value: null },
+    ]);
+  });
+
+  it("tells which are marked as each kind", () => {
+    expect(rows.map((row) => isMarked(row, "duplicate"))).toEqual([true, false]);
+    expect(rows.map((row) => isMarked(row, "transfer"))).toEqual([true, true]);
   });
 });

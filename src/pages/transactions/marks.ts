@@ -1,13 +1,37 @@
 /**
- * What marking transactions as duplicates or as a transfer sets (see
- * `markTransactions`): which transactions change, and to what. And what a
- * transaction's remarks say it's marked as.
+ * What marking transactions as duplicates or as a transfer sets, or
+ * unmarking them (see `markTransactions`): which transactions change, and
+ * to what. And what a transaction's remarks say it's marked as.
  */
-import type { ListedTransaction, TransactionRow } from "../../db/queries/transactions.ts";
+import type {
+  ListedTransaction,
+  TransactionMarkField,
+  TransactionRow,
+} from "../../db/queries/transactions.ts";
 import type { TransactionMark, Transactions } from "../../db/transactions.ts";
 
 /** What transactions are marked as: duplicates of another, or a transfer with another. */
 export type MarkKind = "duplicate" | "transfer";
+
+/** Where each kind of mark is stored. */
+const MARK_FIELDS = {
+  duplicate: "duplicate_of",
+  transfer: "transfer_account",
+} as const satisfies Record<MarkKind, TransactionMarkField>;
+
+/** Whether `row` is marked as `kind`. */
+export function isMarked(row: TransactionRow, kind: MarkKind) {
+  return row[MARK_FIELDS[kind]] !== null;
+}
+
+/**
+ * The marks that unmark `rows` as `kind`: those of them marked as it. A
+ * transfer's other side keeps its mark, as nothing links it to this one.
+ */
+export function unmarks(kind: MarkKind, rows: readonly TransactionRow[]): TransactionMark[] {
+  const field = MARK_FIELDS[kind];
+  return rows.filter((row) => isMarked(row, kind)).map(({ id }) => ({ id, field, value: null }));
+}
 
 /**
  * The transaction `id` is ultimately a duplicate of: the one at the end of

@@ -22,8 +22,14 @@ import { today } from "../../lib/period.ts";
 import { useUndoRedo } from "../shell/historyKeys.ts";
 import ActionBar from "./ActionBar.tsx";
 import { ColumnMenu } from "./ColumnMenus.tsx";
-import { ADD_DESCRIPTION, describeDelete, describeEdit, describeMark } from "./describe.ts";
-import { duplicateMarks, transferMarks, type MarkKind } from "./marks.ts";
+import {
+  ADD_DESCRIPTION,
+  describeDelete,
+  describeEdit,
+  describeMark,
+  describeUnmark,
+} from "./describe.ts";
+import { duplicateMarks, transferMarks, unmarks, type MarkKind } from "./marks.ts";
 import { newTransaction } from "./newTransaction.ts";
 import TransactionsList from "./TransactionsList.tsx";
 import TransactionsTable, {
@@ -219,6 +225,22 @@ function TransactionsPage() {
     };
   };
 
+  /** Unmarks the rows at `indexes` as `kind`, saying so if they couldn't be. */
+  const unmark = (kind: MarkKind, indexes: readonly number[]) => {
+    // As the transactions are now, with an edit settled just before.
+    const latest = queryClient.getQueryData(query.queryKey)!;
+    const unmarking = indexes.map((index) => latest.rows[latest.positions.get(rows[index]!.id)!]!);
+    markTransactions(queryClient, database, history, {
+      marks: unmarks(kind, unmarking),
+      marked: unmarking.map(({ id }) => id),
+      description: describeUnmark(kind, unmarking),
+    }).catch((error: unknown) => {
+      toast.error(
+        `Couldn't unmark ${unmarking.length === 1 ? "that transaction" : "those transactions"}: ${messageOf(error)}`,
+      );
+    });
+  };
+
   // With an account, there can be transactions to add, even without any yet.
   const showsTable = tableFits && (transactions.length > 0 || loaded.accounts.length > 0);
 
@@ -266,6 +288,7 @@ function TransactionsPage() {
             add: loaded.accounts.length > 0 ? add : null,
             deleteRows,
             mark,
+            unmark,
             render: (actions) => <ActionBar {...actions} />,
           }}
         />

@@ -1973,6 +1973,7 @@ describe("TransactionsTable", () => {
           add: null,
           deleteRows: () => {},
           mark: () => null,
+          unmark: () => {},
           render: (actions) => <ActionBar {...actions} />,
         }}
       />
@@ -2177,6 +2178,7 @@ describe("TransactionsTable", () => {
           add,
           deleteRows: () => {},
           mark: () => null,
+          unmark: () => {},
           render: (actions) => <ActionBar {...actions} />,
         }}
       />
@@ -2310,6 +2312,7 @@ describe("TransactionsTable", () => {
           add: null,
           deleteRows: onDelete,
           mark: () => null,
+          unmark: () => {},
           render: (actions) => <ActionBar {...actions} />,
         }}
       />
@@ -2414,12 +2417,14 @@ describe("TransactionsTable", () => {
     /** What confirming marked: as what, which rows, and against which. */
     let marked: { kind: MarkKind; marked: string[]; picked: string }[];
     let mark: Mock<NonNullable<TableProps["actionBar"]>["mark"]>;
+    let unmark: Mock<NonNullable<TableProps["actionBar"]>["unmark"]>;
     beforeEach(() => {
       marked = [];
       // Marking against a row changes something, unless it's one of those marked.
       mark = vi.fn((kind, rows, picked) =>
         rows.includes(picked) ? null : () => void marked.push({ kind, marked: [...rows], picked }),
       );
+      unmark = vi.fn();
     });
 
     /** The table with its action bar, showing `shown`, and `moved` as the last undo or redo. */
@@ -2440,6 +2445,7 @@ describe("TransactionsTable", () => {
           add: () => {},
           deleteRows: () => {},
           mark,
+          unmark,
           render: (actions) => <ActionBar {...actions} />,
         }}
       />
@@ -2740,6 +2746,75 @@ describe("TransactionsTable", () => {
       ]);
       await expect.element(input()).not.toBeInTheDocument();
       await expect.element(cancelButton("duplicate")).toBeInTheDocument();
+    });
+
+    describe("unmarking", () => {
+      // Shop 2 and Shop 3 are duplicates of Shop 1; Shop 3 and Shop 4 are transfers.
+      const withMarks = () =>
+        rows.map((row, index) => ({
+          ...row,
+          duplicate_of: index === 2 || index === 3 ? "t1" : null,
+          transfer_account: index === 3 || index === 4 ? "Savings" : null,
+        }));
+      const unmarkButton = (kind: MarkKind) => button(`Unmark as ${kind}`);
+
+      it("unmarks the rows selected, all marked, at once, keeping them selected", async () => {
+        await render(withBar(withMarks()));
+        await makeActive("Shop 3", CATEGORY);
+        await userEvent.keyboard("{Shift>}{ArrowUp}{/Shift}");
+        const selected = selectedCells();
+        // Its icon, and the slash through it.
+        expect(unmarkButton("duplicate").element().querySelectorAll("svg")).toHaveLength(2);
+
+        await userEvent.click(unmarkButton("duplicate"));
+
+        expect(unmark.mock.calls).toEqual([["duplicate", [2, 3]]]);
+        await expect.element(cancelButton("duplicate")).not.toBeInTheDocument();
+        expect(selectedCells()).toEqual(selected);
+      });
+
+      it("marks as usual when a row selected isn't marked", async () => {
+        await render(withBar(withMarks()));
+        // Shop 3's a duplicate, but Shop 4 isn't.
+        await makeActive("Shop 4", CATEGORY);
+        await userEvent.keyboard("{Shift>}{ArrowUp}{/Shift}");
+        expect(duplicateButton().element().querySelectorAll("svg")).toHaveLength(1);
+
+        await userEvent.click(duplicateButton());
+
+        await expect.element(cancelButton("duplicate")).toBeInTheDocument();
+        expect(unmark).not.toHaveBeenCalled();
+      });
+
+      it("unmarks several transfers, though it marks one at a time", async () => {
+        await render(withBar(withMarks()));
+        await makeActive("Shop 4", CATEGORY);
+        await userEvent.keyboard("{Shift>}{ArrowUp}{/Shift}");
+
+        await userEvent.click(unmarkButton("transfer"));
+
+        expect(unmark.mock.calls).toEqual([["transfer", [3, 4]]]);
+        // Shop 2 isn't a transfer, and a transfer is marked from one row.
+        await userEvent.keyboard("{Shift>}{ArrowUp}{/Shift}");
+        await expect.element(transferButton()).toHaveAttribute("aria-disabled", "true");
+      });
+
+      it("saves an edit in progress first", async () => {
+        await render(withBar(withMarks()));
+        await userEvent.dblClick(cellOf("Shop 2", COUNTERPARTY));
+        await userEvent.keyboard("{End}s");
+
+        await userEvent.click(unmarkButton("duplicate"));
+
+        expect(onCommit.mock.calls).toEqual([
+          [[{ rowIndex: 2, field: "counterparty", patch: { counterparty: "Shop 2s" } }]],
+        ]);
+        expect(unmark.mock.calls).toEqual([["duplicate", [2]]]);
+        expect(onCommit.mock.invocationCallOrder[0]).toBeLessThan(
+          unmark.mock.invocationCallOrder[0]!,
+        );
+        await expect.element(input()).not.toBeInTheDocument();
+      });
     });
 
     describe("explaining it in a toast", () => {

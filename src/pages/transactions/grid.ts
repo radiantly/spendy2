@@ -131,6 +131,12 @@ export function bounds({ active, head }: GridSelection): Bounds {
   };
 }
 
+/** The indexes of the rows `selection` covers, top to bottom. */
+export function rowsCovered(selection: GridSelection): number[] {
+  const { top, bottom } = bounds(selection);
+  return Array.from({ length: bottom - top + 1 }, (_, index) => top + index);
+}
+
 /** The smallest selection covering every one of `cells`, active at its top left. */
 export function covering(cells: readonly CellPosition[]): GridSelection | null {
   const [first] = cells;

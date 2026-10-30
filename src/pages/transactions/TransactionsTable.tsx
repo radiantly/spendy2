@@ -41,6 +41,7 @@ import {
   extend,
   isRange,
   move,
+  rowsCovered,
   samePosition,
   tab,
   type Bounds,
@@ -50,7 +51,7 @@ import {
   type Motion,
 } from "./grid.ts";
 import type { HeaderMenuHandle, HeaderProps } from "./HeaderMenu.tsx";
-import type { MarkKind } from "./marks.ts";
+import { isMarked, type MarkKind } from "./marks.ts";
 import { partFor } from "./prefix.ts";
 import { useMouseDrag, type Point } from "./useMouseDrag.ts";
 import type { MenuColumn, Sort } from "./view.ts";
@@ -233,8 +234,9 @@ type TransactionsTableProps = {
    * adds a row (null while one can't be), `deleteRows` deletes rows (by
    * their indexes in `rows`), `mark` is what marking the rows `marked` (by
    * id) as `kind` against the row `picked` does, null while it would change
-   * nothing, and `render` renders the bar, given what its buttons do to the
-   * table. Without, there's none.
+   * nothing, `unmark` unmarks rows (by their indexes) as `kind`, and
+   * `render` renders the bar, given what its buttons do to the table.
+   * Without, there's none.
    */
   actionBar?: {
     canUndo: boolean;
@@ -242,6 +244,7 @@ type TransactionsTableProps = {
     add: ((at: AddAt) => void) | null;
     deleteRows: (rows: number[]) => void;
     mark: (kind: MarkKind, marked: readonly string[], picked: string) => (() => void) | null;
+    unmark: (kind: MarkKind, rows: number[]) => void;
     render: (actions: TableActions) => ReactNode;
   };
 };
@@ -585,9 +588,22 @@ function TransactionsTable({
    */
   function deleteSelectedRows(deleteRows: (rows: number[]) => void, selection: GridSelection) {
     editHandleRef.current?.settle();
-    const { top, bottom } = bounds(selection);
-    deleteRows(Array.from({ length: bottom - top + 1 }, (_, index) => top + index));
-    setSelection(collapsed({ row: top, column: selection.active.column }));
+    deleteRows(rowsCovered(selection));
+    setSelection(collapsed({ row: bounds(selection).top, column: selection.active.column }));
+  }
+
+  /**
+   * The action bar's unmark as a duplicate or a transfer, of every row
+   * `selection` covers: an edit is settled first (see EditHandle). The
+   * selection stays as it is.
+   */
+  function unmarkSelectedRows(
+    unmark: (kind: MarkKind, rows: number[]) => void,
+    kind: MarkKind,
+    selection: GridSelection,
+  ) {
+    editHandleRef.current?.settle();
+    unmark(kind, rowsCovered(selection));
   }
 
   /**
@@ -638,12 +654,21 @@ function TransactionsTable({
   function barActions({
     add,
     deleteRows,
+    unmark,
     ...history
   }: NonNullable<typeof actionBar>): TableActions {
     const { canUndo, canRedo } = historyAvailable(editModified, history);
     // While picking, rows can't be added or deleted, nor others marked.
     const usable = picking === null ? selection : null;
     const oneRow = usable && bounds(usable).top === bounds(usable).bottom ? usable : null;
+    // Rows all marked as one already are unmarked, rather than marked again.
+    const unmarking = (kind: MarkKind) => {
+      if (usable === null) return null;
+      const { top, bottom } = bounds(usable);
+      return rows.slice(top, bottom + 1).every((row) => isMarked(row, kind))
+        ? () => unmarkSelectedRows(unmark, kind, usable)
+        : null;
+    };
     return {
       undo: canUndo ? () => undoOrRedo("undo") : null,
       redo: canRedo ? () => undoOrRedo("redo") : null,
@@ -653,6 +678,9 @@ function TransactionsTable({
       markDuplicate: usable && (() => startPicking("duplicate", usable)),
       // A transfer is between two transactions: this one, and the one picked.
       markTransfer: oneRow && (() => startPicking("transfer", oneRow)),
+      unmarkDuplicate: unmarking("duplicate"),
+      // Each side of a transfer is unmarked on its own, so any number of them.
+      unmarkTransfer: unmarking("transfer"),
       picking: picking && {
         kind: picking.kind,
         picked:

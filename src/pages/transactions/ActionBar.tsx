@@ -28,7 +28,8 @@ export type PickingActions = {
 /**
  * What the bar's buttons do to the table (see TransactionsTable's
  * `actionBar`): each null while it can't be done. Marking as a duplicate or
- * a transfer starts `picking` the row to mark against.
+ * a transfer starts `picking` the row to mark against. While the selected
+ * rows are all marked as one already, its button unmarks them instead.
  */
 export type TableActions = {
   undo: (() => void) | null;
@@ -38,6 +39,8 @@ export type TableActions = {
   deleteRows: (() => void) | null;
   markDuplicate: (() => void) | null;
   markTransfer: (() => void) | null;
+  unmarkDuplicate: (() => void) | null;
+  unmarkTransfer: (() => void) | null;
   picking: PickingActions | null;
 };
 
@@ -144,6 +147,38 @@ function IconButton({
   );
 }
 
+/** The gap a slash cuts through an icon (see `Slashed`), along its diagonal. */
+const SLASH_GAP =
+  "linear-gradient(to top right, #000 calc(50% - 0.12em), transparent calc(50% - 0.12em) calc(50% + 0.12em), #000 calc(50% + 0.12em))";
+
+/**
+ * An icon, struck through while `slashed`, for a button that undoes what
+ * the icon does. As Tabler's "off" icons are, the slash cuts a gap through
+ * the icon, so it reads on any background.
+ */
+function Slashed({ slashed, children }: { slashed: boolean; children: ReactNode }) {
+  return (
+    <span className="relative grid">
+      <span className="grid" style={slashed ? { maskImage: SLASH_GAP } : undefined}>
+        {children}
+      </span>
+      {slashed && (
+        <svg
+          aria-hidden
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={2}
+          strokeLinecap="round"
+          className="absolute inset-0 size-full"
+        >
+          <path d="M3 3l18 18" />
+        </svg>
+      )}
+    </span>
+  );
+}
+
 function Divider() {
   return <span aria-hidden className="mx-1 h-5 w-px bg-line" />;
 }
@@ -173,6 +208,8 @@ function ActionBar({
   deleteRows,
   markDuplicate,
   markTransfer,
+  unmarkDuplicate,
+  unmarkTransfer,
   picking,
 }: TableActions) {
   const tooltips = useTooltips();
@@ -227,11 +264,23 @@ function ActionBar({
           </>
         ) : (
           <>
-            <IconButton label="Mark as duplicate" action={markDuplicate} tooltips={tooltips}>
-              <TbFileIsr />
+            <IconButton
+              label={unmarkDuplicate ? "Unmark as duplicate" : "Mark as duplicate"}
+              action={unmarkDuplicate ?? markDuplicate}
+              tooltips={tooltips}
+            >
+              <Slashed slashed={unmarkDuplicate !== null}>
+                <TbFileIsr />
+              </Slashed>
             </IconButton>
-            <IconButton label="Mark as transfer" action={markTransfer} tooltips={tooltips}>
-              <TbArrowsLeftRight />
+            <IconButton
+              label={unmarkTransfer ? "Unmark as transfer" : "Mark as transfer"}
+              action={unmarkTransfer ?? markTransfer}
+              tooltips={tooltips}
+            >
+              <Slashed slashed={unmarkTransfer !== null}>
+                <TbArrowsLeftRight />
+              </Slashed>
             </IconButton>
           </>
         )}

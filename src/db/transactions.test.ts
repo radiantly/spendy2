@@ -522,6 +522,21 @@ describe("markTransactions", () => {
     ).toEqual([{ duplicate_of: idOf("Original") }]);
   });
 
+  it("unmarks them, which an undo marks again", async () => {
+    await stored(["Original", "Copy"]);
+    await markDuplicates(["Copy"], "Original");
+
+    await mark([{ id: idOf("Copy"), field: "duplicate_of", value: null }], ["Copy"]);
+
+    expect(rowOf("Copy").duplicate_of).toBeNull();
+    expect(
+      await database.query("SELECT duplicate_of FROM transactions WHERE id = ?", [idOf("Copy")]),
+    ).toEqual([{ duplicate_of: null }]);
+    const undone = await history.undo();
+    await expect.poll(() => cached().lastUndoOrRedo).toBe(undone);
+    expect(rowOf("Copy").duplicate_of).toBe(idOf("Original"));
+  });
+
   it("marks both sides of a transfer as one step, which an undo and a redo read again", async () => {
     await storedTransfer();
     await mark(
