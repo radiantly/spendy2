@@ -9,6 +9,7 @@ import {
   type FocusEvent,
   type KeyboardEvent,
   type MouseEvent,
+  type ReactNode,
   type Ref,
   type RefObject,
 } from "react";
@@ -18,6 +19,7 @@ import type { EditHandle } from "./editHandle.ts";
 import { historyKey, type HistoryDirection } from "../../lib/historyKey.ts";
 import { defaultHighlight, menuItems, type MenuConfig, type MenuItem } from "./menu.ts";
 import { splitChange, type Part } from "./prefix.ts";
+import type { TextRange } from "./search.ts";
 
 /** The outcome of submitting an edit: accepted, or why not. */
 export type SubmitResult = { ok: true } | { ok: false; error: string };
@@ -76,6 +78,8 @@ type EditableCellProps = {
   id: string;
   /** What the cell shows. */
   display: string;
+  /** Where in `display` a search found what it looks for, in order (see search.ts). */
+  highlights?: readonly TextRange[];
   /**
    * Shown after `display`, greyed and in italics, while the cell isn't
    * edited (see the columns' `note`).
@@ -108,6 +112,7 @@ type EditableCellProps = {
 function EditableCell({
   id,
   display,
+  highlights = [],
   note,
   align,
   tabular,
@@ -164,7 +169,9 @@ function EditableCell({
         <CellInput {...editing} align={align} />
       ) : (
         <div className="truncate">
-          <span ref={textRef}>{display}</span>
+          <span ref={textRef}>
+            <Highlighted text={display} ranges={highlights} />
+          </span>
           {/* Outside the text, so a press on it is past the text's end. */}
           {note && (
             <span className="text-ink-muted italic">
@@ -176,6 +183,26 @@ function EditableCell({
       )}
     </div>
   );
+}
+
+/**
+ * `text`, with what a search found in it marked: its `ranges`, in order.
+ * Where a press is in the text is measured across the marks (see caret.ts).
+ */
+function Highlighted({ text, ranges }: { text: string; ranges: readonly TextRange[] }) {
+  const parts: ReactNode[] = [];
+  let at = 0;
+  for (const { start, end } of ranges) {
+    parts.push(
+      text.slice(at, start),
+      <mark key={start} className="bg-amber/50 text-inherit">
+        {text.slice(start, end)}
+      </mark>,
+    );
+    at = end;
+  }
+  parts.push(text.slice(at));
+  return parts;
 }
 
 /** Identifies a menu item across changes to the options. */

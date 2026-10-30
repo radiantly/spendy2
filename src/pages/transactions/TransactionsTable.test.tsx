@@ -2431,7 +2431,8 @@ describe("TransactionsTable", () => {
     const withBar = (shown = rows, moved: Moved<Edit> | null = null) => (
       <>
         {tableWithBar(shown, moved)}
-        <Toaster />
+        {/* Where the app has it, clear of the bar. */}
+        <Toaster position="top-center" />
       </>
     );
 
@@ -2875,7 +2876,7 @@ describe("TransactionsTable", () => {
         const app = (mode: "visible" | "hidden") => (
           <>
             <Activity mode={mode}>{tableWithBar()}</Activity>
-            <Toaster />
+            <Toaster position="top-center" />
           </>
         );
         const screen = await render(app("visible"));
@@ -2891,6 +2892,477 @@ describe("TransactionsTable", () => {
 
         await expect.element(cancelButton("duplicate")).toBeInTheDocument();
         await expect.element(help("duplicate")).toBeInTheDocument();
+      });
+    });
+  });
+
+  describe("the action bar's search", () => {
+    const searchField = () => page.getByRole("searchbox", { name: "Search transactions" });
+    const regexButton = () => page.getByRole("button", { name: "Use regular expression" });
+    /** What's highlighted in a cell, in order. */
+    const marksIn = (cell: Locator) =>
+      [...cell.element().querySelectorAll("mark")].map((mark) => mark.textContent);
+    /** What's highlighted anywhere in the grid. */
+    const allMarks = () => [...grid().element().querySelectorAll("mark")];
+    /**
+     * The cell in `column` of the row at `row`. (Not found by its text: what's
+     * highlighted in another cell can be that text too.)
+     */
+    const cellAt = (row: number, column: number) =>
+      page.elementLocator(
+        cellIn(document.querySelector(`[role="row"][aria-rowindex="${row + 2}"]`)!, column),
+      );
+
+    const barProps = (shown = rows): TableProps =>
+      tableProps(shown, {
+        actionBar: {
+          canUndo: false,
+          canRedo: false,
+          add: null,
+          deleteRows: () => {},
+          mark: () => null,
+          unmark: () => {},
+          render: (actions) => <ActionBar {...actions} />,
+        },
+      });
+
+    async function search(text: string) {
+      await render(<TransactionsTable {...barProps()} />);
+      await userEvent.fill(searchField(), text);
+    }
+
+    it("highlights what it finds in each cell, ignoring case", async () => {
+      await search("shop 1");
+
+      expect(marksIn(cellAt(1, COUNTERPARTY))).toEqual(["Shop 1"]);
+      expect(marksIn(cellAt(12, COUNTERPARTY))).toEqual(["Shop 1"]);
+      expect(marksIn(cellAt(2, COUNTERPARTY))).toEqual([]);
+      expect(marksIn(cellAt(1, CATEGORY))).toEqual([]);
+    });
+
+    it("highlights every match in a cell", async () => {
+      await search("1");
+
+      expect(marksIn(cellAt(11, COUNTERPARTY))).toEqual(["1", "1"]);
+    });
+
+    it("finds amounts as they're shown", async () => {
+      await search("1,234");
+
+      expect(marksIn(cellAt(0, AMOUNT))).toEqual(["1,234"]);
+    });
+
+    it("leaves the text as it was around what it highlights", async () => {
+      await search("market");
+
+      await expect.element(cellAt(0, COUNTERPARTY)).toHaveTextContent("Corner Market");
+    });
+
+    it("highlights nothing once the search is cleared", async () => {
+      await search("shop");
+      expect(allMarks()).not.toHaveLength(0);
+
+      await userEvent.clear(searchField());
+
+      expect(allMarks()).toHaveLength(0);
+    });
+
+    it("doesn't highlight the cell being edited", async () => {
+      await search("corner");
+      await userEvent.dblClick(cellAt(0, COUNTERPARTY));
+      await expect.element(input()).toHaveValue("Corner Market");
+
+      expect(input().element().closest('[role="gridcell"]')!.querySelector("mark")).toBeNull();
+      expect(marksIn(cellAt(0, COUNTERPARTY))).toEqual([]);
+    });
+
+    it("edits a highlighted cell from where it's pressed, highlight and all", async () => {
+      // Which selects the cell it's found in: pressing it again edits it.
+      await search("market");
+      const text = page.getByText("Corner Market", { exact: true });
+      const mark = text.element().querySelector("mark")!;
+      // The "r" of "Market", inside the highlight.
+      const range = document.createRange();
+      range.setStart(mark.firstChild!, 2);
+      range.setEnd(mark.firstChild!, 3);
+      const char = range.getBoundingClientRect();
+      const box = text.element().getBoundingClientRect();
+
+      await userEvent.click(text, {
+        position: { x: char.left + 1 - box.left, y: box.height / 2 },
+      });
+
+      expect(textSelection()).toEqual([9, 9]);
+    });
+
+    it("highlights what it finds once a change to the rows has it", async () => {
+      const change = await renderChangeable(barProps());
+      await userEvent.fill(searchField(), "café");
+      expect(allMarks()).toHaveLength(0);
+
+      change(barProps(rows.with(1, { ...rows[1]!, counterparty: "Café Lumen" })));
+
+      await expect.poll(() => marksIn(cellAt(1, COUNTERPARTY))).toEqual(["Café"]);
+    });
+
+    describe("going from one cell found to the next", () => {
+      const previousButton = () => page.getByRole("button", { name: "Previous match" });
+      const nextButton = () => page.getByRole("button", { name: "Next match" });
+      /** How many cells it's found in, as the field says. */
+      const count = () => page.getByRole("status");
+      /** The active cell, as its row's index and its column. */
+      function active() {
+        const cell = activeCell();
+        const row = cell?.closest('[role="row"]');
+        if (!cell || !row) return null;
+        return {
+          row: Number(row.getAttribute("aria-rowindex")) - 2,
+          column: [...row.querySelectorAll('[role="gridcell"]')].indexOf(cell),
+        };
+      }
+
+      /** Renders the table with its bar, showing `shown`, and makes a cell active. */
+      async function renderActive(row: number, column: number, shown = rows) {
+        await render(<TransactionsTable {...barProps(shown)} />);
+        await makeActive(rows[row]!.counterparty, column);
+      }
+
+      it("selects the first cell found from the active one on, as it's typed", async () => {
+        await renderActive(5, COUNTERPARTY);
+
+        await userEvent.fill(searchField(), "shop 1");
+
+        expect(active()).toEqual({ row: 10, column: COUNTERPARTY });
+        await expect.element(searchField()).toHaveFocus();
+      });
+
+      it("stays on the active cell while it's still found there, typing on", async () => {
+        await renderActive(5, COUNTERPARTY);
+        await userEvent.click(searchField());
+
+        await userEvent.keyboard("sho");
+        expect(active()).toEqual({ row: 5, column: COUNTERPARTY });
+        await userEvent.keyboard("p 1");
+        expect(active()).toEqual({ row: 10, column: COUNTERPARTY });
+        await userEvent.keyboard("2");
+        expect(active()).toEqual({ row: 12, column: COUNTERPARTY });
+        await userEvent.keyboard("{Backspace}");
+
+        expect(active()).toEqual({ row: 12, column: COUNTERPARTY });
+      });
+
+      it("selects the first cell found with none active", async () => {
+        await search("shop");
+
+        expect(active()).toEqual({ row: 1, column: COUNTERPARTY });
+      });
+
+      it("collapses a range to the cell found", async () => {
+        await renderActive(2, COUNTERPARTY);
+        await userEvent.keyboard("{Shift>}{ArrowDown}{ArrowDown}{/Shift}");
+
+        await userEvent.fill(searchField(), "shop 7");
+
+        expect(selectedCells()).toEqual([activeCell()]);
+        expect(active()).toEqual({ row: 7, column: COUNTERPARTY });
+      });
+
+      it("scrolls to a cell found further down", async () => {
+        await search("shop 5000");
+
+        expect(active()).toEqual({ row: 5000, column: COUNTERPARTY });
+        // The row's box: a cell's goes on over the line below it.
+        const box = activeCell()!.closest('[role="row"]')!.getBoundingClientRect();
+        expect(box.top).toBeGreaterThanOrEqual(0);
+        expect(box.bottom).toBeLessThanOrEqual(window.innerHeight);
+      });
+
+      it("leaves the selection as it was when nothing's found", async () => {
+        await renderActive(5, CATEGORY);
+
+        await userEvent.fill(searchField(), "zzz");
+
+        expect(active()).toEqual({ row: 5, column: CATEGORY });
+        await expect.element(count()).toHaveTextContent("No matches");
+      });
+
+      it("goes on to the next cell found, and back, with the arrows", async () => {
+        await search("shop 1");
+
+        await userEvent.click(nextButton());
+        expect(active()).toEqual({ row: 10, column: COUNTERPARTY });
+        await userEvent.click(nextButton());
+        expect(active()).toEqual({ row: 11, column: COUNTERPARTY });
+        await userEvent.click(previousButton());
+
+        expect(active()).toEqual({ row: 10, column: COUNTERPARTY });
+        await expect.element(searchField()).toHaveFocus();
+      });
+
+      it("goes on with Enter, and back with Shift+Enter, in the field", async () => {
+        await search("shop 1");
+
+        await userEvent.keyboard("{Enter}");
+        expect(active()).toEqual({ row: 10, column: COUNTERPARTY });
+        await userEvent.keyboard("{Shift>}{Enter}{/Shift}");
+
+        expect(active()).toEqual({ row: 1, column: COUNTERPARTY });
+        await expect.element(searchField()).toHaveFocus();
+      });
+
+      it("goes round from the last cell found to the first, and back", async () => {
+        await renderActive(19, COUNTERPARTY, rows.slice(0, 20));
+        await userEvent.fill(searchField(), "shop 1");
+
+        await userEvent.click(nextButton());
+        expect(active()).toEqual({ row: 1, column: COUNTERPARTY });
+        await userEvent.click(previousButton());
+
+        expect(active()).toEqual({ row: 19, column: COUNTERPARTY });
+      });
+
+      it("goes on from a cell it isn't found in", async () => {
+        await search("shop 1");
+        await makeActive("Shop 5", CATEGORY);
+
+        await userEvent.click(nextButton());
+
+        expect(active()).toEqual({ row: 10, column: COUNTERPARTY });
+      });
+
+      it("disables the arrows while there's nothing to go to", async () => {
+        await render(<TransactionsTable {...barProps()} />);
+        await expect.element(previousButton()).toHaveAttribute("aria-disabled", "true");
+        await expect.element(nextButton()).toHaveAttribute("aria-disabled", "true");
+
+        await userEvent.fill(searchField(), "zzz");
+        await expect.element(nextButton()).toHaveAttribute("aria-disabled", "true");
+        await pressDisabled(nextButton());
+        expect(activeCell()).toBeNull();
+
+        await userEvent.fill(searchField(), "shop");
+        await expect.element(previousButton()).not.toHaveAttribute("aria-disabled");
+        await expect.element(nextButton()).not.toHaveAttribute("aria-disabled");
+      });
+
+      it("disables the arrows while the regular expression can't be one", async () => {
+        await search("shop");
+        await userEvent.click(regexButton());
+
+        await userEvent.fill(searchField(), "shop (");
+
+        await expect.element(nextButton()).toHaveAttribute("aria-disabled", "true");
+        await expect.element(previousButton()).toHaveAttribute("aria-disabled", "true");
+      });
+
+      describe("counting", () => {
+        it("says which of the cells found the active one is", async () => {
+          await renderActive(5, COUNTERPARTY, rows.slice(0, 20));
+
+          await userEvent.fill(searchField(), "shop 1");
+
+          // Shop 1, then Shop 10 to Shop 19.
+          await expect.element(count()).toHaveTextContent("2 of 11");
+          await userEvent.click(nextButton());
+          await expect.element(count()).toHaveTextContent("3 of 11");
+        });
+
+        it("only says how many while the active cell isn't one of them", async () => {
+          await renderActive(5, COUNTERPARTY, rows.slice(0, 20));
+          await userEvent.fill(searchField(), "shop 1");
+
+          await makeActive("Shop 12", CATEGORY);
+
+          await expect.poll(() => count().element().textContent).toBe("11");
+        });
+
+        it("groups the digits of a large count", async () => {
+          await search("shop");
+
+          await expect.element(count()).toHaveTextContent("1 of 99,999");
+        });
+
+        it("counts again once the rows change", async () => {
+          const change = await renderChangeable(barProps(rows.slice(0, 20)));
+          await userEvent.fill(searchField(), "shop 1");
+          await expect.element(count()).toHaveTextContent("1 of 11");
+
+          change(barProps(rows.slice(0, 12)));
+
+          await expect.element(count()).toHaveTextContent("1 of 3");
+        });
+
+        it("says nothing without text, or for a regular expression that can't be one", async () => {
+          await render(<TransactionsTable {...barProps()} />);
+          await expect.element(count()).not.toBeInTheDocument();
+
+          await userEvent.click(regexButton());
+          await userEvent.fill(searchField(), "(");
+
+          await expect.element(count()).not.toBeInTheDocument();
+        });
+      });
+
+      it("clears the search with Escape, keeping the cell found selected", async () => {
+        await search("shop 1");
+
+        await userEvent.keyboard("{Escape}");
+
+        await expect.element(searchField()).toHaveValue("");
+        expect(allMarks()).toHaveLength(0);
+        await expect.element(count()).not.toBeInTheDocument();
+        expect(active()).toEqual({ row: 1, column: COUNTERPARTY });
+      });
+
+      it("saves an edit before going on from it", async () => {
+        await search("shop 1");
+        await userEvent.dblClick(cellAt(12, REMARKS));
+        await userEvent.keyboard("note");
+
+        await userEvent.click(nextButton());
+
+        expect(onCommit.mock.calls).toEqual([
+          [[{ rowIndex: 12, field: "remarks", patch: { remarks: "note" } }]],
+        ]);
+        expect(active()).toEqual({ row: 13, column: COUNTERPARTY });
+      });
+
+      it("saves an edit left for the field, then goes to what's typed there", async () => {
+        await render(<TransactionsTable {...barProps()} />);
+        await userEvent.dblClick(cellAt(3, REMARKS));
+        await userEvent.keyboard("note");
+
+        await userEvent.click(searchField());
+        await userEvent.keyboard("shop 1");
+
+        expect(onCommit.mock.calls).toEqual([
+          [[{ rowIndex: 3, field: "remarks", patch: { remarks: "note" } }]],
+        ]);
+        expect(active()).toEqual({ row: 10, column: COUNTERPARTY });
+      });
+
+      it("picks the row of the cell found while marking", async () => {
+        await render(
+          <TransactionsTable
+            {...barProps()}
+            actionBar={{ ...barProps().actionBar!, mark: () => () => {} }}
+          />,
+        );
+        await makeActive("Shop 2", CATEGORY);
+        await userEvent.click(page.getByRole("button", { name: "Mark as duplicate" }));
+
+        await userEvent.fill(searchField(), "shop 7");
+
+        await expect
+          .element(page.getByRole("button", { name: "Mark as duplicate of row 8" }))
+          .not.toHaveAttribute("aria-disabled");
+      });
+    });
+
+    describe("matching case", () => {
+      const matchCaseButton = () => page.getByRole("button", { name: "Match case" });
+
+      it("is off at first, ignoring case", async () => {
+        await search("SHOP 1");
+
+        await expect.element(matchCaseButton()).toHaveAttribute("aria-pressed", "false");
+        expect(marksIn(cellAt(1, COUNTERPARTY))).toEqual(["Shop 1"]);
+      });
+
+      it("finds only the case typed once on", async () => {
+        await search("shop 1");
+
+        await userEvent.click(matchCaseButton());
+
+        await expect.element(matchCaseButton()).toHaveAttribute("aria-pressed", "true");
+        expect(allMarks()).toHaveLength(0);
+        await userEvent.fill(searchField(), "Shop 1");
+        expect(marksIn(cellAt(1, COUNTERPARTY))).toEqual(["Shop 1"]);
+      });
+
+      it("matches the case of a regular expression too", async () => {
+        await search("^S.*1$");
+        await userEvent.click(regexButton());
+        expect(marksIn(cellAt(1, COUNTERPARTY))).toEqual(["Shop 1"]);
+
+        await userEvent.click(matchCaseButton());
+        expect(marksIn(cellAt(1, COUNTERPARTY))).toEqual(["Shop 1"]);
+        await userEvent.fill(searchField(), "^s.*1$");
+
+        expect(allMarks()).toHaveLength(0);
+      });
+
+      it("keeps focus in the field when it's toggled", async () => {
+        await search("shop");
+
+        await userEvent.click(matchCaseButton());
+
+        await expect.element(searchField()).toHaveFocus();
+      });
+
+      it("is toggled from anywhere across the field's height, beside the square it shows", async () => {
+        await search("shop");
+        const field = searchField().element().closest("search")!.getBoundingClientRect();
+        const box = matchCaseButton().element().getBoundingClientRect();
+        const square = matchCaseButton().element().firstElementChild!.getBoundingClientRect();
+        expect([box.top, box.bottom]).toEqual([field.top, field.bottom]);
+        expect([square.left - box.left, box.right - square.right]).toEqual([1, 1]);
+
+        // In its corner, outside the square.
+        await userEvent.click(matchCaseButton(), { position: { x: 0.5, y: 1 } });
+
+        await expect.element(matchCaseButton()).toHaveAttribute("aria-pressed", "true");
+      });
+    });
+
+    describe("by a regular expression", () => {
+      it("is off at first, taking the text as it is", async () => {
+        await search("^shop 1\\d$");
+
+        await expect.element(regexButton()).toHaveAttribute("aria-pressed", "false");
+        expect(allMarks()).toHaveLength(0);
+      });
+
+      it("searches by the text as a regular expression once on", async () => {
+        await search("^shop 1\\d$");
+
+        await userEvent.click(regexButton());
+
+        await expect.element(regexButton()).toHaveAttribute("aria-pressed", "true");
+        expect(marksIn(cellAt(12, COUNTERPARTY))).toEqual(["Shop 12"]);
+        expect(marksIn(cellAt(1, COUNTERPARTY))).toEqual([]);
+      });
+
+      it("keeps focus in the field when it's toggled", async () => {
+        await search("shop");
+
+        await userEvent.click(regexButton());
+
+        await expect.element(searchField()).toHaveFocus();
+      });
+
+      it("says the text can't be a regular expression, outlining the field red and highlighting nothing", async () => {
+        await search("shop");
+        await userEvent.click(regexButton());
+        expect(allMarks()).not.toHaveLength(0);
+
+        await userEvent.fill(searchField(), "shop (");
+
+        await expect.element(searchField()).toHaveAttribute("aria-invalid", "true");
+        await expect.element(searchField()).toHaveAccessibleErrorMessage("Invalid regex");
+        const field = searchField().element().closest("search")!;
+        expect(getComputedStyle(field).outlineColor).toBe(colorOfClass("text-danger"));
+        expect(allMarks()).toHaveLength(0);
+      });
+
+      it("takes the same text as it is again once off", async () => {
+        await search("shop (");
+        await userEvent.click(regexButton());
+
+        await userEvent.click(regexButton());
+
+        await expect.element(searchField()).not.toHaveAttribute("aria-invalid");
+        await expect.element(page.getByText("Invalid regex")).not.toBeInTheDocument();
       });
     });
   });

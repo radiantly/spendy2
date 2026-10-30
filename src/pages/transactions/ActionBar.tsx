@@ -1,7 +1,9 @@
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import {
   TbArrowBackUp,
+  TbArrowDown,
   TbArrowForwardUp,
+  TbArrowUp,
   TbArrowsLeftRight,
   TbCheck,
   TbFileIsr,
@@ -11,7 +13,10 @@ import {
   TbTrash,
   TbX,
 } from "react-icons/tb";
+// The find widget's own, as people know them from code editors.
+import { VscCaseSensitive, VscRegex } from "react-icons/vsc";
 import type { MarkKind } from "./marks.ts";
+import type { SearchQuery } from "./search.ts";
 
 /**
  * While the selected rows are being marked as `kind`, and the row to mark
@@ -26,10 +31,28 @@ export type PickingActions = {
 };
 
 /**
- * What the bar's buttons do to the table (see TransactionsTable's
- * `actionBar`): each null while it can't be done. Marking as a duplicate or
- * a transfer starts `picking` the row to mark against. While the selected
- * rows are all marked as one already, its button unmarks them instead.
+ * The search of the table's cells (see search.ts): what it looks for, and
+ * whether that's a regular expression there can't be. `count` is how many
+ * cells it's found in, and which of them the active cell is (null while
+ * it's none of them); null while it's looking for nothing. `change` looks
+ * for something else; `previous` and `next` select the cell found before
+ * or after the active one (null while it's found in none).
+ */
+export type SearchActions = {
+  query: SearchQuery;
+  invalid: boolean;
+  count: { number: number | null; total: number } | null;
+  change: (query: SearchQuery) => void;
+  previous: (() => void) | null;
+  next: (() => void) | null;
+};
+
+/**
+ * What the bar's search and buttons do to the table (see TransactionsTable's
+ * `actionBar`): each button's null while it can't be done. Marking as a
+ * duplicate or a transfer starts `picking` the row to mark against. While
+ * the selected rows are all marked as one already, its button unmarks them
+ * instead.
  */
 export type TableActions = {
   undo: (() => void) | null;
@@ -42,6 +65,7 @@ export type TableActions = {
   unmarkDuplicate: (() => void) | null;
   unmarkTransfer: (() => void) | null;
   picking: PickingActions | null;
+  search: SearchActions;
 };
 
 /** How long the pointer rests on a button before its tooltip shows (ms). */
@@ -94,16 +118,23 @@ type Tooltips = ReturnType<typeof useTooltips>;
  * A button that's just an icon, named by its tooltip (see `useTooltips`).
  * Pressing it keeps focus where it was, so the grid's selection and keys
  * carry on. `action` is what pressing it does; while it's null, the button
- * is disabled, but keeps its tooltip, and focus.
+ * is disabled, but keeps its tooltip, and focus. With `pressed`, it's a
+ * toggle, tinted while on. A `small` one fits inside a field: it shows as
+ * a small rounded square, rather than a circle, but can be pressed across
+ * the field's height, and a pixel either side.
  */
 function IconButton({
   label,
   action,
+  pressed,
+  small = false,
   tooltips,
   children,
 }: {
   label: string;
   action?: (() => void) | null;
+  pressed?: boolean;
+  small?: boolean;
   tooltips: Tooltips;
   children: ReactNode;
 }) {
@@ -113,12 +144,18 @@ function IconButton({
   // It fades in and out, but not when one takes another's place.
   const fades = open ? !shown.swapped : shown === null;
   const disabled = action === null;
+  // On the field's background, hovering lightens it instead.
+  const hover = small
+    ? "group-hover:bg-surface group-hover:text-ink"
+    : "group-hover:bg-field group-hover:text-ink";
   return (
     <span className="relative">
+      {/* Where it can be pressed; what shows of it is inside. */}
       <button
         type="button"
         aria-labelledby={tooltipId}
         aria-disabled={disabled || undefined}
+        aria-pressed={pressed}
         onClick={action ?? undefined}
         onMouseDown={(event) => event.preventDefault()}
         // Not for touch, where there's no hovering.
@@ -128,11 +165,19 @@ function IconButton({
           event.currentTarget.matches(":focus-visible") && tooltips.showNow(tooltipId)
         }
         onBlur={tooltips.hide}
-        className={`grid size-9 place-items-center rounded-full text-xl text-ink-muted focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus ${
-          disabled ? "opacity-60" : "hover:bg-field hover:text-ink"
+        className={`group grid place-items-center outline-none ${small ? "h-9 w-5.5" : "size-9"} ${
+          disabled ? "opacity-60" : ""
         }`}
       >
-        {children}
+        <span
+          className={`grid place-items-center group-focus-visible:outline-2 group-focus-visible:-outline-offset-2 group-focus-visible:outline-focus ${
+            small ? "size-5 rounded-sm text-base" : "size-9 rounded-full text-xl"
+          } ${pressed ? "bg-focus/40 text-ink" : "text-ink-muted"} ${
+            disabled || pressed ? "" : hover
+          }`}
+        >
+          {children}
+        </span>
       </button>
       <span
         id={tooltipId}
@@ -179,6 +224,99 @@ function Slashed({ slashed, children }: { slashed: boolean; children: ReactNode 
   );
 }
 
+/** How many cells the search found: `3 of 12`, or `12` while the active cell isn't one. */
+function countText({ number, total }: NonNullable<SearchActions["count"]>) {
+  if (total === 0) return "No matches";
+  const counted = total.toLocaleString("en-US");
+  return number === null ? counted : `${number.toLocaleString("en-US")} of ${counted}`;
+}
+
+/**
+ * The search of the table's cells: its text, how many cells it's found in,
+ * and toggles for matching case and searching by a regular expression.
+ * While the regular expression can't be one, the field's outlined red and
+ * says so. Enter goes to the next cell found (Shift+Enter, the previous),
+ * and Escape clears it.
+ */
+function SearchField({
+  search: { query, invalid, count, change, previous, next },
+  tooltips,
+}: {
+  search: SearchActions;
+  tooltips: Tooltips;
+}) {
+  const errorId = useId();
+
+  function handleKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      (event.shiftKey ? previous : next)?.();
+    } else if (event.key === "Escape" && query.text !== "") {
+      // As Chrome and Safari do for a search field, but Firefox doesn't.
+      event.preventDefault();
+      change({ ...query, text: "" });
+    }
+  }
+
+  return (
+    <search
+      className={`flex h-9 w-64 items-center gap-2 rounded-full bg-field pr-1 pl-3 ${
+        invalid
+          ? "outline-2 -outline-offset-2 outline-danger"
+          : "has-[input:focus]:outline-2 has-[input:focus]:-outline-offset-2 has-[input:focus]:outline-focus"
+      }`}
+    >
+      <TbSearch aria-hidden className="shrink-0 text-ink-muted" />
+      <input
+        type="search"
+        aria-label="Search transactions"
+        placeholder="Search transactions"
+        value={query.text}
+        // Names and regular expressions aren't words to correct.
+        spellCheck={false}
+        onChange={(event) => change({ ...query, text: event.target.value })}
+        onKeyDown={handleKeyDown}
+        aria-invalid={invalid || undefined}
+        aria-errormessage={invalid ? errorId : undefined}
+        className="min-w-0 grow bg-transparent text-sm outline-none placeholder:text-ink-muted"
+      />
+      {invalid ? (
+        <span id={errorId} className="shrink-0 text-xs text-danger">
+          Invalid regex
+        </span>
+      ) : (
+        count && (
+          <span role="status" className="shrink-0 text-xs text-ink-muted tabular-nums">
+            {countText(count)}
+          </span>
+        )
+      )}
+      {/* 2px apart and 2px from the end, as they show: each can be pressed a
+        pixel further either side (see IconButton). */}
+      <span className="mr-px flex">
+        <IconButton
+          label="Match case"
+          action={() => change({ ...query, matchCase: !query.matchCase })}
+          pressed={query.matchCase}
+          small
+          tooltips={tooltips}
+        >
+          <VscCaseSensitive />
+        </IconButton>
+        <IconButton
+          label="Use regular expression"
+          action={() => change({ ...query, regex: !query.regex })}
+          pressed={query.regex}
+          small
+          tooltips={tooltips}
+        >
+          <VscRegex />
+        </IconButton>
+      </span>
+    </search>
+  );
+}
+
 function Divider() {
   return <span aria-hidden className="mx-1 h-5 w-px bg-line" />;
 }
@@ -195,10 +333,11 @@ function confirmLabel({ kind, picked }: PickingActions) {
 
 /**
  * A pill floating at the bottom of the window, over the table: a search of
- * the transactions, undo and redo, and actions on the selected rows. Marking
- * as a duplicate or a transfer turns those two buttons into cancel and
- * confirm while the row to mark against is picked. All but the search are
- * wired up so far.
+ * the transactions' cells, which highlights what it finds, with buttons to
+ * go from one cell it's found in to the next, undo and redo, and actions on
+ * the selected rows. Marking as a duplicate or a transfer
+ * turns those two buttons into cancel and confirm while the row to mark
+ * against is picked.
  */
 function ActionBar({
   undo,
@@ -211,21 +350,20 @@ function ActionBar({
   unmarkDuplicate,
   unmarkTransfer,
   picking,
+  search,
 }: TableActions) {
   const tooltips = useTooltips();
   return (
     <div className="pointer-events-none fixed inset-x-0 bottom-6 z-30 flex justify-center px-4">
       {/* As tall as the header's tabs. */}
       <div className="pointer-events-auto flex items-center rounded-full border border-line bg-surface p-1 shadow-lg">
-        <search className="flex h-9 w-64 items-center gap-2 rounded-full bg-field px-3 focus-within:outline-2 focus-within:-outline-offset-2 focus-within:outline-focus">
-          <TbSearch aria-hidden className="shrink-0 text-ink-muted" />
-          <input
-            type="search"
-            aria-label="Search transactions"
-            placeholder="Search transactions"
-            className="min-w-0 grow bg-transparent text-sm outline-none placeholder:text-ink-muted"
-          />
-        </search>
+        <SearchField search={search} tooltips={tooltips} />
+        <IconButton label="Previous match" action={search.previous} tooltips={tooltips}>
+          <TbArrowUp />
+        </IconButton>
+        <IconButton label="Next match" action={search.next} tooltips={tooltips}>
+          <TbArrowDown />
+        </IconButton>
         <Divider />
         <IconButton label="Undo" action={undo} tooltips={tooltips}>
           <TbArrowBackUp />

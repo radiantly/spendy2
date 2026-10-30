@@ -354,6 +354,25 @@ describe("TransactionsPage", () => {
     await expect.element(remarks).toHaveTextContent("Duplicate of transaction 1.");
   });
 
+  it("finds a transaction from the action bar's search, to edit it there", async () => {
+    await loggedIn(await storedDatabase(TWO_TRANSACTIONS));
+    await renderApp("/transactions");
+    const counterparty = await cellOf("Café Lumen", COUNTERPARTY);
+    const count = page.getByRole("status");
+
+    await userEvent.fill(page.getByRole("searchbox", { name: "Search transactions" }), "lumen");
+
+    await expect.element(count).toHaveTextContent("1 of 1");
+    expect(counterparty.element().querySelector("mark")?.textContent).toBe("Lumen");
+    // It's the active cell, so pressing it edits it.
+    await userEvent.click(counterparty);
+    await page.getByRole("textbox").fill("Café Lune");
+    await userEvent.keyboard("{Enter}");
+
+    await expect.element(count).toHaveTextContent("No matches");
+    await expect.element(await cellOf("Café Lune", COUNTERPARTY)).toHaveTextContent("Café Lune");
+  });
+
   it("keeps the changes unsaved when saving conflicts", async () => {
     await loggedIn(await storedDatabase(TWO_TRANSACTIONS));
     vi.mocked(uploadDatabase).mockResolvedValue({ success: false, code: "CONFLICT" });

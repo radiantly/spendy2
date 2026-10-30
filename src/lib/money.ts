@@ -13,17 +13,46 @@ export function decimalString({ amount, decimals }: Amount): Intl.StringNumericL
   return `${amount < 0 ? "-" : ""}${digits.slice(0, point)}${fraction && `.${fraction}`}` as Intl.StringNumericLiteral;
 }
 
+/**
+ * The formats made so far, by their options. Making one takes far longer
+ * than formatting with it: showing every amount of a hundred thousand
+ * transactions took seconds, making them each time.
+ */
+const numberFormats = new Map<string, Intl.NumberFormat>();
+
+/**
+ * An en-US number format with `options`, made the first time it's asked
+ * for. Throws, as making it does, for a currency that isn't an ISO 4217
+ * code.
+ */
+function numberFormat(options: Intl.NumberFormatOptions) {
+  const key = JSON.stringify(options);
+  let format = numberFormats.get(key);
+  if (format === undefined) {
+    format = new Intl.NumberFormat("en-US", options);
+    numberFormats.set(key, format);
+  }
+  return format;
+}
+
+/** Each currency's decimals (see `currencyDecimals`), by its code, once worked out. */
+const decimalsByCurrency = new Map<string, number>();
+
 /** The number of decimals a currency is usually shown with, e.g. 2 for USD, 0 for JPY. */
 export function currencyDecimals(currency: string) {
-  try {
-    return (
-      new Intl.NumberFormat("en-US", { style: "currency", currency }).resolvedOptions()
-        .maximumFractionDigits ?? 2
-    );
-  } catch {
-    // Not an ISO 4217 code: a currency added to the database by hand.
-    return 2;
+  let decimals = decimalsByCurrency.get(currency);
+  if (decimals === undefined) {
+    try {
+      decimals =
+        new Intl.NumberFormat("en-US", { style: "currency", currency }).resolvedOptions()
+          .maximumFractionDigits ?? 2;
+    } catch {
+      // Not an ISO 4217 code: a currency added to the database by hand.
+      decimals = 2;
+    }
+    decimalsByCurrency.set(currency, decimals);
   }
+  return decimals;
 }
 
 /**
@@ -85,7 +114,7 @@ function numberOptions(
  */
 export function formatMoney(amount: number | Amount, currency: string, format: MoneyFormat = {}) {
   try {
-    return new Intl.NumberFormat("en-US", {
+    return numberFormat({
       ...numberOptions(amount, currency, format),
       style: "currency",
       currency,
@@ -102,7 +131,5 @@ export function formatMoneyNumber(
   currency: string,
   format: MoneyFormat = {},
 ) {
-  return new Intl.NumberFormat("en-US", numberOptions(amount, currency, format)).format(
-    formattable(amount),
-  );
+  return numberFormat(numberOptions(amount, currency, format)).format(formattable(amount));
 }

@@ -53,6 +53,16 @@ import {
 import type { HeaderMenuHandle, HeaderProps } from "./HeaderMenu.tsx";
 import { isMarked, type MarkKind } from "./marks.ts";
 import { partFor } from "./prefix.ts";
+import {
+  EMPTY_SEARCH,
+  matchesIn,
+  matchFinder,
+  matchNumber,
+  nextMatch,
+  searchPattern,
+  type SearchDirection,
+  type SearchQuery,
+} from "./search.ts";
 import { useMouseDrag, type Point } from "./useMouseDrag.ts";
 import type { MenuColumn, Sort } from "./view.ts";
 
@@ -310,6 +320,18 @@ function TransactionsTable({
   // Up from the first row reaches the headers, where their menus open.
   const [headerColumn, setHeaderColumn] = useState<number | null>(null);
   const activeHeader = selection === null ? headerColumn : null;
+  // What the action bar's search looks for, and the pattern it searches
+  // with (see search.ts): what it finds in the cells is highlighted, and
+  // the bar goes from one cell it's found in to the next.
+  const [search, setSearch] = useState<{
+    query: SearchQuery;
+    searched: ReturnType<typeof searchPattern>;
+  }>({ query: EMPTY_SEARCH, searched: null });
+  const pattern = search.searched?.ok ? search.searched.value : null;
+  // Found once for the rows and pattern, though both rendering and changing
+  // the search ask.
+  const [findMatchesOnce] = useState(matchFinder);
+  const found = pattern && findMatchesOnce(rows, pattern);
   const [started, setPicking] = useState<Picking | null>(null);
   const picking = started?.since === lastUndoOrRedo ? started : null;
   // While picking, the active cell's row is the one picked, and this marks
@@ -650,6 +672,36 @@ function TransactionsTable({
     if (active && head) select({ active, head }, active);
   }
 
+  /**
+   * The action bar's search, looking for `query` now: the first cell it's
+   * found in from the active cell on (or from the first cell) is selected,
+   * the active cell itself if it's found there. Going on typing, the cell
+   * stays selected while it's still found there.
+   */
+  function changeSearch(query: SearchQuery) {
+    const searched = searchPattern(query);
+    setSearch({ query, searched });
+    if (!searched?.ok) return;
+    const cell = nextMatch(
+      findMatchesOnce(rows, searched.value),
+      selection?.active ?? null,
+      "next",
+      true,
+    );
+    if (cell) select(collapsed(cell), cell);
+  }
+
+  /**
+   * The action bar's previous or next match: selects the cell found before
+   * or after the active one (see `nextMatch`). An edit is settled first (see
+   * EditHandle). While picking, its row is the one picked.
+   */
+  function goToMatch(found: readonly number[], direction: SearchDirection) {
+    editHandleRef.current?.settle();
+    const cell = nextMatch(found, selection?.active ?? null, direction);
+    if (cell) select(collapsed(cell), cell);
+  }
+
   /** What the action bar's buttons do here (see `actionBar`). */
   function barActions({
     add,
@@ -688,6 +740,17 @@ function TransactionsTable({
             ? { row: pickedRow + 1, mark: markPicked && (() => confirmPicking(markPicked)) }
             : null,
         cancel: () => cancelPicking(picking),
+      },
+      search: {
+        query: search.query,
+        invalid: search.searched?.ok === false,
+        count: found && {
+          number: selection && matchNumber(found, selection.active),
+          total: found.length,
+        },
+        change: changeSearch,
+        previous: found?.length ? () => goToMatch(found, "previous") : null,
+        next: found?.length ? () => goToMatch(found, "next") : null,
       },
     };
   }
@@ -1092,11 +1155,13 @@ function TransactionsTable({
                   const selected = area !== null && contains(area, position);
                   const isEditing = isEditingRow && editing.cell.column === column;
                   const editText = editor?.editText(row);
+                  const display = meta.display(row);
                   return (
                     <EditableCell
                       key={leafColumn.id}
                       id={cellId(position)}
-                      display={meta.display(row)}
+                      display={display}
+                      highlights={pattern ? matchesIn(pattern, display) : undefined}
                       note={meta.note?.(row, rowNumberOf)}
                       align={meta.align}
                       tabular={meta.tabular}
