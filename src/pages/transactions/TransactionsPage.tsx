@@ -18,10 +18,12 @@ import {
 } from "../../db/transactions.ts";
 import { useHoldUpdates, useOpenDatabase } from "../../db/useDatabase.ts";
 import { useBreakpoint } from "../../hooks/useBreakpoint.ts";
+import { download } from "../../lib/download.ts";
 import { today } from "../../lib/period.ts";
 import { useUndoRedo } from "../shell/historyKeys.ts";
 import ActionBar from "./ActionBar.tsx";
-import { ColumnMenu } from "./ColumnMenus.tsx";
+import { ColumnMenu, TableMenu } from "./ColumnMenus.tsx";
+import { transactionsCsv } from "./csv.ts";
 import {
   ADD_DESCRIPTION,
   describeDelete,
@@ -241,6 +243,29 @@ function TransactionsPage() {
     });
   };
 
+  /** Downloads the database as an SQLite file, saying so if it couldn't be. */
+  const exportDatabase = () => {
+    database.serialize().then(
+      (bytes) =>
+        download(
+          new Blob([bytes], { type: "application/vnd.sqlite3" }),
+          `spendy-${today()}.sqlite`,
+        ),
+      (error: unknown) => {
+        toast.error(`Couldn't export the database: ${messageOf(error)}`);
+      },
+    );
+  };
+
+  /** Downloads the transactions shown, in the order they're shown, as CSV. */
+  const exportCsv = () => {
+    // UTF-8's byte order mark first, or Excel reads the file as the system's own encoding.
+    download(
+      new Blob(["﻿", transactionsCsv(rows)], { type: "text/csv;charset=utf-8" }),
+      `spendy-transactions-${today()}.csv`,
+    );
+  };
+
   // With an account, there can be transactions to add, even without any yet.
   const showsTable = tableFits && (transactions.length > 0 || loaded.accounts.length > 0);
 
@@ -279,6 +304,15 @@ function TransactionsPage() {
                 accounts={accounts}
                 categories={loaded.categories}
                 values={values}
+              />
+            ),
+            corner: (header) => (
+              <TableMenu
+                header={header}
+                view={view}
+                onViewChange={setView}
+                onExportDatabase={exportDatabase}
+                onExportCsv={exportCsv}
               />
             ),
           }}

@@ -139,7 +139,8 @@ const REMARKS = 5;
 const grid = () => page.getByRole("grid");
 const activeCell = () =>
   document.getElementById(grid().element().getAttribute("aria-activedescendant") ?? "");
-const headers = () => page.getByRole("columnheader").elements();
+/** The columns' headers, after the corner's over the row numbers. */
+const headers = () => page.getByRole("columnheader").elements().slice(1);
 const selectedCells = () => [
   ...document.querySelectorAll('[role="gridcell"][aria-selected="true"]'),
 ];
@@ -297,8 +298,17 @@ describe("TransactionsTable", () => {
       const row = renderedRows()[0]!;
       expect(cellIn(row, COUNTERPARTY).textContent).toBe("Shop 2");
       expect(row.querySelectorAll('[role="gridcell"]').length).toBe(REMARKS + 1);
-      // Screen readers have the row's place from aria-rowindex.
-      expect(numberOf(row).getAttribute("aria-hidden")).toBe("true");
+      expect(numberOf(row).getAttribute("role")).toBe("rowheader");
+    });
+
+    // Screen readers line the cells up with the headers by their place in the row.
+    it("has a header over the numbers, so the cells line up with their columns' headers", async () => {
+      await renderTable();
+
+      const headerRow = page.getByRole("row").first().element();
+      const row = renderedRows()[0]!;
+      expect(headerRow.children.length).toBe(row.children.length);
+      expect(headerRow.firstElementChild!.getAttribute("role")).toBe("columnheader");
     });
 
     it("fits the largest number", async () => {
@@ -1224,7 +1234,7 @@ describe("TransactionsTable", () => {
     it("makes a column header active, not a cell, when it's clicked", async () => {
       await renderTable();
 
-      await userEvent.click(page.getByRole("columnheader").first());
+      await userEvent.click(page.elementLocator(headers()[DATE]!));
 
       expect(activeCell()).toBe(headers()[DATE]);
       expect(selectedCells()).toEqual([]);

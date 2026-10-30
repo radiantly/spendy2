@@ -275,6 +275,16 @@ describe("viewOrder", () => {
       expect(shown([usd, eur], { hiddenCurrencies: new Set(["USD"]) })).toEqual([eur.id]);
     });
 
+    it("hides the duplicates, but not what they're duplicates of, until they're shown", () => {
+      const original = row();
+      const duplicate = row({ duplicate_of: original.id });
+
+      expect(shown([original, duplicate])).toEqual([original.id]);
+      expect(shown([original, duplicate], { showDuplicates: true })).toEqual(
+        ids([duplicate, original]),
+      );
+    });
+
     it("shows only what every filter lets through", () => {
       const kept = row({ account_name: "Card", amount: -1 });
       const wrongAccount = row({ account_name: "Savings", amount: -1 });

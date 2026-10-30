@@ -4,6 +4,7 @@ import type { DatabaseApi } from "./worker.ts";
 import { MIGRATIONS } from "./migrations.ts";
 import { deriveKek } from "../lib/kek.ts";
 import { EXPORT_KEY } from "../test/fixtures.ts";
+import { openSqliteFile } from "../test/sqliteFile.ts";
 
 const workers: Worker[] = [];
 afterEach(() => {
@@ -225,6 +226,17 @@ describe("database worker changes", () => {
 
     // Had the export's version stayed, this would count it as saved.
     expect(await db.finishSave(true)).toEqual({ unsaved: true });
+  });
+
+  it("serializes the database as an SQLite file, unsaved changes too, still unsaved", async () => {
+    const db = await opened();
+    await db.batch([INSERT_CHECKING]);
+
+    const copy = await openSqliteFile(await db.serialize());
+
+    expect(copy.selectValues("SELECT name FROM accounts")).toEqual(["checking"]);
+    copy.close();
+    expect(await db.status()).toEqual({ unsaved: true });
   });
 
   it("leaves nothing unsaved after a batch that failed", async () => {

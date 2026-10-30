@@ -4,7 +4,7 @@ import { page, userEvent } from "vitest/browser";
 import { render } from "vitest-browser-react";
 import type { CategoryParent } from "../../db/queries/overview.ts";
 import type { ListedTransaction } from "../../db/queries/transactions.ts";
-import { ColumnMenu } from "./ColumnMenus.tsx";
+import { ColumnMenu, TableMenu } from "./ColumnMenus.tsx";
 import TransactionsTable, { type TransactionChange } from "./TransactionsTable.tsx";
 import { DEFAULT_VIEW, filterValues, type TransactionsView } from "./view.ts";
 
@@ -47,11 +47,15 @@ function transaction(overrides: Partial<ListedTransaction> = {}): ListedTransact
 /** The view the menus last set. */
 let view: TransactionsView;
 let onCommit: (changes: TransactionChange[]) => void;
+let onExportDatabase: () => void;
+let onExportCsv: () => void;
 
 beforeEach(async () => {
   count = 0;
   view = DEFAULT_VIEW;
   onCommit = vi.fn();
+  onExportDatabase = vi.fn();
+  onExportCsv = vi.fn();
   await page.viewport(1280, 800);
 });
 
@@ -65,6 +69,10 @@ function Table({
 }) {
   const [current, setCurrent] = useState(DEFAULT_VIEW);
   const names = { accounts: ACCOUNTS, categories: categories.map(({ name }) => name) };
+  const onViewChange = (next: TransactionsView) => {
+    view = next;
+    setCurrent(next);
+  };
   return (
     <TransactionsTable
       rows={rows}
@@ -82,13 +90,19 @@ function Table({
             column={column}
             header={header}
             view={current}
-            onViewChange={(next) => {
-              view = next;
-              setCurrent(next);
-            }}
+            onViewChange={onViewChange}
             accounts={ACCOUNTS}
             categories={categories}
             values={filterValues(rows, names)}
+          />
+        ),
+        corner: (header) => (
+          <TableMenu
+            header={header}
+            view={current}
+            onViewChange={onViewChange}
+            onExportDatabase={onExportDatabase}
+            onExportCsv={onExportCsv}
           />
         ),
       }}
@@ -377,6 +391,19 @@ describe("the date menu", () => {
 
     expect(view.dates).toEqual({ kind: "custom", from: "2026-10-01", to: "2026-10-31" });
   });
+
+  it("outlines a custom range's date while it's focused", async () => {
+    await renderTable();
+    await open("Date");
+    await userEvent.click(radio("Custom range"));
+
+    for (const name of ["From", "To"]) {
+      const date = page.getByLabelText(name);
+      (date.element() as HTMLInputElement).focus();
+      await expect.element(date).toHaveFocus();
+      expect(getComputedStyle(date.element()).outlineStyle).toBe("solid");
+    }
+  });
 });
 
 describe("the account menu", () => {
@@ -640,5 +667,148 @@ describe("the remarks menu", () => {
 
     expect(view.sort).toEqual({ column: "remarks", direction: "ascending" });
     expect(page.getByRole("checkbox").query()).toBeNull();
+  });
+});
+
+describe("the table menu", () => {
+  const corner = () => header("Table options");
+  /** Makes the corner's header active from the keyboard: Left from the first column's. */
+  async function toCorner() {
+    await renderTable();
+    await userEvent.click(page.getByText("Shop 1", { exact: true }));
+    await userEvent.keyboard("{ArrowUp}{Home}{ArrowLeft}");
+    expect(active()).toBe(corner().element());
+  }
+
+  it("opens from the corner, over the row numbers", async () => {
+    await renderTable();
+
+    await open("Table options");
+
+    const box = corner().element().getBoundingClientRect();
+    const number = page.getByRole("rowheader").first().element().getBoundingClientRect();
+    expect([box.left, box.right]).toEqual([number.left, number.right]);
+  });
+
+  it("hides duplicate transactions until they're checked", async () => {
+    await renderTable();
+    await open("Table options");
+    await expect.element(checkbox("Show duplicate transactions")).not.toBeChecked();
+
+    await userEvent.click(checkbox("Show duplicate transactions"));
+
+    expect(view.showDuplicates).toBe(true);
+    await expect.element(checkbox("Show duplicate transactions")).toBeChecked();
+    await userEvent.click(checkbox("Show duplicate transactions"));
+    expect(view.showDuplicates).toBe(false);
+  });
+
+  it("makes the corner active when it's pressed", async () => {
+    await renderTable();
+
+    await open("Table options");
+    await userEvent.keyboard("{Escape}");
+
+    await expect.element(grid()).toHaveFocus();
+    expect(active()).toBe(corner().element());
+  });
+
+  it("is reached with Left from the first column's header, and stops there", async () => {
+    await toCorner();
+
+    await userEvent.keyboard("{ArrowLeft}");
+
+    expect(active()).toBe(corner().element());
+  });
+
+  it("goes back to the first column's header with Right or Home", async () => {
+    await toCorner();
+
+    await userEvent.keyboard("{ArrowRight}");
+    expect(active()).toBe(header("Date").element());
+    await userEvent.keyboard("{ArrowLeft}{Home}");
+    expect(active()).toBe(header("Date").element());
+  });
+
+  it("goes down to the first column's first cell", async () => {
+    await toCorner();
+
+    await userEvent.keyboard("{ArrowDown}");
+
+    expect(active()).toBe(page.getByRole("row").nth(1).getByRole("gridcell").first().element());
+  });
+
+  it("opens with Enter, toggles with Space, and closes with Enter to the first column's first cell", async () => {
+    await toCorner();
+
+    await userEvent.keyboard("{Enter}");
+    await expect.element(checkbox("Show duplicate transactions")).toHaveFocus();
+    await userEvent.keyboard(" ");
+    expect(view.showDuplicates).toBe(true);
+    await userEvent.keyboard("{Enter}");
+
+    await expect.element(menu("Table options")).not.toBeInTheDocument();
+    await expect.element(grid()).toHaveFocus();
+    expect(active()).toBe(page.getByRole("row").nth(1).getByRole("gridcell").first().element());
+  });
+
+  const exportDatabase = () => page.getByRole("button", { name: "Export as SQLite database" });
+  const exportCsv = () => page.getByRole("button", { name: "Export as CSV" });
+
+  it("exports the database, closing the menu, with the corner still active", async () => {
+    await renderTable();
+    await open("Table options");
+
+    await userEvent.click(exportDatabase());
+
+    expect(onExportDatabase).toHaveBeenCalledOnce();
+    await expect.element(menu("Table options")).not.toBeInTheDocument();
+    await expect.element(grid()).toHaveFocus();
+    expect(active()).toBe(corner().element());
+  });
+
+  it("reaches the export with Down, and does it with Enter, the corner still active", async () => {
+    await toCorner();
+    await userEvent.keyboard("{Enter}{ArrowDown}");
+    await expect.element(exportDatabase()).toHaveFocus();
+
+    await userEvent.keyboard("{Enter}");
+
+    expect(onExportDatabase).toHaveBeenCalledOnce();
+    expect(view).toBe(DEFAULT_VIEW);
+    await expect.element(menu("Table options")).not.toBeInTheDocument();
+    await expect.element(grid()).toHaveFocus();
+    expect(active()).toBe(corner().element());
+  });
+
+  it("outlines the export while the keyboard has it focused", async () => {
+    await toCorner();
+
+    await userEvent.keyboard("{Enter}{ArrowDown}");
+
+    await expect.element(exportDatabase()).toHaveFocus();
+    expect(getComputedStyle(exportDatabase().element()).outlineStyle).toBe("solid");
+  });
+
+  it("exports CSV last, with Space", async () => {
+    await toCorner();
+    await userEvent.keyboard("{Enter}{End}");
+    await expect.element(exportCsv()).toHaveFocus();
+
+    await userEvent.keyboard(" ");
+
+    expect(onExportCsv).toHaveBeenCalledOnce();
+    expect(onExportDatabase).not.toHaveBeenCalled();
+    await expect.element(menu("Table options")).not.toBeInTheDocument();
+  });
+
+  it("exports CSV, closing the menu", async () => {
+    await renderTable();
+    await open("Table options");
+
+    await userEvent.click(exportCsv());
+
+    expect(onExportCsv).toHaveBeenCalledOnce();
+    await expect.element(menu("Table options")).not.toBeInTheDocument();
   });
 });

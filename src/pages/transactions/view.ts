@@ -39,6 +39,8 @@ export type TransactionsView = {
   hiddenCategories: ReadonlySet<string | null>;
   flow: Flow;
   hiddenCurrencies: ReadonlySet<string>;
+  /** Whether those marked as a duplicate of another (see marks.ts) are shown. */
+  showDuplicates: boolean;
 };
 
 export const DEFAULT_VIEW: TransactionsView = {
@@ -48,6 +50,7 @@ export const DEFAULT_VIEW: TransactionsView = {
   hiddenCategories: new Set(),
   flow: "all",
   hiddenCurrencies: new Set(),
+  showDuplicates: false,
 };
 
 /** The names the view's filters are by. */
@@ -88,6 +91,7 @@ function filterFor(view: TransactionsView, names: ViewNames, today: NaiveDate) {
   if (view.flow === "out") checks.push((row) => row.amount < 0);
   if (view.hiddenCurrencies.size > 0)
     checks.push((row) => !view.hiddenCurrencies.has(row.currency));
+  if (!view.showDuplicates) checks.push((row) => row.duplicate_of === null);
   return (row: ListedTransaction) => checks.every((check) => check(row));
 }
 

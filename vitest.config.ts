@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { defineConfig } from "vitest/config";
 import { cloudflareTest } from "@cloudflare/vitest-plugin";
 import { playwright } from "@vitest/browser-playwright";
@@ -28,6 +29,18 @@ const mouse: BrowserCommand<[action: "move" | "down" | "up", x: number, y: numbe
   await context.page.mouse.move(box.x + x * scale, box.y + y * scale);
   if (action === "down") await context.page.mouse.down();
   if (action === "up") await context.page.mouse.up();
+};
+
+/**
+ * Waits for the test page's next download, then gives its file's name and
+ * bytes (as numbers: a command's result is sent as JSON). Start it before
+ * whatever downloads the file.
+ */
+const nextDownload: BrowserCommand<[]> = async (context) => {
+  if (context.provider.name !== "playwright") throw new Error("nextDownload needs Playwright");
+  const download = await context.page.waitForEvent("download");
+  const bytes = await readFile(await download.path());
+  return { name: download.suggestedFilename(), bytes: [...bytes] };
 };
 
 export default defineConfig({
@@ -63,7 +76,7 @@ export default defineConfig({
             provider: playwright(),
             headless: true,
             instances: [{ browser: "chromium" }, { browser: "firefox" }, { browser: "webkit" }],
-            commands: { mouse },
+            commands: { mouse, nextDownload },
           },
         },
       },

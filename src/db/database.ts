@@ -190,6 +190,14 @@ export class Database {
     return result;
   }
 
+  /**
+   * The database as an SQLite file, as it is now: unsaved changes too, and
+   * unencrypted. Doesn't change what's saved.
+   */
+  serialize() {
+    return this.#connection.remote.serialize();
+  }
+
   /** Stops the worker. Calls still running, and later ones, reject with a ClosedError. */
   close() {
     this.#connection.close();

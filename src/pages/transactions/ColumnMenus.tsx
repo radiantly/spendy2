@@ -1,4 +1,5 @@
 import { useId } from "react";
+import { TbDatabaseExport, TbDots, TbFileTypeCsv } from "react-icons/tb";
 import type { CategoryParent } from "../../db/queries/overview.ts";
 import {
   resolvePeriod,
@@ -16,11 +17,14 @@ import {
   type CategoryNode,
 } from "./categoryTree.ts";
 import HeaderMenu, {
+  ActionItem,
   CheckAll,
   CheckboxItem,
   ItemDetails,
+  MenuButton,
   MenuGroup,
   RadioItem,
+  type GridMenuProps,
   type HeaderProps,
 } from "./HeaderMenu.tsx";
 import type {
@@ -63,6 +67,50 @@ export function ColumnMenu({ column, accounts, categories, values, ...props }: C
     case "remarks":
       return <RemarksMenu {...props} />;
   }
+}
+
+/**
+ * The menu in the corner over the row numbers, for the table as a whole.
+ * `onExportDatabase` downloads the database as an SQLite file, and
+ * `onExportCsv` the transactions shown as CSV.
+ */
+export function TableMenu({
+  header,
+  view,
+  onViewChange,
+  onExportDatabase,
+  onExportCsv,
+}: Omit<MenuProps, "header"> & {
+  header: GridMenuProps;
+  onExportDatabase: () => void;
+  onExportCsv: () => void;
+}) {
+  return (
+    <MenuButton
+      {...header}
+      anchor="corner"
+      name="Table options"
+      // At the end, as the numbers below are: the dots end where they do,
+      // as the icon has room either side of them.
+      face={<TbDots aria-hidden className="mr-1.5 ml-auto shrink-0 text-base" />}
+    >
+      <MenuGroup title="Filter">
+        <CheckboxItem
+          label="Show duplicate transactions"
+          checked={view.showDuplicates}
+          onToggle={(showDuplicates) => onViewChange({ ...view, showDuplicates })}
+        />
+      </MenuGroup>
+      <MenuGroup title="Export">
+        <ActionItem
+          label="Export as SQLite database"
+          icon={TbDatabaseExport}
+          onPick={onExportDatabase}
+        />
+        <ActionItem label="Export as CSV" icon={TbFileTypeCsv} onPick={onExportCsv} />
+      </MenuGroup>
+    </MenuButton>
+  );
 }
 
 /** Whether a filter by `values` hides any of them. */
@@ -148,8 +196,9 @@ function DateMenu({ header, view, onViewChange }: MenuProps) {
   );
 }
 
+// Not outline-none: it would also take the style focus-visible's outline draws with.
 const dateInputClass =
-  "h-7 rounded border border-line bg-field px-1.5 text-xs tabular-nums outline-none focus-visible:outline-2 focus-visible:outline-focus";
+  "h-7 rounded border border-line bg-field px-1.5 text-xs tabular-nums focus-visible:outline-2 focus-visible:outline-focus";
 
 /** A custom range's dates, under its option. */
 function CustomRange({

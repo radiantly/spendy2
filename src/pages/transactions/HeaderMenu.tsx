@@ -1,4 +1,6 @@
 import {
+  createContext,
+  use,
   useId,
   useImperativeHandle,
   useRef,
@@ -6,6 +8,7 @@ import {
   type ReactNode,
   type Ref,
 } from "react";
+import type { IconType } from "react-icons";
 import { FaCaretDown, FaFilter } from "react-icons/fa6";
 import { FiArrowDown, FiArrowUp } from "react-icons/fi";
 import { CheckboxBox } from "../../components/Checkbox.tsx";
@@ -20,28 +23,34 @@ export type HeaderMenuHandle = {
   open: () => void;
 };
 
-/** What the grid gives a header with a menu. */
-export type HeaderProps = {
-  label: ReactNode;
+/** A menu's choices, which its keys move through: its options, then its actions. */
+const CHOICES = "input[type=radio], input[type=checkbox], button";
+
+/** The id of the menu its items are in, for the actions to close it. */
+const MenuIdContext = createContext<string | undefined>(undefined);
+
+/** What the grid gives a header's menu. */
+export type GridMenuProps = {
   menuRef?: Ref<HeaderMenuHandle>;
   /** Enter in the menu: it's closed, and the grid moves on from the header. */
   onDone?: () => void;
 };
 
-type HeaderMenuProps = HeaderProps & {
+/** What the grid gives a column's header with a menu. */
+export type HeaderProps = GridMenuProps & { label: ReactNode };
+
+type MenuButtonProps = GridMenuProps & {
   /** Names the anchor the menu sits by: unique among the headers. */
-  column: string;
-  /** Set when the column sorts the transactions. */
-  sorted?: SortDirection;
-  /** Whether the menu's filters hide any transactions. */
-  filtered: boolean;
+  anchor: string;
+  /** What the button shows, filling it. */
+  face: ReactNode;
+  /** The button's name, when what it shows doesn't give it one. */
+  name?: string;
   children: ReactNode;
 };
 
 /**
- * A column header's contents that open a menu of ways to sort and filter by
- * the column. The header shows which way the column sorts, if it does, and
- * whether it filters.
+ * A header's contents: a button that opens a menu.
  *
  * The menu is a popover in the top layer, so it's over the sticky header
  * and isn't clipped by the cell. The browser opens and closes it: pressing
@@ -53,18 +62,10 @@ type HeaderMenuProps = HeaderProps & {
  * The button isn't in the tab order: the grid's keyboard reaches the headers
  * (see TransactionsTable).
  */
-function HeaderMenu({
-  column,
-  label,
-  menuRef,
-  onDone,
-  sorted,
-  filtered,
-  children,
-}: HeaderMenuProps) {
+export function MenuButton({ anchor, face, name, menuRef, onDone, children }: MenuButtonProps) {
   const buttonId = useId();
   const menuId = useId();
-  const anchor = `--header-menu-${column}`;
+  const anchorName = `--header-menu-${anchor}`;
   const buttonRef = useRef<HTMLButtonElement>(null);
   const menuElementRef = useRef<HTMLDivElement>(null);
   useImperativeHandle(menuRef, () => ({
@@ -83,21 +84,23 @@ function HeaderMenu({
    * Keys in the menu, as in a menu rather than a form: Up and Down (and Home
    * and End) move through every choice, across the groups, without picking
    * one; Space picks or toggles it, as the inputs do themselves; Enter is
-   * done with the menu. Other inputs (a custom range's dates) keep their own keys.
+   * done with the menu. On an action (see ActionItem), Space and Enter do it,
+   * as a button's own keys. Other inputs (a custom range's dates) keep their
+   * own keys.
    */
   function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
     const menu = event.currentTarget;
+    const target = event.target as HTMLElement;
     if (event.key === "Enter") {
+      if (target instanceof HTMLButtonElement) return;
       event.preventDefault();
       menu.hidePopover();
       onDone?.();
       return;
     }
-    const choices = [
-      ...menu.querySelectorAll<HTMLInputElement>("input[type=radio], input[type=checkbox]"),
-    ];
+    const choices = [...menu.querySelectorAll<HTMLElement>(CHOICES)];
     // -1 for the menu itself, focused when opened by pointer.
-    const at = choices.indexOf(event.target as HTMLInputElement);
+    const at = choices.indexOf(target);
     if (at === -1 && event.target !== menu) return;
     const last = choices.length - 1;
     const to: Record<string, number> = {
@@ -137,7 +140,7 @@ function HeaderMenu({
         // padded. The header's type is inherited, so it's reset.
         className="peer m-0 mt-1 w-max max-w-96 overflow-y-auto rounded-md border border-line bg-surface p-0 py-1 text-sm font-normal whitespace-nowrap text-ink shadow-lg outline-none [inset:auto]"
         style={{
-          positionAnchor: anchor,
+          positionAnchor: anchorName,
           // Under the header, from its start; flipped to end at its end where
           // there's no room.
           positionArea: "block-end span-inline-end",
@@ -148,7 +151,7 @@ function HeaderMenu({
           maxHeight: "calc(100% - 0.25rem)",
         }}
       >
-        {children}
+        <MenuIdContext value={menuId}>{children}</MenuIdContext>
       </div>
       <button
         ref={buttonRef}
@@ -156,31 +159,68 @@ function HeaderMenu({
         type="button"
         tabIndex={-1}
         popoverTarget={menuId}
-        style={{ anchorName: anchor }}
-        // The label's colour stays the same whatever the column does: the
-        // arrow and the badge say it sorts or filters.
-        className="flex size-full min-w-0 cursor-default items-center gap-1.5 px-2 outline-none hover:bg-field hover:text-ink peer-open:bg-field peer-open:text-ink"
+        aria-label={name}
+        style={{ anchorName }}
+        className="flex size-full min-w-0 cursor-default items-center outline-none hover:bg-field hover:text-ink peer-open:bg-field peer-open:text-ink"
       >
-        <span className="truncate">{label}</span>
-        {sorted === "ascending" && <FiArrowUp aria-hidden className="shrink-0 stroke-3 text-ink" />}
-        {sorted === "descending" && (
-          <FiArrowDown aria-hidden className="shrink-0 stroke-3 text-ink" />
-        )}
-        {filtered && (
-          <span className="grid size-4 shrink-0 place-items-center rounded-full bg-lime text-ink-on-lime">
-            <FaFilter aria-hidden className="text-[8px]" />
-            <span className="sr-only">(filtered)</span>
-          </span>
-        )}
-        <FaCaretDown aria-hidden className="ml-auto shrink-0 text-[10px] text-ink-muted" />
+        {face}
       </button>
     </>
   );
 }
 
+type HeaderMenuProps = HeaderProps & {
+  /** Names the anchor the menu sits by: unique among the headers. */
+  column: string;
+  /** Set when the column sorts the transactions. */
+  sorted?: SortDirection;
+  /** Whether the menu's filters hide any transactions. */
+  filtered: boolean;
+  children: ReactNode;
+};
+
+/**
+ * A column header's contents that open a menu of ways to sort and filter by
+ * the column (see MenuButton). The header shows which way the column sorts,
+ * if it does, and whether it filters.
+ */
+function HeaderMenu({ column, label, sorted, filtered, children, ...menu }: HeaderMenuProps) {
+  return (
+    <MenuButton
+      {...menu}
+      anchor={column}
+      face={
+        // The label's colour stays the same whatever the column does: the
+        // arrow and the badge say it sorts or filters.
+        <span className="flex min-w-0 grow items-center gap-1.5 px-2">
+          <span className="truncate">{label}</span>
+          {sorted === "ascending" && (
+            <FiArrowUp aria-hidden className="shrink-0 stroke-3 text-ink" />
+          )}
+          {sorted === "descending" && (
+            <FiArrowDown aria-hidden className="shrink-0 stroke-3 text-ink" />
+          )}
+          {filtered && (
+            <span className="grid size-4 shrink-0 place-items-center rounded-full bg-lime text-ink-on-lime">
+              <FaFilter aria-hidden className="text-[8px]" />
+              <span className="sr-only">(filtered)</span>
+            </span>
+          )}
+          <FaCaretDown aria-hidden className="ml-auto shrink-0 text-[10px] text-ink-muted" />
+        </span>
+      }
+    >
+      {children}
+    </MenuButton>
+  );
+}
+
 /** Focuses the menu's current choice, as a select would, or its first. */
 function focusChoice(menu: HTMLElement) {
-  (menu.querySelector<HTMLInputElement>("input:checked") ?? menu.querySelector("input"))?.focus();
+  (
+    menu.querySelector<HTMLInputElement>("input:checked") ??
+    menu.querySelector<HTMLElement>(CHOICES)
+  )?.focus();
 }
 
 /** A titled group of a header menu's options. */
@@ -290,6 +330,37 @@ export function CheckboxItem({
       />
       <ItemText label={label} hint={hint} hintRoom={hintRoom} />
     </label>
+  );
+}
+
+/**
+ * One of a menu's actions: picking it does it and closes the menu, putting
+ * focus back where it was, as Escape does. `icon` is where the other items
+ * have their box, so the labels line up.
+ */
+export function ActionItem({
+  label,
+  icon: Icon,
+  onPick,
+}: {
+  label: string;
+  icon: IconType;
+  onPick: () => void;
+}) {
+  const menuId = use(MenuIdContext);
+  return (
+    <button
+      type="button"
+      popoverTarget={menuId}
+      popoverTargetAction="hide"
+      onClick={onPick}
+      // Not outline-none: it would also take the style focus-visible's outline draws with.
+      className={`${itemClass} w-full cursor-default text-start focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus`}
+      style={indent(0)}
+    >
+      <Icon aria-hidden className="size-4 shrink-0 text-ink-muted" />
+      <ItemText label={label} />
+    </button>
   );
 }
 

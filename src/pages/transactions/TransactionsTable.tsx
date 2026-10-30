@@ -50,7 +50,7 @@ import {
   type GridSelection,
   type Motion,
 } from "./grid.ts";
-import type { HeaderMenuHandle, HeaderProps } from "./HeaderMenu.tsx";
+import type { GridMenuProps, HeaderMenuHandle, HeaderProps } from "./HeaderMenu.tsx";
 import { isMarked, type MarkKind } from "./marks.ts";
 import { partFor } from "./prefix.ts";
 import {
@@ -169,6 +169,12 @@ export type Added = { id: string; column: number };
 type HeldCell = { id: string; column: number };
 
 /**
+ * A header cell: a column's, by the column's index, or the corner's, over
+ * the row numbers.
+ */
+type HeaderCell = number | "corner";
+
+/**
  * Rows being marked from the action bar (see `actionBar`), while the row
  * they're marked against is picked: the active cell's, once there is one.
  * At first there's none, so only the rows being marked stand out.
@@ -231,12 +237,15 @@ type TransactionsTableProps = {
   lastAdded?: Added | null;
   /**
    * The headers' menus, for sorting and filtering by their columns (see the
-   * columns' `headerMenu`): `sort` is how the rows are sorted, and `render`
-   * renders a header's menu. Without, the headers are plain labels.
+   * columns' `headerMenu`), and the corner's, for the table as a whole:
+   * `sort` is how the rows are sorted, `render` renders a column header's
+   * menu, and `corner` the corner's. Without, the headers are plain labels,
+   * and the corner is empty.
    */
   menus?: {
     sort: Sort;
     render: (column: MenuColumn, header: HeaderProps) => ReactNode;
+    corner: (header: GridMenuProps) => ReactNode;
   };
   /**
    * The action bar floating over the table (see ActionBar): `canUndo` and
@@ -316,10 +325,10 @@ function TransactionsTable({
   // Whether the edit has changed its cell: the action bar's undo and redo
   // depend on it (see EditHandle).
   const [editModified, setEditModified] = useState(false);
-  // The column whose header is active, while no cell is: from the keyboard,
-  // Up from the first row reaches the headers, where their menus open.
-  const [headerColumn, setHeaderColumn] = useState<number | null>(null);
-  const activeHeader = selection === null ? headerColumn : null;
+  // The header that's active, while no cell is: from the keyboard, Up from
+  // the first row reaches the headers, where their menus open.
+  const [headerCell, setHeaderCell] = useState<HeaderCell | null>(null);
+  const activeHeader = selection === null ? headerCell : null;
   // What the action bar's search looks for, and the pattern it searches
   // with (see search.ts): what it finds in the cells is highlighted, and
   // the bar goes from one cell it's found in to the next.
@@ -366,9 +375,9 @@ function TransactionsTable({
   }, [picking]);
   const gridId = useId();
   const cellId = (cell: CellPosition) => `${gridId}-${cell.row}-${cell.column}`;
-  const headerId = (column: number) => `${gridId}-header-${column}`;
+  const headerId = (header: HeaderCell) => `${gridId}-header-${header}`;
   // The header cells are always rendered, and line up with their columns'.
-  const headerOf = (column: number) => document.getElementById(headerId(column))!;
+  const headerOf = (header: HeaderCell) => document.getElementById(headerId(header))!;
   const template = gridTemplate(String(maxRowNumber).length);
 
   const gridRef = useRef<HTMLDivElement>(null);
@@ -377,8 +386,8 @@ function TransactionsTable({
   const inputRef = useRef<HTMLInputElement>(null);
   // What can be done to the edit from outside its cell.
   const editHandleRef = useRef<EditHandle>(null);
-  // The headers' menus, by column, while they have them (see `menus`).
-  const menusRef = useRef<(HeaderMenuHandle | null)[]>([]);
+  // The headers' menus, while they have them (see `menus`).
+  const menusRef = useRef(new Map<HeaderCell, HeaderMenuHandle | null>());
   const dragRef = useRef<Drag | null>(null);
 
   // The virtualizer measures scroll positions from the top of the page; it
@@ -436,8 +445,11 @@ function TransactionsTable({
     revealColumn(cell.column);
   }
 
-  /** Scrolls the page sideways, if it has to, so `column` is in view. */
-  function revealColumn(column: number) {
+  /**
+   * Scrolls the page sideways, if it has to, so `column` is in view: the
+   * corner's, the row numbers'.
+   */
+  function revealColumn(column: HeaderCell) {
     const box = headerOf(column).getBoundingClientRect();
     const width = document.documentElement.clientWidth;
     // In whole pixels, rounded so all of the column comes into view: WebKit
@@ -454,11 +466,11 @@ function TransactionsTable({
     select(collapsed(cell), cell);
   }
 
-  /** Makes `column`'s header active, in place of any cell. */
-  function activateHeader(column: number) {
+  /** Makes `header` active, in place of any cell. */
+  function activateHeader(header: HeaderCell) {
     setSelection(null);
-    setHeaderColumn(column);
-    revealColumn(column);
+    setHeaderCell(header);
+    revealColumn(header);
   }
 
   function select(next: GridSelection, show: CellPosition, scrollRows = 0) {
@@ -645,7 +657,7 @@ function TransactionsTable({
     });
     setSelection(null);
     // Nor is a header active, though one may have been last.
-    setHeaderColumn(null);
+    setHeaderCell(null);
     focusGrid();
   }
 
@@ -797,35 +809,38 @@ function TransactionsTable({
   }
 
   /**
-   * Keys on an active header: Left and Right (and Home and End) move along
-   * the headers, Down goes back to the first row, and Enter, Space or
-   * Alt+Down open the column's menu, while the headers have them.
+   * Keys on an active header: Left and Right move along the headers, Home
+   * and End to the first and last column's, Down goes back to the first row
+   * (the first column's, from the corner), and Enter, Space or Alt+Down open
+   * the header's menu, while the headers have them. The corner is only
+   * reached while it has a menu: Left from the first column's.
    */
-  function handleHeaderKey(event: KeyboardEvent, column: number) {
+  function handleHeaderKey(event: KeyboardEvent, header: HeaderCell) {
     const last = columns.length - 1;
-    const along: Record<string, number> = {
-      ArrowLeft: column - 1,
-      ArrowRight: column + 1,
+    const leftmost: HeaderCell = menus ? "corner" : 0;
+    const along: Record<string, HeaderCell> = {
+      ArrowLeft: header === "corner" || header === 0 ? leftmost : header - 1,
+      ArrowRight: header === "corner" ? 0 : Math.min(header + 1, last),
       Home: 0,
       End: last,
     };
     if (Object.hasOwn(along, event.key)) {
       event.preventDefault();
-      const next = Math.min(Math.max(along[event.key]!, 0), last);
-      setHeaderColumn(next);
+      const next = along[event.key]!;
+      setHeaderCell(next);
       revealColumn(next);
     } else if (
       event.key === "Enter" ||
       event.key === " " ||
       (event.key === "ArrowDown" && event.altKey)
     ) {
-      const menu = menusRef.current[column];
+      const menu = menusRef.current.get(header);
       if (!menu) return;
       event.preventDefault();
       menu.open();
     } else if (event.key === "ArrowDown") {
       event.preventDefault();
-      leaveHeader(column);
+      leaveHeader(header === "corner" ? 0 : header);
     }
   }
 
@@ -931,13 +946,13 @@ function TransactionsTable({
   }
 
   /** A press on a header makes it active; on its button, the browser also opens its menu. */
-  function handleHeaderPress(column: number, event: MouseEvent) {
+  function handleHeaderPress(header: HeaderCell, event: MouseEvent) {
     if (event.button !== 0) return;
     // Focus stays on the grid, so the keyboard carries on from the header.
     event.preventDefault();
     // Moving focus here first ends any edit, submitting it.
     focusGrid();
-    activateHeader(column);
+    activateHeader(header);
   }
 
   /** `at` is where in the cell's edit text it was pressed (see EditableCell). */
@@ -1031,6 +1046,13 @@ function TransactionsTable({
   const tint = "bg-focus/8";
   // As a range's cells are (see EditableCell).
   const pickedTint = "bg-focus/15";
+  // As the active cell's (see EditableCell).
+  const headerOutline = (header: HeaderCell) =>
+    activeHeader === header ? "outline-2 -outline-offset-2 outline-focus" : "";
+  /** Keeps `header`'s menu, while it has one, for the keyboard to open. */
+  const menuRef = (header: HeaderCell) => (menu: HeaderMenuHandle | null) => {
+    menusRef.current.set(header, menu);
+  };
 
   return (
     <>
@@ -1077,8 +1099,18 @@ function TransactionsTable({
               className="grid border-y border-line"
               style={{ gridTemplateColumns: template, height: HEADER_HEIGHT }}
             >
-              {/* Over the row numbers. */}
-              <div aria-hidden className="border-r border-line" />
+              {/* The row numbers' header, with the corner's menu. */}
+              <div
+                id={headerId("corner")}
+                role="columnheader"
+                onMouseDown={menus && ((event) => handleHeaderPress("corner", event))}
+                className={`flex items-center border-r border-line text-ink-muted ${headerOutline("corner")}`}
+              >
+                {menus?.corner({
+                  menuRef: menuRef("corner"),
+                  onDone: () => leaveHeader(0),
+                })}
+              </div>
               {group.headers.map((header, column) => {
                 const { headerMenu } = header.column.columnDef.meta!;
                 const label = <table.FlexRender header={header} />;
@@ -1091,16 +1123,12 @@ function TransactionsTable({
                     onMouseDown={(event) => handleHeaderPress(column, event)}
                     className={`flex items-center truncate border-r border-line font-medium text-ink-muted last:border-r-0 ${
                       columnSelected(column) ? tint : ""
-                    } ${menus ? "" : "px-2"} ${
-                      activeHeader === column ? "outline-2 -outline-offset-2 outline-focus" : ""
-                    }`}
+                    } ${menus ? "" : "px-2"} ${headerOutline(column)}`}
                   >
                     {menus
                       ? menus.render(headerMenu, {
                           label,
-                          menuRef: (menu) => {
-                            menusRef.current[column] = menu;
-                          },
+                          menuRef: menuRef(column),
                           onDone: () => leaveHeader(column),
                         })
                       : label}
@@ -1137,10 +1165,11 @@ function TransactionsTable({
                   top: item.start - scrollMargin,
                 }}
               >
-                {/* Screen readers have the row's place from aria-rowindex, and
-                  the keyboard selects a row with Home, then Shift+End. */}
+                {/* Its number heads the row for screen readers too, under the
+                  corner's header. The keyboard selects a row with Home, then
+                  Shift+End. */}
                 <div
-                  aria-hidden
+                  role="rowheader"
                   onMouseDown={(event) => handleRowPress(item.index, event)}
                   className={`truncate border-r border-b border-line px-2 text-right text-ink-muted tabular-nums ${
                     item.index === pickedRow ? pickedTint : rowSelected(item.index) ? tint : ""

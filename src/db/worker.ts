@@ -115,6 +115,15 @@ const api = {
   },
 
   /**
+   * The open database as an SQLite file, unsaved changes and all, for the
+   * user to keep. Unencrypted, and unlike `export`, nothing to do with saving.
+   */
+  async serialize() {
+    const sqlite3 = await sqlite3Promise;
+    return transfer(sqlite3.capi.sqlite3_js_db_export(openDb()));
+  },
+
+  /**
    * After uploading the last export: if it was `saved`, changes are counted
    * from it from now on. Returns whether there are unsaved changes.
    */

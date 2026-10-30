@@ -9,9 +9,11 @@ import { ClosedError } from "../../db/rpc.ts";
 import { today } from "../../lib/period.ts";
 import { loadSession } from "../../lib/session.ts";
 import { itFailsInFirefox } from "../../test/browsers.ts";
+import { nextDownload } from "../../test/download.ts";
 import { SOURCE_HASH_SQL, TOKEN, transactionId } from "../../test/fixtures.ts";
 import { holdNext } from "../../test/holdNext.ts";
 import { rect, renderApp } from "../../test/renderAuthPage.tsx";
+import { openSqliteFile } from "../../test/sqliteFile.ts";
 import { loggedIn, SHA_A, SHA_B, session, storedDatabase } from "../../test/storedDatabase.ts";
 
 vi.mock("../../api/database.ts", () => ({
@@ -336,12 +338,33 @@ describe("TransactionsPage", () => {
     await expect.poll(() => shown).toBe("reimbursable");
   });
 
-  it("unmarks a duplicate from the action bar, which an undo marks again", async () => {
-    await loggedIn(
-      await storedDatabase(`${TWO_TRANSACTIONS};
-        UPDATE transactions SET duplicate_of = '${NEWER}' WHERE id = '${OLDER}'`),
-    );
+  /** Café Lumen marked as a duplicate of Corner Market. */
+  const WITH_DUPLICATE = `${TWO_TRANSACTIONS};
+    UPDATE transactions SET duplicate_of = '${NEWER}' WHERE id = '${OLDER}'`;
+
+  /** Shows the duplicates, from the table's menu. */
+  async function showDuplicates() {
+    await userEvent.click(page.getByRole("button", { name: "Table options" }));
+    await userEvent.click(page.getByRole("checkbox", { name: "Show duplicate transactions" }));
+    await userEvent.keyboard("{Escape}");
+  }
+
+  it("hides the duplicates until the table's menu shows them", async () => {
+    await loggedIn(await storedDatabase(WITH_DUPLICATE));
     await renderApp("/transactions");
+    await expect.element(page.getByRole("grid")).toBeVisible();
+    expect(columnTexts(COUNTERPARTY)).toEqual(["Corner Market"]);
+
+    await showDuplicates();
+
+    await expect.poll(() => columnTexts(COUNTERPARTY)).toEqual(["Corner Market", "Café Lumen"]);
+  });
+
+  it("unmarks a duplicate from the action bar, which an undo marks again", async () => {
+    await loggedIn(await storedDatabase(WITH_DUPLICATE));
+    await renderApp("/transactions");
+    await expect.element(page.getByRole("grid")).toBeVisible();
+    await showDuplicates();
     const remarks = await cellOf("Café Lumen", REMARKS);
     await expect.element(remarks).toHaveTextContent("Duplicate of transaction 1.");
     await userEvent.click(page.getByText("Café Lumen").shown());
@@ -352,6 +375,25 @@ describe("TransactionsPage", () => {
     await expect.element(saveButton()).toBeInTheDocument();
     await userEvent.keyboard("{Control>}z{/Control}");
     await expect.element(remarks).toHaveTextContent("Duplicate of transaction 1.");
+  });
+
+  it("exports the database as an SQLite file, unsaved changes too, from the table's menu", async () => {
+    await opened();
+    await editCounterparty("Corner Market", "Corner Shop");
+    const downloaded = nextDownload();
+
+    await userEvent.click(page.getByRole("button", { name: "Table options" }));
+    await userEvent.click(page.getByRole("button", { name: "Export as SQLite database" }));
+
+    const { name, bytes } = await downloaded;
+    expect(name).toBe(`spendy-${today()}.sqlite`);
+    const exported = await openSqliteFile(bytes);
+    expect(
+      exported.selectValues(`SELECT counterparty FROM transactions ORDER BY sort_key`),
+    ).toEqual(["Café Lumen", "Corner Shop"]);
+    exported.close();
+    // Exporting isn't saving.
+    await expect.element(saveButton()).toHaveAccessibleName("Save");
   });
 
   it("finds a transaction from the action bar's search, to edit it there", async () => {
@@ -647,6 +689,41 @@ describe("TransactionsPage", () => {
       await pick("Counterparty", "radio", "Z to A");
       await pick("Counterparty", "radio", "A to Z");
       await expect.poll(counterparties).toEqual(["Corner Market", "Zest Café"]);
+    });
+
+    /** Exports CSV from the table's menu, giving the file's name and text, byte order mark and all. */
+    async function exportCsv() {
+      const downloaded = nextDownload();
+      await userEvent.click(page.getByRole("button", { name: "Table options" }));
+      await userEvent.click(page.getByRole("button", { name: "Export as CSV" }));
+      const { name, bytes } = await downloaded;
+      return { name, text: new TextDecoder("utf-8", { ignoreBOM: true }).decode(bytes) };
+    }
+
+    it("exports the transactions as CSV, in the order they're shown", async () => {
+      await opened();
+      await pick("Counterparty", "radio", "A to Z");
+      await expect.poll(counterparties).toEqual(["Café Lumen", "Corner Market"]);
+
+      const { name, text } = await exportCsv();
+
+      expect(name).toBe(`spendy-transactions-${today()}.csv`);
+      expect(text).toBe(
+        "﻿Date,Time,Account,Counterparty,Category,Currency,Amount,Remarks\r\n" +
+          "2026-10-01,,Everyday Checking,Café Lumen,,USD,-5.00,\r\n" +
+          "2026-10-09,,Everyday Checking,Corner Market,Groceries,USD,-46.20,\r\n",
+      );
+    });
+
+    it("leaves the hidden transactions out of the CSV", async () => {
+      await loggedIn(await storedDatabase(WITH_DUPLICATE));
+      await renderApp("/transactions");
+      await expect.element(page.getByText("Corner Market").shown()).toBeVisible();
+
+      const { text } = await exportCsv();
+
+      expect(text).toContain("Corner Market");
+      expect(text).not.toContain("Café Lumen");
     });
 
     it("keeps an edited row the filters would hide until the view changes", async () => {
