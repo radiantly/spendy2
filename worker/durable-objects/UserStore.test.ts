@@ -292,6 +292,63 @@ describe("UserStore", () => {
         });
       });
     });
+
+    describe("session order", () => {
+      // As many as the limit allows, newest first. Stored directly: logging in
+      // for each would be slow.
+      const sessions = Array.from({ length: env.MAX_SESSIONS_PER_USER }, () => crypto.randomUUID());
+      // Where the older half starts: a session from here on is moved to the
+      // front when used.
+      const olderHalf = Math.ceil(env.MAX_SESSIONS_PER_USER / 2);
+
+      /** Runs `fn` in alice's store, with `sessions` logged in. */
+      function withSessions<R>(fn: (instance: UserStore, state: DurableObjectState) => Promise<R>) {
+        return runInDurableObject(env.USER.getByName("alice"), (instance: UserStore, state) => {
+          state.storage.kv.put("ACTIVE_SESSIONS", new Set(sessions));
+          return fn(instance, state);
+        });
+      }
+
+      const storedSessions = (state: DurableObjectState) => [
+        ...(state.storage.kv.get<Set<string>>("ACTIVE_SESSIONS") ?? []),
+      ];
+
+      const uses: [string, (instance: UserStore, sessionId: string) => Promise<unknown>][] = [
+        [
+          "an upload",
+          (instance, sessionId) => instance.uploadDatabase(sessionId, streamOf(blob(8)), null),
+        ],
+        ["a download", (instance, sessionId) => instance.downloadDatabase(sessionId, null)],
+      ];
+
+      it.each(uses)("keeps the order on %s by a session in the newer half", async (_name, use) => {
+        await withSessions(async (instance, state) => {
+          await use(instance, sessions[olderHalf - 1]!);
+          expect(storedSessions(state)).toEqual(sessions);
+        });
+      });
+
+      it.each(uses)("moves a session in the older half to the front on %s", async (_name, use) => {
+        await withSessions(async (instance, state) => {
+          const used = sessions[olderHalf]!;
+          await use(instance, used);
+          expect(storedSessions(state)).toEqual([used, ...sessions.filter((id) => id !== used)]);
+        });
+      });
+
+      it("keeps a used session over an unused newer one at the next login", async () => {
+        await registerUser("alice");
+        const used = sessions.at(-1)!;
+        await withSessions((instance) => instance.downloadDatabase(used, null));
+
+        await loginToken("alice");
+
+        await runInDurableObject(env.USER.getByName("alice"), (_instance, state) => {
+          expect(storedSessions(state)).toContain(used);
+          expect(storedSessions(state)).not.toContain(sessions.at(-2));
+        });
+      });
+    });
   });
 
   describe("logout", () => {
@@ -310,7 +367,7 @@ describe("UserStore", () => {
     it("does not accept a session evicted by the session limit", async () => {
       await registerUser("alice");
       const stub = env.USER.getByName("alice");
-      // As many as the limit allows, oldest first, so the next login is one
+      // As many as the limit allows, newest first, so the next login is one
       // too many. Stored directly: logging in for each would be slow.
       const earlier = Array.from({ length: env.MAX_SESSIONS_PER_USER }, () => crypto.randomUUID());
       await runInDurableObject(stub, (_instance, state) => {
@@ -320,12 +377,12 @@ describe("UserStore", () => {
       const latest = atob(await loginToken("alice")).split(":")[1]!;
 
       await runInDurableObject(stub, async (instance) => {
-        expect(await instance.logout(earlier[0]!)).toEqual({
+        expect(await instance.logout(earlier.at(-1)!)).toEqual({
           success: false,
           code: "UNAUTHORIZED",
         });
         // Only the oldest.
-        expect(await instance.logout(earlier[1]!)).toEqual({ success: true });
+        expect(await instance.logout(earlier.at(-2)!)).toEqual({ success: true });
         expect(await instance.logout(latest)).toEqual({ success: true });
       });
     });

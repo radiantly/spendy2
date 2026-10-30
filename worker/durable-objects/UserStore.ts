@@ -98,14 +98,12 @@ export class UserStore extends DurableObject<Env> {
     // get active sessions
     const sessions = this.getKv("ACTIVE_SESSIONS") ?? new Set();
     const sessionId = crypto.randomUUID();
-    sessions.add(sessionId);
 
-    // delete oldest session if it has crossed MAX_SESSIONS_PER_USER
-    for (const session of sessions) {
-      if (sessions.size <= this.env.MAX_SESSIONS_PER_USER) break;
-      sessions.delete(session);
-    }
-    this.putKv("ACTIVE_SESSIONS", sessions);
+    // sessions are ordered by recency, where the first is the newest
+    this.putKv(
+      "ACTIVE_SESSIONS",
+      new Set([sessionId, ...sessions.values().take(this.env.MAX_SESSIONS_PER_USER - 1)]),
+    );
 
     return { success: true, sessionId };
   }
@@ -117,13 +115,26 @@ export class UserStore extends DurableObject<Env> {
     return { success: true };
   }
 
+  private isActiveSession(sessionId: string) {
+    // get active sessions and check for sessionId
+    const sessions = this.getKv("ACTIVE_SESSIONS") ?? new Set();
+    if (!sessions.has(sessionId)) return false;
+
+    // the sessions set is roughly ordered by recency
+    // make sure that this session is not in danger of being evicted
+    const sessionIdx = [...sessions].indexOf(sessionId);
+    if (sessionIdx >= this.env.MAX_SESSIONS_PER_USER / 2)
+      this.putKv("ACTIVE_SESSIONS", new Set([sessionId, ...sessions]));
+
+    return true;
+  }
+
   async uploadDatabase(
     sessionId: string,
     stream: ReadableStream<Uint8Array>,
     current_hash: string | null,
   ): Promise<UploadDatabaseResponse> {
-    const sessions = this.getKv("ACTIVE_SESSIONS") ?? new Set();
-    if (!sessions.has(sessionId)) return { success: false, code: "UNAUTHORIZED" };
+    if (!this.isActiveSession(sessionId)) return { success: false, code: "UNAUTHORIZED" };
 
     const body = await new Response(stream).arrayBuffer();
     const header = databaseBlobSchema.safeDecode(body);
@@ -166,8 +177,7 @@ export class UserStore extends DurableObject<Env> {
     sessionId: string,
     current_hash: string | null,
   ): Promise<DownloadDatabaseResponse> {
-    const sessions = this.getKv("ACTIVE_SESSIONS") ?? new Set();
-    if (!sessions.has(sessionId)) return { success: false, code: "UNAUTHORIZED" };
+    if (!this.isActiveSession(sessionId)) return { success: false, code: "UNAUTHORIZED" };
 
     const current = this.getKv("DATABASE_SHA256");
     if (current === undefined) return { success: false, code: "NOT_FOUND" };
