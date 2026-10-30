@@ -76,6 +76,11 @@ type EditableCellProps = {
   id: string;
   /** What the cell shows. */
   display: string;
+  /**
+   * Shown after `display`, greyed and in italics, while the cell isn't
+   * edited (see the columns' `note`).
+   */
+  note?: string | null;
   align?: "end";
   tabular?: boolean;
   /** The text an edit starts with. Absent for read-only cells. */
@@ -103,6 +108,7 @@ type EditableCellProps = {
 function EditableCell({
   id,
   display,
+  note,
   align,
   tabular,
   editText,
@@ -159,6 +165,13 @@ function EditableCell({
       ) : (
         <div className="truncate">
           <span ref={textRef}>{display}</span>
+          {/* Outside the text, so a press on it is past the text's end. */}
+          {note && (
+            <span className="text-ink-muted italic">
+              {display && " "}
+              {note}
+            </span>
+          )}
         </div>
       )}
     </div>

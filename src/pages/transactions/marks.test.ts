@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ListedTransaction } from "../../db/queries/transactions.ts";
 import type { TransactionMark } from "../../db/transactions.ts";
-import { duplicateMarks, transferMarks } from "./marks.ts";
+import { duplicateMarks, marksNote, transferMarks } from "./marks.ts";
 
 function transaction(overrides: Partial<ListedTransaction> = {}): ListedTransaction {
   return {
@@ -181,5 +181,41 @@ describe("transferMarks", () => {
       transfer("A", "Savings"),
       transfer("B", "Checking"),
     ]);
+  });
+});
+
+describe("marksNote", () => {
+  // Only t2 is shown, as row 456.
+  const rowNumberOf = (id: string) => (id === "t2" ? 456 : undefined);
+
+  it("says nothing for a transaction that isn't marked", () => {
+    expect(marksNote(transaction(), rowNumberOf)).toBeNull();
+  });
+
+  it.each([
+    [4620, "Transfer from Savings."],
+    [-4620, "Transfer to Savings."],
+    // Neither in nor out, as if out.
+    [0, "Transfer to Savings."],
+  ])("says a transfer of %d is from or to the other side's account", (amount, note) => {
+    expect(marksNote(transaction({ amount, transfer_account: "Savings" }), rowNumberOf)).toBe(note);
+  });
+
+  it("says which row a duplicate's original is", () => {
+    expect(marksNote(transaction({ duplicate_of: "t2" }), rowNumberOf)).toBe(
+      "Duplicate of transaction 456.",
+    );
+  });
+
+  it("says a duplicate's original is hidden, when it isn't shown", () => {
+    expect(marksNote(transaction({ duplicate_of: "t3" }), rowNumberOf)).toBe(
+      "Duplicate of a hidden transaction.",
+    );
+  });
+
+  it("says both, the transfer first", () => {
+    expect(
+      marksNote(transaction({ transfer_account: "Savings", duplicate_of: "t2" }), rowNumberOf),
+    ).toBe("Transfer to Savings. Duplicate of transaction 456.");
   });
 });

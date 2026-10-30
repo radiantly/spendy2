@@ -1,8 +1,13 @@
 /**
  * The cache of what pages read from the database, with TanStack Query.
  */
-import { QueryClient } from "@tanstack/react-query";
+import { notifyManager, QueryClient } from "@tanstack/react-query";
 import type { Database } from "./database.ts";
+
+// What's on screen hears of a change to the cache before the screen is next
+// drawn, rather than in a task of its own: drawn in between, it showed what
+// the data was. An edit's cell showed its old text, until then.
+notifyManager.setScheduler(queueMicrotask);
 
 declare module "@tanstack/react-query" {
   interface Register {

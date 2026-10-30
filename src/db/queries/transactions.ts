@@ -7,7 +7,8 @@ import type { Amount } from "../../lib/money.ts";
 
 /**
  * The columns the transactions page shows. `amount` is in `decimals`, its
- * currency's stored_decimals, so the row is also its `Amount`.
+ * currency's stored_decimals, so the row is also its `Amount`. What it's
+ * marked as (see marks.ts) shows after its remarks.
  */
 export type TransactionRow = {
   id: string;
@@ -19,6 +20,8 @@ export type TransactionRow = {
   decimals: number;
   currency: string;
   remarks: string | null;
+  transfer_account: string | null;
+  duplicate_of: string | null;
 };
 
 /**
@@ -30,8 +33,6 @@ export type ListedTransaction = TransactionRow & {
   timestamp: number | null;
   /** Orders the transactions on a day after their times (see `newestFirst`). */
   sort_key: number;
-  transfer_account: string | null;
-  duplicate_of: string | null;
   /** Its amount in other currencies: `{ USD: { amount: -1090, decimals: 2 } }`. */
   conversions: Record<string, Amount>;
 };

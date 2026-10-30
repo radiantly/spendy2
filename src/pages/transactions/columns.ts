@@ -18,6 +18,7 @@ import {
   parseRemarks,
   type ParseResult,
 } from "./fields.ts";
+import { marksNote } from "./marks.ts";
 import type { MenuConfig } from "./menu.ts";
 import type { MenuColumn } from "./view.ts";
 
@@ -84,6 +85,12 @@ export type TransactionColumnMeta = {
   tabular?: boolean;
   /** What the cell shows. */
   display: (row: TransactionRow) => string;
+  /**
+   * What the cell shows after that, greyed and only while it isn't edited:
+   * what's worked out about the row, rather than typed in. `rowNumberOf`
+   * gives a shown transaction's row number, by id.
+   */
+  note?: (row: TransactionRow, rowNumberOf: (id: string) => number | undefined) => string | null;
   /** Absent for read-only columns. */
   editor?: CellEditor;
   /** Its header's menu, for sorting or filtering the transactions by the column. */
@@ -182,6 +189,7 @@ export const columns = helper.columns([
       track: "minmax(8rem, 2.5fr)",
       headerMenu: "remarks",
       display: (row) => row.remarks ?? "",
+      note: marksNote,
       editor: {
         field: "remarks",
         editText: (row) => row.remarks ?? "",

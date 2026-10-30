@@ -1,8 +1,9 @@
 /**
  * What marking transactions as duplicates or as a transfer sets (see
- * `markTransactions`): which transactions change, and to what.
+ * `markTransactions`): which transactions change, and to what. And what a
+ * transaction's remarks say it's marked as.
  */
-import type { ListedTransaction } from "../../db/queries/transactions.ts";
+import type { ListedTransaction, TransactionRow } from "../../db/queries/transactions.ts";
 import type { TransactionMark, Transactions } from "../../db/transactions.ts";
 
 /** What transactions are marked as: duplicates of another, or a transfer with another. */
@@ -94,4 +95,28 @@ export function transferMarks(marked: TransferSide, picked: TransferSide): Trans
       ? []
       : [{ id: side.id, field: "transfer_account", value: other.account_name }],
   );
+}
+
+/**
+ * What `row` is marked as, for its remarks cell to say after its remarks:
+ * "Transfer from Savings." for money in, or "to" for money out, and
+ * "Duplicate of transaction 3." by the original's row number, if it's shown
+ * (`rowNumberOf` gives it, by id). Null if it's neither.
+ */
+export function marksNote(
+  { amount, transfer_account, duplicate_of }: TransactionRow,
+  rowNumberOf: (id: string) => number | undefined,
+): string | null {
+  const notes: string[] = [];
+  if (transfer_account !== null)
+    notes.push(`Transfer ${amount > 0 ? "from" : "to"} ${transfer_account}.`);
+  if (duplicate_of !== null) {
+    const number = rowNumberOf(duplicate_of);
+    notes.push(
+      number === undefined
+        ? "Duplicate of a hidden transaction."
+        : `Duplicate of transaction ${number}.`,
+    );
+  }
+  return notes.length === 0 ? null : notes.join(" ");
 }

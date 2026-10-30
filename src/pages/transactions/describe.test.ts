@@ -19,6 +19,8 @@ const row = (overrides: Partial<TransactionRow> = {}): TransactionRow => ({
   decimals: 2,
   currency: "USD",
   remarks: null,
+  transfer_account: null,
+  duplicate_of: null,
   ...overrides,
 });
 const CONTEXT = {

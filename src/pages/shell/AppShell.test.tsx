@@ -314,6 +314,28 @@ describe("TransactionsPage", () => {
     ).toEqual([{ counterparty: "Corner Shop" }]);
   });
 
+  it("shows an edited cell's new text at once, editing on into an empty cell below", async () => {
+    await opened();
+    // An edit before, so there's already one to undo, and unsaved changes.
+    await editCounterparty("Café Lumen", "Café Lune");
+    const remarks = await cellOf("Corner Market", REMARKS);
+    // Empty, it's edited straight away, as Café Lumen's below it will be.
+    await userEvent.click(remarks);
+    await page.getByRole("textbox").fill("reimbursable");
+
+    // What the cell shows once Enter's been handled, before the tasks it
+    // queued run: what the screen could show next.
+    let shown: string | null = null;
+    window.addEventListener(
+      "keydown",
+      () => setTimeout(() => (shown = remarks.element().textContent)),
+      { capture: true, once: true },
+    );
+    await userEvent.keyboard("{Enter}");
+
+    await expect.poll(() => shown).toBe("reimbursable");
+  });
+
   it("keeps the changes unsaved when saving conflicts", async () => {
     await loggedIn(await storedDatabase(TWO_TRANSACTIONS));
     vi.mocked(uploadDatabase).mockResolvedValue({ success: false, code: "CONFLICT" });

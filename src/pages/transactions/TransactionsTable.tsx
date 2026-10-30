@@ -3,6 +3,7 @@ import {
   useEffectEvent,
   useId,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type KeyboardEvent,
@@ -279,6 +280,13 @@ function TransactionsTable({
   const table = useTable({ features, columns, data: rows });
   const leafColumns = table.getAllLeafColumns();
   const size = { rows: rows.length, columns: columns.length };
+  // The rows' numbers, by id, for the notes about others (see the columns'
+  // `note`): counted once one's asked for, and again only for other rows.
+  const rowNumberOf = useMemo(() => {
+    let numbers: Map<string, number> | undefined;
+    return (id: string) =>
+      (numbers ??= new Map(rows.map((row, index) => [row.id, index + 1]))).get(id);
+  }, [rows]);
   // The rows can change under the selection, so it's kept to the cells there are.
   const [unclamped, setSelection] = useState<GridSelection | null>(null);
   const selection = unclamped && clampSelection(unclamped, size);
@@ -440,8 +448,9 @@ function TransactionsTable({
   }
 
   /**
-   * Whether `cell` can be edited and shows nothing. (What it edits can be
-   * more: an amount too small for its currency's usual decimals.)
+   * Whether `cell` can be edited and shows nothing, but for a note (see the
+   * columns' `note`). (What it edits can be more: an amount too small for
+   * its currency's usual decimals.)
    */
   function isEmpty(cell: CellPosition) {
     const meta = columns[cell.column]!.meta!;
@@ -1060,6 +1069,7 @@ function TransactionsTable({
                       key={leafColumn.id}
                       id={cellId(position)}
                       display={meta.display(row)}
+                      note={meta.note?.(row, rowNumberOf)}
                       align={meta.align}
                       tabular={meta.tabular}
                       editText={editText}

@@ -50,6 +50,8 @@ function makeRows(count: number): TransactionRow[] {
     ...amountOf(i),
     currency: "USD",
     remarks: null,
+    transfer_account: null,
+    duplicate_of: null,
   }));
 }
 
@@ -500,6 +502,69 @@ describe("TransactionsTable", () => {
       await activate("Corner Market", AMOUNT);
 
       expect(amountShown("Corner Market")).toBe("$1,234.50");
+    });
+  });
+
+  describe("the note after the remarks", () => {
+    /** The rows, with `marks` set on some of them, by index. */
+    const marked = (marks: Record<number, Partial<TransactionRow>>) =>
+      rows.map((row, index) => ({ ...row, ...marks[index] }));
+    const text = (value: string) => page.getByText(value, { exact: true });
+    const remarksShown = (counterparty: string) =>
+      cellOf(counterparty, REMARKS).element().textContent;
+    // Shop 1's money in, and Shop 2's out.
+    const transfers = () =>
+      marked({
+        1: { remarks: "Refund", transfer_account: "Savings" },
+        2: { transfer_account: "Savings" },
+      });
+
+    it("says which way a transfer went, greyed and in italics, after the remarks", async () => {
+      await render(table(CATEGORIES, transfers()));
+
+      expect(remarksShown("Shop 1")).toBe("Refund Transfer from Savings.");
+      expect(remarksShown("Shop 2")).toBe("Transfer to Savings.");
+      const styleOf = (value: string) => {
+        const { color, fontStyle } = getComputedStyle(text(value).element());
+        return { color, fontStyle };
+      };
+      const muted = colorOfClass("text-ink-muted");
+      expect(styleOf("Transfer from Savings.")).toEqual({ color: muted, fontStyle: "italic" });
+      expect(styleOf("Refund").color).not.toBe(muted);
+      expect(styleOf("Refund").fontStyle).toBe("normal");
+    });
+
+    it("says which row a duplicate's original is, as they're numbered, or that it's hidden", async () => {
+      // Shop 3 is a duplicate of Shop 1, row 2.
+      const shown = marked({ 3: { duplicate_of: "t1" } });
+      const screen = await render(table(CATEGORIES, shown));
+      expect(remarksShown("Shop 3")).toBe("Duplicate of transaction 2.");
+
+      await screen.rerender(table(CATEGORIES, shown.slice(1)));
+      expect(remarksShown("Shop 3")).toBe("Duplicate of transaction 1.");
+      await screen.rerender(table(CATEGORIES, shown.slice(2)));
+      expect(remarksShown("Shop 3")).toBe("Duplicate of a hidden transaction.");
+    });
+
+    it("goes while the remarks are edited, from their end when it's pressed", async () => {
+      await render(table(CATEGORIES, transfers()));
+      await makeActive("Shop 1", REMARKS);
+
+      await userEvent.click(text("Transfer from Savings."));
+
+      await expect.element(input()).toHaveValue("Refund");
+      expect(textSelection()).toEqual([6, 6]);
+      await expect.element(text("Transfer from Savings.")).not.toBeInTheDocument();
+    });
+
+    it("leaves a cell with only a note edited at once when pressed, as an empty one is", async () => {
+      await render(table(CATEGORIES, transfers()));
+
+      await userEvent.click(text("Transfer to Savings."));
+
+      await expect.element(input()).toHaveFocus();
+      expect(input().element()).toHaveProperty("value", "");
+      await expect.element(text("Transfer to Savings.")).not.toBeInTheDocument();
     });
   });
 
