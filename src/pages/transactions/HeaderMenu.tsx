@@ -180,6 +180,40 @@ type HeaderMenuProps = HeaderProps & {
 };
 
 /**
+ * What a column's header shows (see HeaderMenu): its label, which way the
+ * column sorts, if it does, and whether it filters, with a caret for the
+ * menu.
+ */
+export function HeaderFace({
+  label,
+  sorted,
+  filtered,
+}: {
+  label: ReactNode;
+  sorted?: SortDirection;
+  filtered: boolean;
+}) {
+  return (
+    // The label's colour stays the same whatever the column does: the
+    // arrow and the badge say it sorts or filters.
+    <span className="flex min-w-0 grow items-center gap-1.5 px-2">
+      <span className="truncate">{label}</span>
+      {sorted === "ascending" && <FiArrowUp aria-hidden className="shrink-0 stroke-3 text-ink" />}
+      {sorted === "descending" && (
+        <FiArrowDown aria-hidden className="shrink-0 stroke-3 text-ink" />
+      )}
+      {filtered && (
+        <span className="grid size-4 shrink-0 place-items-center rounded-full bg-lime text-ink-on-lime">
+          <FaFilter aria-hidden className="text-[8px]" />
+          <span className="sr-only">(filtered)</span>
+        </span>
+      )}
+      <FaCaretDown aria-hidden className="ml-auto shrink-0 text-[10px] text-ink-muted" />
+    </span>
+  );
+}
+
+/**
  * A column header's contents that open a menu of ways to sort and filter by
  * the column (see MenuButton). The header shows which way the column sorts,
  * if it does, and whether it filters.
@@ -189,26 +223,7 @@ function HeaderMenu({ column, label, sorted, filtered, children, ...menu }: Head
     <MenuButton
       {...menu}
       anchor={column}
-      face={
-        // The label's colour stays the same whatever the column does: the
-        // arrow and the badge say it sorts or filters.
-        <span className="flex min-w-0 grow items-center gap-1.5 px-2">
-          <span className="truncate">{label}</span>
-          {sorted === "ascending" && (
-            <FiArrowUp aria-hidden className="shrink-0 stroke-3 text-ink" />
-          )}
-          {sorted === "descending" && (
-            <FiArrowDown aria-hidden className="shrink-0 stroke-3 text-ink" />
-          )}
-          {filtered && (
-            <span className="grid size-4 shrink-0 place-items-center rounded-full bg-lime text-ink-on-lime">
-              <FaFilter aria-hidden className="text-[8px]" />
-              <span className="sr-only">(filtered)</span>
-            </span>
-          )}
-          <FaCaretDown aria-hidden className="ml-auto shrink-0 text-[10px] text-ink-muted" />
-        </span>
-      }
+      face={<HeaderFace label={label} sorted={sorted} filtered={filtered} />}
     >
       {children}
     </MenuButton>

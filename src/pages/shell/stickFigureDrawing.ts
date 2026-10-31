@@ -14,9 +14,9 @@ export const HEAD_VIEW: Box = { x: 338, y: 139, width: 125, height: 129 };
 
 /**
  * The strokes' width, in the drawing's units: drawn at 10, which is about
- * 4.4px with the head the avatar's size, and 1px thinner here.
+ * 4.4px with the head the avatar's size, and about 2.4px here.
  */
-export const STROKE_WIDTH = 7.75;
+export const STROKE_WIDTH = 5.4;
 
 /** The circle inside the drawn head, which the head's filled with, in the drawing's units. */
 const HEAD = { cx: 400.4, cy: 203.2, r: 52 };

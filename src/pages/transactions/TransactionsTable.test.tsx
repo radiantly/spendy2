@@ -16,7 +16,8 @@ import type { Currency, EditedCell, TransactionRow } from "../../db/queries/tran
 import { mouse, pointIn } from "../../test/mouse.ts";
 import ActionBar from "./ActionBar.tsx";
 import type { MarkKind } from "./marks.ts";
-import TransactionsTable, { ROW_HEIGHT, type AddAt, type Added } from "./TransactionsTable.tsx";
+import { ROW_HEIGHT } from "./tableLayout.ts";
+import TransactionsTable, { type AddAt, type Added } from "./TransactionsTable.tsx";
 
 const ROW_COUNT = 100_000;
 const CATEGORIES = ["Dining out", "Groceries"];

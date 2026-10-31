@@ -6,7 +6,7 @@ import { deriveKek } from "../../lib/kek.ts";
 import { clearSession, loadSession, saveSession } from "../../lib/session.ts";
 import { loadPasswordStrengthEstimator } from "../../lib/passwordStrength.ts";
 import { EXPORT_KEY, TOKEN } from "../../test/fixtures.ts";
-import { rect, renderApp, visible } from "../../test/renderAuthPage.tsx";
+import { pageWidth, rect, renderApp, visible } from "../../test/renderAuthPage.tsx";
 
 vi.mock("../../api/auth.ts", () => ({
   loginUser: vi.fn(),
@@ -416,7 +416,7 @@ describe("layout", () => {
     expect(advice.element().scrollWidth).toBeGreaterThan(advice.element().clientWidth);
     const card = screen.getByRole("heading", { level: 2 }).element().closest("section")!;
     expect(card.scrollWidth).toBe(card.clientWidth);
-    expect(document.documentElement.scrollWidth).toBe(document.documentElement.clientWidth);
+    expect(document.documentElement.scrollWidth).toBe(pageWidth());
   });
 
   it("removes the inactive form from the layout on mobile", async () => {

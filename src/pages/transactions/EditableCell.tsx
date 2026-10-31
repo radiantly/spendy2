@@ -20,6 +20,7 @@ import { historyKey, type HistoryDirection } from "../../lib/historyKey.ts";
 import { defaultHighlight, menuItems, type MenuConfig, type MenuItem } from "./menu.ts";
 import { splitChange, type Part } from "./prefix.ts";
 import type { TextRange } from "./search.ts";
+import { Cell } from "./TableParts.tsx";
 
 /** The outcome of submitting an edit: accepted, or why not. */
 export type SubmitResult = { ok: true } | { ok: false; error: string };
@@ -148,22 +149,22 @@ function EditableCell({
   }
 
   return (
-    <div
+    <Cell
       id={id}
       role="gridcell"
       aria-selected={selected}
       aria-readonly={editText === undefined || undefined}
       onMouseDown={handleMouseDown}
+      align={align}
+      tabular={tabular}
       // An edited cell is a field, and its outline red while what's in it is
       // invalid. The field's background is the cell's: positioned content,
       // like the edit's inputs, is painted over the cell's outline.
-      className={`relative min-w-0 border-r border-b border-line px-2 last:border-r-0 ${tint} ${
-        editing ? "bg-surface" : ""
-      } ${
+      className={`relative ${tint} ${editing ? "bg-surface" : ""} ${
         active
           ? "outline-2 -outline-offset-2 outline-focus has-aria-[invalid=true]:outline-danger"
           : ""
-      } ${align === "end" ? "text-right" : ""} ${tabular ? "tabular-nums" : ""}`}
+      }`}
     >
       {editing ? (
         <CellInput {...editing} align={align} />
@@ -181,7 +182,7 @@ function EditableCell({
           )}
         </div>
       )}
-    </div>
+    </Cell>
   );
 }
 

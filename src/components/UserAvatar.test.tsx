@@ -2,7 +2,7 @@ import type { ComponentProps } from "react";
 import { describe, expect, it } from "vitest";
 import { render } from "vitest-browser-react";
 import { avatarColors, avatarSvg, expectAvatarColors } from "../test/avatar.ts";
-import { preferDark } from "../test/colorScheme.ts";
+import { preferDark } from "../test/media.ts";
 import UserAvatar from "./UserAvatar.tsx";
 
 /** Renders `username`'s avatar, read as `alt`, and returns its loaded image. */

@@ -35,3 +35,12 @@ export function visible(locator: Locator): Locator {
 export function rect(locator: Locator) {
   return locator.element().getBoundingClientRect();
 }
+
+/**
+ * The page's width: the window's, less the scrollbar's room where it's kept
+ * (see index.css), though there's nothing to scroll. (The root's
+ * clientWidth counts that room in Chromium while it's empty.)
+ */
+export function pageWidth() {
+  return document.documentElement.getBoundingClientRect().width;
+}

@@ -33,7 +33,9 @@ import {
 } from "./describe.ts";
 import { duplicateMarks, transferMarks, unmarks, type MarkKind } from "./marks.ts";
 import { newTransaction } from "./newTransaction.ts";
+import { TransactionsFrame } from "./TableParts.tsx";
 import TransactionsList from "./TransactionsList.tsx";
+import TransactionsLoader from "./TransactionsLoader.tsx";
 import TransactionsTable, {
   type Added,
   type AddAt,
@@ -90,12 +92,7 @@ function TransactionsPage() {
       </p>
     );
 
-  if (loaded === undefined)
-    return (
-      <p role="status" className="m-auto text-sm text-ink-muted">
-        Loading transactions…
-      </p>
-    );
+  if (loaded === undefined) return <TransactionsLoader message="Loading transactions…" />;
 
   const accounts = loaded.accounts.map(({ name }) => name);
   const categories = loaded.categories.map(({ name }) => name);
@@ -270,10 +267,7 @@ function TransactionsPage() {
   const showsTable = tableFits && (transactions.length > 0 || loaded.accounts.length > 0);
 
   return (
-    // With the table, the end of the page has room for the action bar
-    // floating over it, so the last rows can scroll out from under it.
-    <div className={`flex flex-col gap-4 ${showsTable ? "pb-28" : "pb-8"}`}>
-      <h1 className="px-4 font-display text-3xl font-bold tracking-tight lg:px-8">Transactions</h1>
+    <TransactionsFrame withTable={showsTable}>
       {!showsTable ? (
         transactions.length === 0 ? (
           <p className="px-4 text-ink-muted lg:px-8">No transactions yet.</p>
@@ -327,7 +321,7 @@ function TransactionsPage() {
           }}
         />
       )}
-    </div>
+    </TransactionsFrame>
   );
 }
 

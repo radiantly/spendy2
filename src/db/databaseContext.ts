@@ -31,6 +31,11 @@ export type DatabaseState =
 
 export type DatabaseContextValue = {
   state: DatabaseState;
+  /**
+   * When it began opening, as `performance.now()`: for a loader that waits
+   * on it, then on what's read from it, to carry on from where it was.
+   */
+  openingSince: number;
   /** Whether the database differs from the version last saved. */
   dirty: boolean;
   saving: boolean;

@@ -16,6 +16,13 @@ import { holdNext } from "../../test/holdNext.ts";
 import { rect, renderApp } from "../../test/renderAuthPage.tsx";
 import { openSqliteFile } from "../../test/sqliteFile.ts";
 import { loggedIn, SHA_A, SHA_B, session, storedDatabase } from "../../test/storedDatabase.ts";
+import {
+  loaderHeaderCells,
+  loaderShownRows,
+  loaderStatus,
+  loaderTable,
+} from "../../test/transactionsLoader.ts";
+import { loaderRowCount, MAX_ROWS, STEP } from "../transactions/loaderCells.ts";
 
 vi.mock("../../api/database.ts", () => ({
   downloadDatabase: vi.fn(),
@@ -1249,6 +1256,120 @@ describe("a version saved elsewhere", () => {
     const grid = page.getByRole("grid").element();
     const active = document.getElementById(grid.getAttribute("aria-activedescendant")!);
     expect(active?.textContent).toBe("Corner Market");
+  });
+});
+
+describe("loading the transactions", () => {
+  /** `count` transactions, at Shop 1 to Shop `count`. */
+  function manyTransactions(count: number) {
+    const rows = Array.from(
+      { length: count },
+      (
+        _,
+        at,
+      ) => `INSERT INTO transactions (sort_key, id, source, account_name, amount, currency, counterparty, category, naive_date)
+        VALUES (${at + 1}, '${transactionId(at + 1)}', ${SOURCE_HASH_SQL}, 'Everyday Checking', -100, 'USD', 'Shop ${at + 1}', NULL, '2026-10-01')`,
+    );
+    return `INSERT INTO accounts VALUES ('Everyday Checking', 'USD', 'Bank', NULL);
+      INSERT INTO sources (hash, remarks) VALUES (${SOURCE_HASH_SQL}, 'statement.csv');
+      ${rows.join(";\n")}`;
+  }
+
+  /** Logs in with `stored`, which downloads only once `finish` is called. */
+  async function downloadsWhenAsked(stored: Uint8Array<ArrayBuffer>) {
+    await loggedIn(stored);
+    let finish!: () => void;
+    vi.mocked(downloadDatabase).mockReturnValue(
+      new Promise((resolve) => {
+        finish = () => resolve({ success: true, blob: stored, sha256: SHA_A });
+      }),
+    );
+    return () => finish();
+  }
+
+  it("shows the loader while the database opens", async () => {
+    await downloadsWhenAsked(await storedDatabase(TWO_TRANSACTIONS));
+
+    await renderApp("/transactions");
+
+    await expect.element(loaderStatus()).toHaveTextContent("Opening your database…");
+    await expect.element(page.getByRole("heading", { name: "Transactions" })).toBeVisible();
+    await expect.poll(loaderShownRows).toBeGreaterThan(1);
+  });
+
+  it("carries the loader on while the transactions are read, without starting over", async () => {
+    const finish = await downloadsWhenAsked(await storedDatabase(TWO_TRANSACTIONS));
+    const read = holdNextQuery((sql) => sql === LIST_TRANSACTIONS);
+    await renderApp("/transactions");
+    await expect.poll(loaderShownRows).toBeGreaterThan(15);
+    const before = { rows: loaderShownRows(), at: performance.now() };
+
+    finish();
+
+    await expect.element(loaderStatus()).toHaveTextContent("Loading transactions…");
+    // On by as many rows as steps have passed, give or take one or two: not
+    // set back by however long the page took to render.
+    const passed = Math.floor((performance.now() - before.at) / STEP);
+    expect(loaderShownRows()).toBeGreaterThanOrEqual(Math.min(MAX_ROWS, before.rows + passed - 2));
+    await read.release();
+    await expect.element(page.getByText("Corner Market").shown()).toBeVisible();
+    expect(loaderStatus().query()).toBeNull();
+  });
+
+  it("carries the loader on from when the database began opening, for transactions opened while they're read", async () => {
+    const finish = await downloadsWhenAsked(await storedDatabase(TWO_TRANSACTIONS));
+    const read = holdNextQuery((sql) => sql === LIST_TRANSACTIONS);
+    await renderApp("/");
+    // The database has begun opening by now.
+    const opened = performance.now();
+    finish();
+    // Open, the transactions rendered hidden, waiting for their read.
+    await expect.element(loaderStatus()).not.toBeInTheDocument();
+    await new Promise((resolve) => setTimeout(resolve, 20 * STEP));
+
+    await userEvent.click(page.getByRole("link", { name: "Transactions" }));
+
+    await expect.element(loaderStatus()).toHaveTextContent("Loading transactions…");
+    const since = loaderRowCount(Math.floor((performance.now() - opened) / STEP));
+    expect(loaderShownRows()).toBeGreaterThanOrEqual(since - 2);
+    await read.release();
+  });
+
+  it("puts the table where the loader was: the heading and the header don't move", async () => {
+    // As many digits in the row numbers as the loader's.
+    const finish = await downloadsWhenAsked(await storedDatabase(manyTransactions(100)));
+    await renderApp("/transactions");
+    await expect.poll(loaderShownRows).toBeGreaterThan(1);
+    const boxes = (elements: Element[]) =>
+      elements.map((element) => {
+        const { left, top, width } = element.getBoundingClientRect();
+        return { left, top, width };
+      });
+    const heading = () => [page.getByRole("heading", { name: "Transactions" }).element()];
+    const loaderHeading = boxes(heading());
+    const loaderHeader = boxes(loaderHeaderCells());
+
+    finish();
+
+    await expect.element(page.getByText("Shop 100", { exact: true }).shown()).toBeVisible();
+    expect(boxes(heading())).toEqual(loaderHeading);
+    expect(boxes(page.getByRole("columnheader").elements())).toEqual(loaderHeader);
+  });
+
+  it("keeps the scrollbar's room, so the page growing long doesn't move it over", async () => {
+    await opened();
+
+    expect(getComputedStyle(document.documentElement).scrollbarGutter).toBe("stable");
+  });
+
+  it("only says the database is opening on the overview", async () => {
+    await downloadsWhenAsked(await storedDatabase(TWO_TRANSACTIONS));
+
+    await renderApp("/");
+
+    await expect.element(loaderStatus()).toHaveTextContent("Opening your database…");
+    expect(page.getByRole("heading", { name: "Transactions" }).query()).toBeNull();
+    expect(loaderTable()).toBeFalsy();
   });
 });
 

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi, type MockInstance } from "vitest"
 import { page, userEvent, type Locator } from "vitest/browser";
 import { downloadDatabase, downloadDatabaseIfChanged, uploadDatabase } from "../../api/database.ts";
 import { renderApp } from "../../test/renderAuthPage.tsx";
-import { rect } from "../../test/renderAuthPage.tsx";
+import { pageWidth, rect } from "../../test/renderAuthPage.tsx";
 import { itFailsInFirefox } from "../../test/browsers.ts";
 import { SOURCE_HASH_SQL, transactionId } from "../../test/fixtures.ts";
 import { holdNext } from "../../test/holdNext.ts";
@@ -803,7 +803,7 @@ describe("OverviewPage", () => {
       const left = rect(region("Spent")).left;
       const right = rect(region("Cash flow")).right;
       expect(right - left).toBe(1280 - 2 * 32);
-      expect(left).toBe(document.documentElement.clientWidth - right);
+      expect(left).toBe(pageWidth() - right);
     });
 
     it("interleaves the columns on a phone, within the screen", async () => {

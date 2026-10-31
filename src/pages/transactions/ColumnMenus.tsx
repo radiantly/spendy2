@@ -27,13 +27,14 @@ import HeaderMenu, {
   type GridMenuProps,
   type HeaderProps,
 } from "./HeaderMenu.tsx";
-import type {
-  FilterValues,
-  Flow,
-  MenuColumn,
-  SortColumn,
-  SortDirection,
-  TransactionsView,
+import {
+  sortedBy,
+  type FilterValues,
+  type Flow,
+  type MenuColumn,
+  type SortColumn,
+  type SortDirection,
+  type TransactionsView,
 } from "./view.ts";
 
 type MenuProps = {
@@ -70,6 +71,15 @@ export function ColumnMenu({ column, accounts, categories, values, ...props }: C
 }
 
 /**
+ * What the table's menu shows in the corner: dots, at the end, as the
+ * numbers below are, so the dots end where they do, as the icon has room
+ * either side of them.
+ */
+export function TableMenuFace() {
+  return <TbDots aria-hidden className="mr-1.5 ml-auto shrink-0 text-base" />;
+}
+
+/**
  * The menu in the corner over the row numbers, for the table as a whole.
  * `onExportDatabase` downloads the database as an SQLite file, and
  * `onExportCsv` the transactions shown as CSV.
@@ -86,14 +96,7 @@ export function TableMenu({
   onExportCsv: () => void;
 }) {
   return (
-    <MenuButton
-      {...header}
-      anchor="corner"
-      name="Table options"
-      // At the end, as the numbers below are: the dots end where they do,
-      // as the icon has room either side of them.
-      face={<TbDots aria-hidden className="mr-1.5 ml-auto shrink-0 text-base" />}
-    >
+    <MenuButton {...header} anchor="corner" name="Table options" face={<TableMenuFace />}>
       <MenuGroup title="Filter">
         <CheckboxItem
           label="Show duplicate transactions"
@@ -118,11 +121,6 @@ function hidesAny<T>(values: readonly T[], hidden: ReadonlySet<T>) {
   return values.some((value) => hidden.has(value));
 }
 
-/** The direction `column` sorts in, if it's the one that does. */
-function sortedBy(view: TransactionsView, column: SortColumn) {
-  return view.sort.column === column ? view.sort.direction : undefined;
-}
-
 /** "Show all" first, as it is to begin with. There's room to say what "Last year" is. */
 const DATE_FILTERS = [
   { id: "all", label: "Show all" },
@@ -141,7 +139,7 @@ function DateMenu({ header, view, onViewChange }: MenuProps) {
   const sortName = useId();
   const filterName = useId();
   const now = today();
-  const sorted = sortedBy(view, "date");
+  const sorted = sortedBy(view.sort, "date");
   const { dates } = view;
 
   const sortBy = (direction: SortDirection) =>
@@ -242,7 +240,7 @@ function TextSort({
   onViewChange,
 }: Omit<MenuProps, "header"> & { column: SortColumn }) {
   const name = useId();
-  const sorted = sortedBy(view, column);
+  const sorted = sortedBy(view.sort, column);
   const sortBy = (direction: SortDirection) =>
     onViewChange({ ...view, sort: { column, direction } });
 
@@ -277,7 +275,7 @@ function AccountMenu({
     <HeaderMenu
       {...header}
       column="account"
-      sorted={sortedBy(view, "account")}
+      sorted={sortedBy(view.sort, "account")}
       filtered={hidesAny(accounts, hidden)}
     >
       <TextSort column="account" view={view} onViewChange={onViewChange} />
@@ -313,7 +311,7 @@ function CounterpartyMenu({ header, view, onViewChange }: MenuProps) {
     <HeaderMenu
       {...header}
       column="counterparty"
-      sorted={sortedBy(view, "counterparty")}
+      sorted={sortedBy(view.sort, "counterparty")}
       filtered={false}
     >
       <TextSort column="counterparty" view={view} onViewChange={onViewChange} />
@@ -344,7 +342,7 @@ function CategoryMenu({
     <HeaderMenu
       {...header}
       column="category"
-      sorted={sortedBy(view, "category")}
+      sorted={sortedBy(view.sort, "category")}
       filtered={hidesAny(values, hidden)}
     >
       <TextSort column="category" view={view} onViewChange={onViewChange} />
@@ -510,7 +508,12 @@ function AmountMenu({
 
 function RemarksMenu({ header, view, onViewChange }: MenuProps) {
   return (
-    <HeaderMenu {...header} column="remarks" sorted={sortedBy(view, "remarks")} filtered={false}>
+    <HeaderMenu
+      {...header}
+      column="remarks"
+      sorted={sortedBy(view.sort, "remarks")}
+      filtered={false}
+    >
       <TextSort column="remarks" view={view} onViewChange={onViewChange} />
     </HeaderMenu>
   );

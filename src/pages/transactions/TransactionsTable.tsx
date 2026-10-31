@@ -63,24 +63,18 @@ import {
   type SearchDirection,
   type SearchQuery,
 } from "./search.ts";
+import {
+  CornerCell,
+  HeaderCell,
+  HeaderRow,
+  RowNumberCell,
+  TableFrame,
+  TableHeader,
+  TableRow,
+} from "./TableParts.tsx";
+import { gridTemplate, HEADER_HEIGHT, ROW_HEIGHT } from "./tableLayout.ts";
 import { useMouseDrag, type Point } from "./useMouseDrag.ts";
-import type { MenuColumn, Sort } from "./view.ts";
-
-/** Rows have a fixed height, so the virtualizer never has to measure them. */
-export const ROW_HEIGHT = 28;
-/** A row and the line above it, so the header has the same space inside as a row. */
-export const HEADER_HEIGHT = ROW_HEIGHT + 1;
-
-const COLUMN_TRACKS = columns.map((column) => column.meta!.track).join(" ");
-
-/**
- * The grid's tracks: the row numbers' first, as wide as `digits` of them
- * (tabular, so a `ch` each) with the cell's padding and line, then the
- * columns'.
- */
-function gridTemplate(digits: number) {
-  return `calc(${digits}ch + 1rem + 1px) ${COLUMN_TRACKS}`;
-}
+import { sortedBy, type MenuColumn, type Sort } from "./view.ts";
 
 const ARROWS: Record<string, Direction> = {
   ArrowUp: "up",
@@ -1056,7 +1050,7 @@ function TransactionsTable({
 
   return (
     <>
-      <div
+      <TableFrame
         ref={gridRef}
         role="grid"
         tabIndex={0}
@@ -1087,43 +1081,40 @@ function TransactionsTable({
           if (size.rows > 0) setSelection(collapsed({ row: 0, column: 0 }));
           else activateHeader(0);
         }}
-        className="cursor-default text-sm outline-none"
+        className="outline-none"
       >
-        <div role="rowgroup" className="sticky top-0 z-20 bg-canvas">
+        <TableHeader role="rowgroup">
           {table.getHeaderGroups().map((group) => (
-            <div
+            <HeaderRow
               key={group.id}
               ref={headerRowRef}
               role="row"
               aria-rowindex={1}
-              className="grid border-y border-line"
-              style={{ gridTemplateColumns: template, height: HEADER_HEIGHT }}
+              template={template}
             >
               {/* The row numbers' header, with the corner's menu. */}
-              <div
+              <CornerCell
                 id={headerId("corner")}
                 role="columnheader"
                 onMouseDown={menus && ((event) => handleHeaderPress("corner", event))}
-                className={`flex items-center border-r border-line text-ink-muted ${headerOutline("corner")}`}
+                className={headerOutline("corner")}
               >
                 {menus?.corner({
                   menuRef: menuRef("corner"),
                   onDone: () => leaveHeader(0),
                 })}
-              </div>
+              </CornerCell>
               {group.headers.map((header, column) => {
                 const { headerMenu } = header.column.columnDef.meta!;
                 const label = <table.FlexRender header={header} />;
                 return (
-                  <div
+                  <HeaderCell
                     key={header.id}
                     id={headerId(column)}
                     role="columnheader"
-                    aria-sort={menus?.sort.column === headerMenu ? menus.sort.direction : undefined}
+                    aria-sort={menus && sortedBy(menus.sort, headerMenu)}
                     onMouseDown={(event) => handleHeaderPress(column, event)}
-                    className={`flex items-center truncate border-r border-line font-medium text-ink-muted last:border-r-0 ${
-                      columnSelected(column) ? tint : ""
-                    } ${menus ? "" : "px-2"} ${headerOutline(column)}`}
+                    className={`${columnSelected(column) ? tint : ""} ${menus ? "" : "px-2"} ${headerOutline(column)}`}
                   >
                     {menus
                       ? menus.render(headerMenu, {
@@ -1132,12 +1123,12 @@ function TransactionsTable({
                           onDone: () => leaveHeader(column),
                         })
                       : label}
-                  </div>
+                  </HeaderCell>
                 );
               })}
-            </div>
+            </HeaderRow>
           ))}
-        </div>
+        </TableHeader>
 
         <div
           ref={bodyRef}
@@ -1149,16 +1140,13 @@ function TransactionsTable({
             const row = rows[item.index]!;
             const isEditingRow = editing?.cell.row === item.index;
             return (
-              <div
+              <TableRow
                 key={item.key}
                 role="row"
                 aria-rowindex={item.index + 2}
-                className={`absolute inset-x-0 grid leading-7 ${
-                  marked.has(row.id) ? "bg-amber/20" : ""
-                }`}
+                template={template}
+                className={`absolute inset-x-0 ${marked.has(row.id) ? "bg-amber/20" : ""}`}
                 style={{
-                  gridTemplateColumns: template,
-                  height: ROW_HEIGHT,
                   // Placed with top, not a transform: the edited cell's popups
                   // are anchored to it (see EditableCell), and Firefox places
                   // them wrongly against a transformed anchor.
@@ -1168,15 +1156,15 @@ function TransactionsTable({
                 {/* Its number heads the row for screen readers too, under the
                   corner's header. The keyboard selects a row with Home, then
                   Shift+End. */}
-                <div
+                <RowNumberCell
                   role="rowheader"
                   onMouseDown={(event) => handleRowPress(item.index, event)}
-                  className={`truncate border-r border-b border-line px-2 text-right text-ink-muted tabular-nums ${
+                  className={
                     item.index === pickedRow ? pickedTint : rowSelected(item.index) ? tint : ""
-                  }`}
+                  }
                 >
                   {item.index + 1}
-                </div>
+                </RowNumberCell>
                 {leafColumns.map((leafColumn, column) => {
                   const meta = leafColumn.columnDef.meta!;
                   const editor = meta.editor;
@@ -1232,14 +1220,14 @@ function TransactionsTable({
                     />
                   );
                 })}
-              </div>
+              </TableRow>
             );
           })}
           {area && ranged && (
             <RangeOutline area={area} template={template} picked={pickedRow !== null} />
           )}
         </div>
-      </div>
+      </TableFrame>
       {/* After the grid, so it's after it from the keyboard too. */}
       {actionBar?.render(barActions(actionBar))}
     </>

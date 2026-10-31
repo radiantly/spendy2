@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, onTestFinished, vi, type MockInstance
 import { render } from "vitest-browser-react";
 import { page, userEvent } from "vitest/browser";
 import { expectAvatarColors } from "../../test/avatar.ts";
-import { preferDark } from "../../test/colorScheme.ts";
+import { preferDark } from "../../test/media.ts";
 import { mouse } from "../../test/mouse.ts";
 import ProfileMenu from "./ProfileMenu.tsx";
 

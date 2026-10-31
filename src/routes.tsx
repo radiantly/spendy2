@@ -4,12 +4,18 @@ import AuthPage from "./pages/auth/AuthPage.tsx";
 import DocsPage from "./pages/docs/DocsPage.tsx";
 import OverviewPage from "./pages/overview/OverviewPage.tsx";
 import AppShell, { type ShellPage } from "./pages/shell/AppShell.tsx";
+import TransactionsLoader from "./pages/transactions/TransactionsLoader.tsx";
 import TransactionsPage from "./pages/transactions/TransactionsPage.tsx";
 
 /** The pages in the shell. It keeps them rendered, showing the one at the URL. */
 const shellPages: ShellPage[] = [
   { path: "/", element: <OverviewPage />, kind: "database" },
-  { path: "/transactions", element: <TransactionsPage />, kind: "database" },
+  {
+    path: "/transactions",
+    element: <TransactionsPage />,
+    kind: "database",
+    loading: <TransactionsLoader message="Opening your database…" />,
+  },
   { path: "/docs", element: <DocsPage />, kind: "public" },
 ];
 

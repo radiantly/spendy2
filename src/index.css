@@ -100,6 +100,15 @@
 @layer base {
   :root {
     color-scheme: light dark;
+    /* Where the transactions' table fits, the scrollbar's room is kept
+       whether there's anything to scroll or not, so a page growing long
+       enough to scroll (as the transactions do once they load) doesn't move
+       everything over, nor does moving from a short page to a long one.
+       Narrower, it's not: there it'd squeeze the header onto two lines in a
+       window whose scrollbars take room, and phones' scrollbars don't. */
+    @variant md {
+      scrollbar-gutter: stable;
+    }
   }
 
   body {

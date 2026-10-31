@@ -10,11 +10,17 @@ import { describeOpenError } from "./openError.ts";
 
 /**
  * A page in the shell, shown at `path`. A `database` page shows the user's
- * database: it's behind login, waits for the database to open, and is
- * rendered from the start so its data loads in the background. A `public`
- * page needs neither, and is rendered from its first visit.
+ * database: it's behind login, waits for the database to open, showing
+ * `loading` in its place meanwhile (or saying so), and is rendered from
+ * the start so its data loads in the background. A `public` page needs
+ * neither, and is rendered from its first visit.
  */
-export type ShellPage = { path: string; element: ReactNode; kind: "database" | "public" };
+export type ShellPage = {
+  path: string;
+  element: ReactNode;
+  kind: "database" | "public";
+  loading?: ReactNode;
+};
 
 /**
  * Layout for the app's pages: the header, and for a logged in user their
@@ -91,14 +97,17 @@ function DatabasePages({ pages }: { pages: readonly ShellPage[] }) {
   const { pathname } = useLocation();
   useHistoryKeys(state.status === "ready" ? state.history : null);
   // Opening the database only holds up its own pages.
-  const shown = pages.some(({ path }) => matchPath(path, pathname));
+  const shownPage = pages.find(({ path }) => matchPath(path, pathname));
+  const shown = shownPage !== undefined;
 
   if (state.status === "loading")
-    return shown ? (
-      <p role="status" className="m-auto text-sm text-ink-muted">
-        Opening your database…
-      </p>
-    ) : null;
+    return shown
+      ? (shownPage.loading ?? (
+          <p role="status" className="m-auto text-sm text-ink-muted">
+            Opening your database…
+          </p>
+        ))
+      : null;
 
   if (state.status === "error")
     return shown ? (

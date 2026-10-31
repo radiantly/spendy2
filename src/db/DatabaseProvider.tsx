@@ -55,6 +55,8 @@ function DatabaseProvider({
   children: ReactNode;
 }) {
   const [state, setState] = useState<DatabaseState>({ status: "loading" });
+  // It begins opening as it's first rendered: a new session gets a new provider.
+  const [openingSince] = useState(() => performance.now());
   const [queryClient] = useState(createQueryClient);
   const [saving, setSaving] = useState(false);
   const database = state.status === "ready" ? state.database : null;
@@ -167,7 +169,7 @@ function DatabaseProvider({
 
   return (
     <QueryClientProvider client={queryClient}>
-      <DatabaseContext value={{ state, dirty, saving, save, holdUpdates }}>
+      <DatabaseContext value={{ state, openingSince, dirty, saving, save, holdUpdates }}>
         {children}
       </DatabaseContext>
     </QueryClientProvider>

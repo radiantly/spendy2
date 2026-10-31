@@ -17,6 +17,11 @@ export type MenuColumn = SortColumn | "amount";
 /** One column at a time sorts the transactions. */
 export type Sort = { column: SortColumn; direction: SortDirection };
 
+/** The direction `column` sorts in, if it's the one that does. */
+export function sortedBy(sort: Sort, column: MenuColumn) {
+  return sort.column === column ? sort.direction : undefined;
+}
+
 /** Which amounts are shown: all of them, money in (above zero), or money out (below). */
 export type Flow = "all" | "in" | "out";
 

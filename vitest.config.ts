@@ -44,12 +44,19 @@ const nextDownload: BrowserCommand<[]> = async (context) => {
 };
 
 /**
- * Emulates the color scheme the user prefers, for media queries in the test
- * page; null goes back to the browser's own.
+ * Emulates what the user prefers, for media queries in the test page: the
+ * features given, each null to go back to the browser's own.
  */
-const colorScheme: BrowserCommand<[scheme: "light" | "dark" | null]> = async (context, scheme) => {
-  if (context.provider.name !== "playwright") throw new Error("colorScheme needs Playwright");
-  await context.page.emulateMedia({ colorScheme: scheme });
+const emulateMedia: BrowserCommand<
+  [
+    media: {
+      colorScheme?: "light" | "dark" | null;
+      reducedMotion?: "reduce" | "no-preference" | null;
+    },
+  ]
+> = async (context, media) => {
+  if (context.provider.name !== "playwright") throw new Error("emulateMedia needs Playwright");
+  await context.page.emulateMedia(media);
 };
 
 export default defineConfig({
@@ -85,7 +92,7 @@ export default defineConfig({
             provider: playwright(),
             headless: true,
             instances: [{ browser: "chromium" }, { browser: "firefox" }, { browser: "webkit" }],
-            commands: { mouse, nextDownload, colorScheme },
+            commands: { mouse, nextDownload, emulateMedia },
           },
         },
       },
