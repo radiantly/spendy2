@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { Link, NavLink } from "react-router";
 import ActivePill from "../../components/ActivePill.tsx";
 import Logo from "../../components/Logo.tsx";
-import UserAvatar from "../../components/UserAvatar.tsx";
+import ProfileMenu from "./ProfileMenu.tsx";
 
 /** The anchor the tabs' pill is under: the active tab. */
 const ACTIVE_TAB = "--active-tab";
@@ -18,8 +18,9 @@ type HeaderProps = {
 function Header({ username, actions }: HeaderProps) {
   return (
     // On phones, the sides share the room the tabs leave equally, so the
-    // tabs sit in the middle. From 640px, they follow the logo.
-    <header className="flex flex-wrap items-center gap-x-3 gap-y-3 px-4 py-4 sm:gap-x-6 lg:px-8">
+    // tabs sit in the middle, close enough for the avatar's ring at 360px.
+    // From 640px, they follow the logo.
+    <header className="flex flex-wrap items-center gap-x-2 gap-y-3 px-4 py-4 sm:gap-x-6 lg:px-8">
       <div className="flex flex-1 sm:flex-none">
         <Logo compact />
       </div>
@@ -48,7 +49,7 @@ function Header({ username, actions }: HeaderProps) {
         ) : (
           <>
             {actions}
-            <UserAvatar username={username} alt={`Logged in as ${username}`} />
+            <ProfileMenu username={username} />
           </>
         )}
       </div>

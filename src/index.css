@@ -63,6 +63,40 @@
   }
 }
 
+/*
+ * The profile menu (ProfileMenu.tsx) grows out of the avatar as it opens,
+ * from the avatar's circle, 0.5rem in from its top right corner, where the
+ * figure's head is. It shrinks back into it as it closes. Filling both
+ * ways, as the transition's own animations do: it's taken down a moment
+ * after they end, and the menu would show whole until then.
+ */
+::view-transition-new(profile-menu):only-child {
+  animation: profile-menu-grow 250ms ease-out both;
+}
+
+::view-transition-old(profile-menu):only-child {
+  animation: profile-menu-grow 250ms ease-in reverse both;
+}
+
+@keyframes profile-menu-grow {
+  from {
+    clip-path: circle(1.4375rem at calc(100% - 1.9375rem) 1.9375rem);
+  }
+  to {
+    /* Past its farthest corner, shadow and all. */
+    clip-path: circle(150% at calc(100% - 1.9375rem) 1.9375rem);
+  }
+}
+
+/* Any view transition is at once where reduced motion is preferred. */
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation: none;
+  }
+}
+
 @layer base {
   :root {
     color-scheme: light dark;

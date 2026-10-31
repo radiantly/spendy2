@@ -951,7 +951,12 @@ describe("Save on a phone", () => {
     await unsavedOnPhone();
 
     await expect.element(saveButton()).toBeVisible();
-    expect(page.getByRole("banner").getByRole("button").query()).toBeNull();
+    expect(
+      page
+        .getByRole("banner")
+        .getByRole("button", { name: /^(Save|Saving…)$/ })
+        .query(),
+    ).toBeNull();
     const save = rect(saveButton());
     expect(save.bottom).toBe(800 - 16);
     expect(Math.abs((save.left + save.right) / 2 - 390 / 2)).toBeLessThanOrEqual(1);

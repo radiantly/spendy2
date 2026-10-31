@@ -43,6 +43,15 @@ const nextDownload: BrowserCommand<[]> = async (context) => {
   return { name: download.suggestedFilename(), bytes: [...bytes] };
 };
 
+/**
+ * Emulates the color scheme the user prefers, for media queries in the test
+ * page; null goes back to the browser's own.
+ */
+const colorScheme: BrowserCommand<[scheme: "light" | "dark" | null]> = async (context, scheme) => {
+  if (context.provider.name !== "playwright") throw new Error("colorScheme needs Playwright");
+  await context.page.emulateMedia({ colorScheme: scheme });
+};
+
 export default defineConfig({
   test: {
     projects: [
@@ -76,7 +85,7 @@ export default defineConfig({
             provider: playwright(),
             headless: true,
             instances: [{ browser: "chromium" }, { browser: "firefox" }, { browser: "webkit" }],
-            commands: { mouse, nextDownload },
+            commands: { mouse, nextDownload, colorScheme },
           },
         },
       },
