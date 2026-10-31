@@ -14,9 +14,11 @@ const figure = () =>
   [...menu().element().querySelectorAll("svg")].find((svg) => !svg.closest("button"))!;
 
 let startViewTransition: MockInstance<Document["startViewTransition"]>;
+const onLogOut = vi.fn();
 
 beforeEach(() => {
   startViewTransition = vi.spyOn(document, "startViewTransition");
+  onLogOut.mockReset();
 });
 
 /**
@@ -37,7 +39,7 @@ const avatarButton = () => page.getByRole("button", { name: "Logged in as alice"
 async function renderMenu() {
   await render(
     <div className="flex justify-end p-4">
-      <ProfileMenu username="alice" />
+      <ProfileMenu username="alice" onLogOut={onLogOut} />
     </div>,
   );
   await expect.element(avatarButton()).toBeVisible();
@@ -208,13 +210,22 @@ describe("ProfileMenu", () => {
     expect(getComputedStyle(figure()).color).toBe("rgb(218, 246, 94)");
   });
 
-  it("lists the items, which only close it for now", async () => {
+  it("only closes from Settings, for now", async () => {
     await openMenu();
 
     await userEvent.click(page.getByRole("button", { name: "Settings" }));
 
     await expect.element(menu()).not.toBeInTheDocument();
     await expect.element(page.getByRole("img", { name: "Logged in as alice" })).toBeVisible();
+    expect(onLogOut).not.toHaveBeenCalled();
+  });
+
+  it("logs out from Log out", async () => {
+    await openMenu();
+
+    await userEvent.click(page.getByRole("button", { name: "Log out" }));
+
+    expect(onLogOut).toHaveBeenCalledOnce();
   });
 
   it("closes with Escape, giving focus back to the avatar", async () => {

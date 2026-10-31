@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import { toast } from "sonner";
+import { logoutUser } from "../../api/auth.ts";
 import { downloadDatabase, downloadDatabaseIfChanged, uploadDatabase } from "../../api/database.ts";
 import { Database, openDatabase } from "../../db/database.ts";
 import { GET_OVERVIEW_META } from "../../db/queries/overview.ts";
@@ -20,6 +21,10 @@ vi.mock("../../api/database.ts", () => ({
   downloadDatabase: vi.fn(),
   downloadDatabaseIfChanged: vi.fn(),
   uploadDatabase: vi.fn(),
+}));
+vi.mock("../../api/auth.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../api/auth.ts")>()),
+  logoutUser: vi.fn(),
 }));
 
 /** Opens an uploaded blob and runs a query on it. */
@@ -49,6 +54,8 @@ const WITH_CONVERSIONS = `${TWO_TRANSACTIONS};
   INSERT INTO conversions VALUES ('${NEWER}', 'EUR', -4210), ('${NEWER}', 'SGD', -6230)`;
 
 beforeEach(async () => {
+  vi.mocked(logoutUser).mockReset();
+  vi.mocked(logoutUser).mockResolvedValue({ success: true });
   vi.mocked(downloadDatabase).mockReset();
   vi.mocked(uploadDatabase).mockReset();
   vi.mocked(uploadDatabase).mockResolvedValue({ success: true, sha256: SHA_B });
@@ -1242,6 +1249,68 @@ describe("a version saved elsewhere", () => {
     const grid = page.getByRole("grid").element();
     const active = document.getElementById(grid.getAttribute("aria-activedescendant")!);
     expect(active?.textContent).toBe("Corner Market");
+  });
+});
+
+describe("logging out", () => {
+  /**
+   * Opens the avatar's menu and presses Log out, once the menu's done
+   * growing: the page takes no clicks while it does.
+   */
+  async function logOut() {
+    const startViewTransition = vi.spyOn(document, "startViewTransition");
+    await userEvent.click(page.getByRole("button", { name: "Logged in as alice" }));
+    await startViewTransition.mock.results.at(-1)!.value.finished;
+    startViewTransition.mockRestore();
+    await userEvent.click(page.getByRole("button", { name: "Log out" }));
+  }
+
+  it("logs out from the avatar's menu, to the login page, and ends the session", async () => {
+    const { router } = await opened();
+
+    await logOut();
+
+    await expect.poll(() => router.state.location.pathname).toBe("/login");
+    await expect.poll(() => loadSession()).toBeNull();
+    expect(logoutUser).toHaveBeenCalledExactlyOnceWith(TOKEN);
+  });
+
+  it("discards unsaved changes, without asking", async () => {
+    const { router } = await opened();
+    await editCounterparty("Corner Market", "Corner Shop");
+    await expect.element(saveButton()).toBeVisible();
+    const leave = () => {
+      const event = new Event("beforeunload", { cancelable: true });
+      window.dispatchEvent(event);
+      return event.defaultPrevented;
+    };
+    expect(leave()).toBe(true);
+
+    await logOut();
+
+    await expect.poll(() => router.state.location.pathname).toBe("/login");
+    expect(leave()).toBe(false);
+    expect(uploadDatabase).not.toHaveBeenCalled();
+  });
+
+  it("logs out though the server can't be reached", async () => {
+    vi.mocked(logoutUser).mockRejectedValue(new TypeError("Failed to fetch"));
+    const { router } = await opened();
+
+    await logOut();
+
+    await expect.poll(() => router.state.location.pathname).toBe("/login");
+    await expect.poll(() => loadSession()).toBeNull();
+  });
+
+  it("stays on the documentation, which anyone can read", async () => {
+    await loggedIn(null);
+    const { router } = await renderApp("/docs");
+
+    await logOut();
+
+    await expect.element(page.getByRole("link", { name: "Log in" })).toBeVisible();
+    expect(router.state.location.pathname).toBe("/docs");
   });
 });
 

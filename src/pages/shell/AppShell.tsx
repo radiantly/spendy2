@@ -23,7 +23,7 @@ export type ShellPage = { path: string; element: ReactNode; kind: "database" | "
  * database's pages doesn't lose its unsaved changes.
  */
 function AppShell({ pages }: { pages: readonly ShellPage[] }) {
-  const { state, endSession } = useAuth();
+  const { state, logout, endSession } = useAuth();
   const { pathname } = useLocation();
   if (state.status === "loading") return null;
 
@@ -49,7 +49,11 @@ function AppShell({ pages }: { pages: readonly ShellPage[] }) {
     >
       <Layout
         header={
-          <Header username={state.session.username} actions={<SaveControls placement="header" />} />
+          <Header
+            username={state.session.username}
+            onLogOut={logout}
+            actions={<SaveControls placement="header" />}
+          />
         }
         footer={<SaveControls placement="floating" />}
       >

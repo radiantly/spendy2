@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { loginUser } from "../api/auth.ts";
+import { loginUser, logoutUser } from "../api/auth.ts";
 import { deriveKek } from "../lib/kek.ts";
 import {
   clearSession,
@@ -86,7 +86,16 @@ function AuthProvider({ children }: { children: ReactNode }) {
     forgetSession(session.token).catch(() => {});
   }
 
-  return <AuthContext value={{ state, login, endSession }}>{children}</AuthContext>;
+  function logout() {
+    if (state.status !== "authenticated") return;
+    const { session } = state;
+    endSession(session);
+    // Nothing here has the session's token any more, so whether the server
+    // ends it or can't be reached, it's logged out here.
+    logoutUser(session.token).catch(() => {});
+  }
+
+  return <AuthContext value={{ state, login, logout, endSession }}>{children}</AuthContext>;
 }
 
 export default AuthProvider;

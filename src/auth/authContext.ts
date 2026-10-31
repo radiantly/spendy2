@@ -26,6 +26,12 @@ export type AuthContextValue = {
    */
   login: (username: string, password: string, options: LoginOptions) => Promise<LoginOutcome>;
   /**
+   * Logs out at once, forgetting the session here and in storage, as
+   * `endSession` does. The server's told to end it in the background, and
+   * it's logged out here whatever comes of that. What's unsaved is lost.
+   */
+  logout: () => void;
+  /**
    * For when the server no longer accepts `session`: forgets it, here and in
    * storage, which logs out if it's the current one. A login made since (in
    * this tab or another) is kept.

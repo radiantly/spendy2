@@ -24,7 +24,7 @@ describe("Header", () => {
 
   it("shows the Documentation tab from 768px wide", async () => {
     await page.viewport(767, 800);
-    await renderAt("/", <Header username="alice" />);
+    await renderAt("/", <Header username="alice" onLogOut={() => {}} />);
     const documentation = page.getByRole("link", { name: "Documentation" });
     await expect.element(page.getByRole("link", { name: "Overview" })).toBeVisible();
     // hidden, so out of the accessibility tree
@@ -37,7 +37,10 @@ describe("Header", () => {
   });
 
   it("shows a user the tabs, and their avatar after the actions", async () => {
-    await renderAt("/docs", <Header username="alice" actions={<button>Save</button>} />);
+    await renderAt(
+      "/docs",
+      <Header username="alice" onLogOut={() => {}} actions={<button>Save</button>} />,
+    );
 
     await expect.element(page.getByRole("navigation", { name: "Main" })).toBeVisible();
     const save = page.getByRole("button", { name: "Save" }).element();

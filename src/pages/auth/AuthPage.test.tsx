@@ -8,7 +8,11 @@ import { loadPasswordStrengthEstimator } from "../../lib/passwordStrength.ts";
 import { EXPORT_KEY, TOKEN } from "../../test/fixtures.ts";
 import { rect, renderApp, visible } from "../../test/renderAuthPage.tsx";
 
-vi.mock("../../api/auth.ts", () => ({ loginUser: vi.fn(), registerUser: vi.fn() }));
+vi.mock("../../api/auth.ts", () => ({
+  loginUser: vi.fn(),
+  logoutUser: vi.fn(),
+  registerUser: vi.fn(),
+}));
 // Real implementations, wrapped so tests can observe or break them.
 vi.mock("../../lib/session.ts", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../lib/session.ts")>();

@@ -2,12 +2,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderHook } from "vitest-browser-react";
 import AuthProvider from "./AuthProvider.tsx";
 import { useAuth } from "./useAuth.ts";
-import { loginUser } from "../api/auth.ts";
+import { loginUser, logoutUser } from "../api/auth.ts";
 import { deriveKek } from "../lib/kek.ts";
 import { loadSession, saveSession } from "../lib/session.ts";
 import { EXPORT_KEY, TOKEN } from "../test/fixtures.ts";
 
-vi.mock("../api/auth.ts", () => ({ loginUser: vi.fn() }));
+vi.mock("../api/auth.ts", () => ({ loginUser: vi.fn(), logoutUser: vi.fn() }));
 // Real storage, but wrapped so a test can make it fail.
 vi.mock("../lib/session.ts", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../lib/session.ts")>();
@@ -19,6 +19,8 @@ vi.mock("../lib/session.ts", async (importOriginal) => {
 });
 
 beforeEach(() => {
+  vi.mocked(logoutUser).mockReset();
+  vi.mocked(logoutUser).mockResolvedValue({ success: true });
   vi.mocked(loginUser).mockReset();
   vi.mocked(loginUser).mockResolvedValue({ success: true, token: TOKEN, exportKey: EXPORT_KEY });
 });
@@ -116,16 +118,17 @@ describe("AuthProvider", () => {
     expect(await loadSession()).toBeNull();
   });
 
-  describe("ending a session", () => {
-    async function loggedIn() {
-      await storeSession();
-      const rendered = await renderAuth();
-      await expect.poll(() => rendered.result.current.state.status).toBe("authenticated");
-      const { state } = rendered.result.current;
-      if (state.status !== "authenticated") throw new Error("not logged in");
-      return { ...rendered, session: state.session };
-    }
+  /** Renders the provider, logged in with a stored session. */
+  async function loggedIn() {
+    await storeSession();
+    const rendered = await renderAuth();
+    await expect.poll(() => rendered.result.current.state.status).toBe("authenticated");
+    const { state } = rendered.result.current;
+    if (state.status !== "authenticated") throw new Error("not logged in");
+    return { ...rendered, session: state.session };
+  }
 
+  describe("ending a session", () => {
     it("logs out and forgets the stored session", async () => {
       const { result, act, session } = await loggedIn();
 
@@ -164,6 +167,52 @@ describe("AuthProvider", () => {
       expect(state.status === "authenticated" && state.session.token).toBe("newer-token");
       await new Promise((resolve) => setTimeout(resolve, 50));
       expect(await loadSession()).toMatchObject({ token: "newer-token" });
+    });
+  });
+
+  describe("logging out", () => {
+    it("logs out at once, forgetting the stored session, and ends it on the server", async () => {
+      // The server never answers: it's not waited for.
+      vi.mocked(logoutUser).mockReturnValue(new Promise(() => {}));
+      const { result, act } = await loggedIn();
+
+      await act(() => result.current.logout());
+
+      expect(result.current.state.status).toBe("anonymous");
+      await expect.poll(() => loadSession()).toBeNull();
+      expect(logoutUser).toHaveBeenCalledExactlyOnceWith(TOKEN);
+    });
+
+    it("stays logged out when the server can't be reached", async () => {
+      vi.mocked(logoutUser).mockRejectedValue(new TypeError("Failed to fetch"));
+      const { result, act } = await loggedIn();
+
+      await act(() => result.current.logout());
+
+      expect(result.current.state.status).toBe("anonymous");
+      await expect.poll(() => loadSession()).toBeNull();
+    });
+
+    it("keeps a login made since in another tab", async () => {
+      const { result, act, session } = await loggedIn();
+      await saveSession({ ...session, token: "newer-token" });
+
+      await act(() => result.current.logout());
+
+      expect(result.current.state.status).toBe("anonymous");
+      // Give it the chance to (wrongly) clear it.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(await loadSession()).toMatchObject({ token: "newer-token" });
+    });
+
+    it("does nothing when already logged out", async () => {
+      const { result, act } = await renderAuth();
+      await expect.poll(() => result.current.state.status).toBe("anonymous");
+
+      await act(() => result.current.logout());
+
+      expect(result.current.state.status).toBe("anonymous");
+      expect(logoutUser).not.toHaveBeenCalled();
     });
   });
 

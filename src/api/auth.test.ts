@@ -3,7 +3,8 @@ import * as opaque from "@serenity-kit/opaque";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { PASSWORD, forwardFetchToWorker } from "../../worker/test/helpers.ts";
 import { tokenSchema } from "../../worker/schemas.ts";
-import { loginUser, registerUser } from "./auth.ts";
+import { loginUser, logoutUser, registerUser } from "./auth.ts";
+import { downloadDatabase } from "./database.ts";
 
 beforeAll(() => opaque.ready);
 beforeEach(() => {
@@ -111,5 +112,36 @@ describe("loginUser", () => {
     vi.stubGlobal("fetch", () => Promise.reject(new TypeError("Failed to fetch")));
 
     await expect(loginUser("alice", PASSWORD)).rejects.toThrow("Failed to fetch");
+  });
+});
+
+describe("logoutUser", () => {
+  let token: string;
+
+  beforeEach(async () => {
+    await registerUser("alice", PASSWORD);
+    const result = await loginUser("alice", PASSWORD);
+    if (!result.success) throw new Error("not logged in");
+    token = result.token;
+  });
+
+  it("ends the session", async () => {
+    expect(await downloadDatabase(token)).toEqual({ success: false, code: "NOT_FOUND" });
+
+    expect(await logoutUser(token)).toEqual({ success: true });
+
+    expect(await downloadDatabase(token)).toEqual({ success: false, code: "UNAUTHORIZED" });
+  });
+
+  it("reports a session that's already ended as unauthorized", async () => {
+    await logoutUser(token);
+
+    expect(await logoutUser(token)).toEqual({ success: false, code: "UNAUTHORIZED" });
+  });
+
+  it("throws when the server can't be reached", async () => {
+    vi.stubGlobal("fetch", () => Promise.reject(new TypeError("Failed to fetch")));
+
+    await expect(logoutUser(token)).rejects.toThrow("Failed to fetch");
   });
 });

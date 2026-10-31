@@ -15,6 +15,11 @@ export type LoginResult =
  */
 export type LoginErrorCode = "INVALID_LOGIN" | "RATE_LIMITED" | "LOGIN_FAILED";
 
+/** UNAUTHORIZED means the session had already ended. */
+export type LogoutResult =
+  | { success: true }
+  | { success: false; code: "UNAUTHORIZED" | "LOGOUT_FAILED" };
+
 const RegistrationStartResponse = z.object({ registrationResponse: z.string() });
 const LoginStartResponse = z.object({ loginResponse: z.string() });
 const LoginFinishResponse = z.object({ token: z.string() });
@@ -98,4 +103,16 @@ export async function loginUser(username: string, password: string): Promise<Log
   const { token } = LoginFinishResponse.parse(await finishRes.json());
 
   return { success: true, token, exportKey: loginResult.exportKey };
+}
+
+/** Ends the session `token` is for, on the server. Network failures throw. */
+export async function logoutUser(token: string): Promise<LogoutResult> {
+  const res = await fetch("/api/auth/logout", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (res.status === 401) return { success: false, code: "UNAUTHORIZED" };
+  if (!res.ok) return { success: false, code: "LOGOUT_FAILED" };
+
+  return { success: true };
 }

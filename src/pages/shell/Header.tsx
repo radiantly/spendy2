@@ -7,15 +7,22 @@ import ProfileMenu from "./ProfileMenu.tsx";
 /** The anchor the tabs' pill is under: the active tab. */
 const ACTIVE_TAB = "--active-tab";
 
-type HeaderProps = {
-  /** The logged in user. Without one, the header links to the login instead. */
-  username?: string;
-  /** Shown before the user's avatar. */
-  actions?: ReactNode;
-};
+type HeaderProps =
+  | { username?: undefined; onLogOut?: undefined; actions?: undefined }
+  | {
+      /** The logged in user. Without one, the header links to the login instead. */
+      username: string;
+      /** Logs the user out, from their menu. */
+      onLogOut: () => void;
+      /** Shown before the user's avatar. */
+      actions?: ReactNode;
+    };
 
-/** The app's header: the logo, and for a logged in user the main tabs and their avatar. */
-function Header({ username, actions }: HeaderProps) {
+/**
+ * The app's header: the logo, and for a logged in user the main tabs and
+ * their avatar, which opens their menu.
+ */
+function Header({ username, onLogOut, actions }: HeaderProps) {
   return (
     // On phones, the sides share the room the tabs leave equally, so the
     // tabs sit in the middle, close enough for the avatar's ring at 360px.
@@ -49,7 +56,7 @@ function Header({ username, actions }: HeaderProps) {
         ) : (
           <>
             {actions}
-            <ProfileMenu username={username} />
+            <ProfileMenu username={username} onLogOut={onLogOut} />
           </>
         )}
       </div>

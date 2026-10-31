@@ -48,9 +48,10 @@ function MenuItem({
  * The user's avatar, which opens their menu over the page. The menu grows
  * out of the avatar, which stays where it is: a stick figure's drawn around
  * it, its head, with the items at its left (see the view transition in
- * index.css). A prototype: its items only close it.
+ * index.css). Log out does `onLogOut`, the menu going with the page it's
+ * on; Settings only closes it, for now.
  */
-function ProfileMenu({ username }: { username: string }) {
+function ProfileMenu({ username, onLogOut }: { username: string; onLogOut: () => void }) {
   const [open, setOpen] = useState(false);
   const dialogRef = useRef<HTMLDialogElement>(null);
   const headingId = useId();
@@ -125,7 +126,7 @@ function ProfileMenu({ username }: { username: string }) {
               <MenuItem icon={FaGear} label="Settings" onPick={close} />
             </li>
             <li>
-              <MenuItem icon={FaRightFromBracket} label="Log out" onPick={close} />
+              <MenuItem icon={FaRightFromBracket} label="Log out" onPick={onLogOut} />
             </li>
           </ul>
         </div>
