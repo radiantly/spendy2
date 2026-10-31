@@ -1,4 +1,12 @@
-import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import {
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type MouseEvent,
+  type ReactNode,
+} from "react";
 import {
   TbArrowBackUp,
   TbArrowDown,
@@ -165,7 +173,7 @@ function IconButton({
           event.currentTarget.matches(":focus-visible") && tooltips.showNow(tooltipId)
         }
         onBlur={tooltips.hide}
-        className={`group grid place-items-center outline-none ${small ? "h-9 w-5.5" : "size-9"} ${
+        className={`group grid cursor-default place-items-center outline-none ${small ? "h-9 w-5.5" : "size-9"} ${
           disabled ? "opacity-60" : ""
         }`}
       >
@@ -224,11 +232,15 @@ function Slashed({ slashed, children }: { slashed: boolean; children: ReactNode 
   );
 }
 
-/** How many cells the search found: `3 of 12`, or `12` while the active cell isn't one. */
+/**
+ * How many cells the search found: `3 of 12`, or `12 matches` while the
+ * active cell isn't one.
+ */
 function countText({ number, total }: NonNullable<SearchActions["count"]>) {
   if (total === 0) return "No matches";
   const counted = total.toLocaleString("en-US");
-  return number === null ? counted : `${number.toLocaleString("en-US")} of ${counted}`;
+  if (number === null) return total === 1 ? "1 match" : `${counted} matches`;
+  return `${number.toLocaleString("en-US")} of ${counted}`;
 }
 
 /**
@@ -236,7 +248,8 @@ function countText({ number, total }: NonNullable<SearchActions["count"]>) {
  * and toggles for matching case and searching by a regular expression.
  * While the regular expression can't be one, the field's outlined red and
  * says so. Enter goes to the next cell found (Shift+Enter, the previous),
- * and Escape clears it.
+ * and Escape clears it. Pressing anywhere else in it but its toggles is
+ * pressing its text, past the end.
  */
 function SearchField({
   search: { query, invalid, count, change, previous, next },
@@ -246,6 +259,21 @@ function SearchField({
   tooltips: Tooltips;
 }) {
   const errorId = useId();
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  function handleMouseDown(event: MouseEvent<HTMLElement>) {
+    const input = inputRef.current!;
+    // The input and the toggles take their own presses.
+    if (
+      event.target === input ||
+      (event.target instanceof Element && event.target.closest("button"))
+    )
+      return;
+    // Keeping focus in the input, and selecting nothing outside it.
+    event.preventDefault();
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+  }
 
   function handleKeyDown(event: KeyboardEvent<HTMLInputElement>) {
     if (event.key === "Enter") {
@@ -260,7 +288,8 @@ function SearchField({
 
   return (
     <search
-      className={`flex h-9 w-64 items-center gap-2 rounded-full bg-field pr-1 pl-3 ${
+      onMouseDown={handleMouseDown}
+      className={`flex h-9 w-64 cursor-text items-center gap-2 rounded-full bg-field pr-1 pl-3 ${
         invalid
           ? "outline-2 -outline-offset-2 outline-danger"
           : "has-[input:focus]:outline-2 has-[input:focus]:-outline-offset-2 has-[input:focus]:outline-focus"
@@ -268,6 +297,7 @@ function SearchField({
     >
       <TbSearch aria-hidden className="shrink-0 text-ink-muted" />
       <input
+        ref={inputRef}
         type="search"
         aria-label="Search transactions"
         placeholder="Search transactions"

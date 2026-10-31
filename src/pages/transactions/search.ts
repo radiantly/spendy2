@@ -21,6 +21,19 @@ export const EMPTY_SEARCH: SearchQuery = { text: "", regex: false, matchCase: fa
 export type TextRange = { start: number; end: number };
 
 /**
+ * A pattern that finds `text` as it is, but for digits typed together,
+ * which it finds with a comma between any two of them too, as amounts show
+ * their thousands: `1234` finds `1,234`.
+ */
+function literalSource(text: string) {
+  // Splitting by a group keeps the runs of digits, at the odd indices.
+  return text
+    .split(/(\d+)/)
+    .map((part, index) => (index % 2 === 0 ? RegExp.escape(part) : [...part].join(",?")))
+    .join("");
+}
+
+/**
  * The pattern `query` searches with, or why its regular expression can't be
  * one. Null while there's nothing to search for. The pattern is global, to
  * find every match, and in Unicode mode, so a match never splits a character.
@@ -28,7 +41,7 @@ export type TextRange = { start: number; end: number };
 export function searchPattern(query: SearchQuery): ParseResult<RegExp> | null {
   if (query.text === "") return null;
   try {
-    const source = query.regex ? query.text : RegExp.escape(query.text);
+    const source = query.regex ? query.text : literalSource(query.text);
     return { ok: true, value: new RegExp(source, query.matchCase ? "gu" : "giu") };
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) };

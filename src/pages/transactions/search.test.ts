@@ -103,6 +103,46 @@ describe("matchesIn", () => {
     expect(found("1.5", "125")).toEqual([]);
   });
 
+  describe("digits typed together", () => {
+    it("finds them with commas between, as amounts show their thousands", () => {
+      expect(found("3974", "$3,974.00")).toEqual([{ start: 1, end: 6 }]);
+      expect(found("1234567", "$1,234,567.00")).toEqual([{ start: 1, end: 10 }]);
+    });
+
+    it("still finds them without", () => {
+      expect(found("3974", "Ref 3974")).toEqual([{ start: 4, end: 8 }]);
+    });
+
+    it("finds each run of them so, wherever it is", () => {
+      expect(found("$1234.50", "$1,234.50")).toEqual([{ start: 0, end: 9 }]);
+      expect(found("1234.5", "$1,234.50")).toEqual([{ start: 1, end: 8 }]);
+      expect(found("1234 and 5678", "1,234 and 5,678")).toEqual([{ start: 0, end: 15 }]);
+    });
+
+    it("finds a comma between any two of them, not only a thousands one", () => {
+      expect(found("12", "Sizes 1,2")).toEqual([{ start: 6, end: 9 }]);
+    });
+
+    it("finds commas typed between them as they are", () => {
+      expect(found("3,974", "$3,974.00")).toEqual([{ start: 1, end: 6 }]);
+      expect(found("39,74", "$3,974.00")).toEqual([]);
+    });
+
+    it("finds only one comma between two of them", () => {
+      expect(found("12", "1,,2")).toEqual([]);
+    });
+
+    it("takes the special characters around them as they are", () => {
+      expect(found("(1234)", "(1,234)")).toEqual([{ start: 0, end: 7 }]);
+      expect(found("\\1", "a\\1")).toEqual([{ start: 1, end: 3 }]);
+      expect(found("1.5", "1,5")).toEqual([]);
+    });
+
+    it("finds them only as typed by a regular expression", () => {
+      expect(found("3974", "$3,974.00", REGEX)).toEqual([]);
+    });
+  });
+
   it("finds a regular expression's matches", () => {
     expect(found("\\d+", "Shop 12, aisle 3", REGEX)).toEqual([
       { start: 5, end: 7 },
@@ -146,7 +186,8 @@ describe("findMatches", () => {
 
   it("searches amounts as they're shown", () => {
     expect(foundIn([row()], "$1,234.50")).toEqual([{ row: 0, column: AMOUNT }]);
-    expect(foundIn([row()], "1234")).toEqual([]);
+    expect(foundIn([row()], "1234")).toEqual([{ row: 0, column: AMOUNT }]);
+    expect(foundIn([row()], "123450")).toEqual([]);
   });
 
   it("searches dates", () => {

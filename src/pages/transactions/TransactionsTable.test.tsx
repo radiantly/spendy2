@@ -3183,7 +3183,16 @@ describe("TransactionsTable", () => {
 
           await makeActive("Shop 12", CATEGORY);
 
-          await expect.poll(() => count().element().textContent).toBe("11");
+          await expect.poll(() => count().element().textContent).toBe("11 matches");
+        });
+
+        it("says how many in the singular for one", async () => {
+          await renderActive(5, COUNTERPARTY, rows.slice(0, 20));
+          await userEvent.fill(searchField(), "shop 12");
+
+          await makeActive("Shop 12", CATEGORY);
+
+          await expect.poll(() => count().element().textContent).toBe("1 match");
         });
 
         it("groups the digits of a large count", async () => {
@@ -3373,6 +3382,91 @@ describe("TransactionsTable", () => {
 
         await expect.element(searchField()).not.toHaveAttribute("aria-invalid");
         await expect.element(page.getByText("Invalid regex")).not.toBeInTheDocument();
+      });
+    });
+
+    describe("pressing the field outside its text", () => {
+      const fieldBox = () => page.elementLocator(searchField().element().closest("search")!);
+      const count = () => page.getByRole("status");
+      /** Where the caret is in the field, or what's selected there. */
+      const caret = () => {
+        const { selectionStart, selectionEnd } = searchField().element() as HTMLInputElement;
+        return [selectionStart, selectionEnd];
+      };
+
+      /** Searches for `text`, then moves focus on to a cell. */
+      async function searchThenLeave(text: string) {
+        await search(text);
+        await makeActive("Corner Market", CATEGORY);
+        await expect.element(grid()).toHaveFocus();
+      }
+
+      it("focuses it from its count, with the caret at the end", async () => {
+        await searchThenLeave("shop");
+
+        await userEvent.click(count());
+
+        await expect.element(searchField()).toHaveFocus();
+        expect(caret()).toEqual([4, 4]);
+      });
+
+      it("keeps it focused, moving the caret to the end", async () => {
+        await search("shop");
+        const field = searchField().element() as HTMLInputElement;
+        field.setSelectionRange(0, 2);
+        const blur = vi.fn();
+        field.addEventListener("blur", blur);
+
+        await userEvent.click(count());
+
+        expect(blur).not.toHaveBeenCalled();
+        expect(caret()).toEqual([4, 4]);
+      });
+
+      it("focuses it from its icon, or the space around it", async () => {
+        await searchThenLeave("shop");
+        await userEvent.click(page.elementLocator(fieldBox().element().querySelector("svg")!));
+        await expect.element(searchField()).toHaveFocus();
+
+        await makeActive("Corner Market", CATEGORY);
+        // Left of the icon, halfway down: the field's ends are round.
+        await userEvent.click(fieldBox(), { position: { x: 4, y: 18 } });
+
+        await expect.element(searchField()).toHaveFocus();
+      });
+
+      it("focuses it from what says the regular expression can't be one", async () => {
+        await search("shop (");
+        await userEvent.click(regexButton());
+        await makeActive("Corner Market", CATEGORY);
+
+        await userEvent.click(page.getByText("Invalid regex"));
+
+        await expect.element(searchField()).toHaveFocus();
+      });
+
+      it("doesn't select the count's text", async () => {
+        await searchThenLeave("shop");
+
+        await userEvent.dblClick(count());
+
+        expect(getSelection()!.toString()).toBe("");
+      });
+
+      it("shows the text cursor across it, but not over its toggles", async () => {
+        await search("shop");
+
+        expect(getComputedStyle(count().element()).cursor).toBe("text");
+        expect(getComputedStyle(fieldBox().element()).cursor).toBe("text");
+        expect(getComputedStyle(regexButton().element()).cursor).toBe("default");
+      });
+
+      it("leaves focus where it was when a toggle's pressed", async () => {
+        await searchThenLeave("shop");
+
+        await userEvent.click(regexButton());
+
+        await expect.element(grid()).toHaveFocus();
       });
     });
   });
