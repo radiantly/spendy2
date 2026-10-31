@@ -8,7 +8,7 @@ import { GET_OVERVIEW_META } from "../../db/queries/overview.ts";
 import { LIST_CATEGORIES, LIST_TRANSACTIONS } from "../../db/queries/transactions.ts";
 import { ClosedError } from "../../db/rpc.ts";
 import { today } from "../../lib/period.ts";
-import { loadSession } from "../../lib/session.ts";
+import { loadSession, saveRowNumberDigits } from "../../lib/session.ts";
 import { itFailsInFirefox } from "../../test/browsers.ts";
 import { nextDownload } from "../../test/download.ts";
 import { SOURCE_HASH_SQL, TOKEN, transactionId } from "../../test/fixtures.ts";
@@ -72,6 +72,9 @@ beforeEach(async () => {
 });
 
 const saveButton = () => page.getByRole("button", { name: /^(Save|Saving…)$/ });
+
+/** How many digits the row numbers had, as kept with the stored session. */
+const storedDigits = async () => (await loadSession())?.rowNumberDigits;
 
 const holdNextQuery = (match: (sql: string) => boolean) => holdNext("query", (sql) => match(sql));
 
@@ -1148,6 +1151,18 @@ describe("a version saved elsewhere", () => {
     expect(saveButton().query()).toBeNull();
   });
 
+  it("is remembered for how many digits its row numbers have", async () => {
+    await opened();
+    await expect.poll(storedDigits).toBe(1);
+    await saveRowNumberDigits(TOKEN, 5);
+    await savedElsewhere(RENAMED);
+
+    checkForUpdates();
+
+    await expect.element(page.getByText("Corner Shop").shown()).toBeVisible();
+    await expect.poll(storedDigits).toBe(1);
+  });
+
   it("is then the version edits are saved over", async () => {
     await opened();
     await savedElsewhere(RENAMED);
@@ -1264,15 +1279,14 @@ describe("loading the transactions", () => {
   function manyTransactions(count: number) {
     const rows = Array.from(
       { length: count },
-      (
-        _,
-        at,
-      ) => `INSERT INTO transactions (sort_key, id, source, account_name, amount, currency, counterparty, category, naive_date)
-        VALUES (${at + 1}, '${transactionId(at + 1)}', ${SOURCE_HASH_SQL}, 'Everyday Checking', -100, 'USD', 'Shop ${at + 1}', NULL, '2026-10-01')`,
+      (_, at) =>
+        `(${at + 1}, '${transactionId(at + 1)}', ${SOURCE_HASH_SQL}, 'Everyday Checking', -100, 'USD', 'Shop ${at + 1}', NULL, '2026-10-01')`,
     );
+    // In one statement: one a row takes WebKit about 15 seconds for a thousand.
     return `INSERT INTO accounts VALUES ('Everyday Checking', 'USD', 'Bank', NULL);
       INSERT INTO sources (hash, remarks) VALUES (${SOURCE_HASH_SQL}, 'statement.csv');
-      ${rows.join(";\n")}`;
+      INSERT INTO transactions (sort_key, id, source, account_name, amount, currency, counterparty, category, naive_date)
+        VALUES ${rows.join(",\n")}`;
   }
 
   /** Logs in with `stored`, which downloads only once `finish` is called. */
@@ -1335,9 +1349,14 @@ describe("loading the transactions", () => {
     await read.release();
   });
 
-  it("puts the table where the loader was: the heading and the header don't move", async () => {
-    // As many digits in the row numbers as the loader's.
-    const finish = await downloadsWhenAsked(await storedDatabase(manyTransactions(100)));
+  /**
+   * Opens `count` transactions, the row numbers having had `savedDigits`
+   * when last opened or saved, if any: the heading's box, and the header
+   * cells', as the loader drew them and as the table does.
+   */
+  async function headerBoxes(count: number, savedDigits?: number) {
+    const finish = await downloadsWhenAsked(await storedDatabase(manyTransactions(count)));
+    if (savedDigits !== undefined) await saveRowNumberDigits(TOKEN, savedDigits);
     await renderApp("/transactions");
     await expect.poll(loaderShownRows).toBeGreaterThan(1);
     const boxes = (elements: Element[]) =>
@@ -1346,14 +1365,68 @@ describe("loading the transactions", () => {
         return { left, top, width };
       });
     const heading = () => [page.getByRole("heading", { name: "Transactions" }).element()];
-    const loaderHeading = boxes(heading());
-    const loaderHeader = boxes(loaderHeaderCells());
+    const loader = { heading: boxes(heading()), header: boxes(loaderHeaderCells()) };
 
     finish();
 
-    await expect.element(page.getByText("Shop 100", { exact: true }).shown()).toBeVisible();
-    expect(boxes(heading())).toEqual(loaderHeading);
-    expect(boxes(page.getByRole("columnheader").elements())).toEqual(loaderHeader);
+    await expect.element(page.getByText(`Shop ${count}`, { exact: true }).shown()).toBeVisible();
+    return {
+      loader,
+      table: {
+        heading: boxes(heading()),
+        header: boxes(page.getByRole("columnheader").elements()),
+      },
+    };
+  }
+
+  // Fewer digits in the row numbers than the loader's, and as many.
+  it.each([2, 100])(
+    "puts the table where the loader was, with %i transactions: the heading and the header don't move",
+    async (count) => {
+      const { loader, table } = await headerBoxes(count);
+
+      expect(table).toEqual(loader);
+    },
+  );
+
+  it("puts the table where the loader was, with more digits in the row numbers when last opened", async () => {
+    const { loader, table } = await headerBoxes(1000, 4);
+
+    expect(table).toEqual(loader);
+  });
+
+  it("remembers how many digits the row numbers have as the database opens, for the next time", async () => {
+    await opened();
+
+    // TWO_TRANSACTIONS.
+    await expect.poll(storedDigits).toBe(1);
+  });
+
+  it("remembers them when saved", async () => {
+    await opened();
+    await expect.poll(storedDigits).toBe(1);
+    // As if there'd been more when it opened.
+    await saveRowNumberDigits(TOKEN, 5);
+
+    await editCounterparty("Corner Market", "Corner Shop");
+    await userEvent.click(saveButton());
+
+    await expect.poll(storedDigits).toBe(1);
+  });
+
+  it("doesn't remember them when saving fails", async () => {
+    await opened();
+    await expect.poll(storedDigits).toBe(1);
+    await saveRowNumberDigits(TOKEN, 5);
+    vi.mocked(uploadDatabase).mockResolvedValue({ success: false, code: "CONFLICT" });
+
+    await editCounterparty("Corner Market", "Corner Shop");
+    await userEvent.click(saveButton());
+
+    await expect
+      .element(page.getByText(/saved from somewhere else since you opened it/).shown())
+      .toBeVisible();
+    expect(await storedDigits()).toBe(5);
   });
 
   it("keeps the scrollbar's room, so the page growing long doesn't move it over", async () => {

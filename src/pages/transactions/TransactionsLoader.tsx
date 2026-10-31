@@ -20,9 +20,6 @@ import {
 import { gridTemplate, ROW_HEIGHT } from "./tableLayout.ts";
 import { DEFAULT_VIEW, sortedBy } from "./view.ts";
 
-/** The table's tracks, the row numbers as wide as the loader's most. */
-const TEMPLATE = gridTemplate(String(MAX_ROWS).length);
-
 /**
  * Shows the loader's rows in `rows`, whose cells' texts are `texts` (by
  * row, then column), as far on as they are since the database began
@@ -68,16 +65,20 @@ function play(rows: HTMLElement, texts: HTMLElement[][], openingSince: number, s
  * page as the table shows it, with made-up transactions coming in (see
  * loaderCells.ts), all muted. It's as far on as the time since the database
  * began opening, so the loader shown while they're read carries on from
- * the one shown while it opened. Where reduced motion is preferred, its
- * rows are all there at once, and stay as they are. Screen readers hear
- * `message`; where the table doesn't fit, it's all that shows.
+ * the one shown while it opened. Its row numbers have as much room as the
+ * table's had when last opened or saved, so the table appears where it
+ * was. Where reduced motion is preferred, its rows are all there at once,
+ * and stay as they are. Screen readers hear `message`; where the table
+ * doesn't fit, it's all that shows.
  */
 function TransactionsLoader({ message }: { message: string }) {
-  const { openingSince } = useDatabase();
+  const { openingSince, rowNumberDigits } = useDatabase();
   const tableFits = useBreakpoint("md");
   const still = useMediaQuery("(prefers-reduced-motion: reduce)");
   const rowsRef = useRef<HTMLDivElement>(null);
   const textsRef = useRef<HTMLElement[][]>([]);
+  // Unknown, as wide as its own.
+  const template = gridTemplate(rowNumberDigits ?? String(MAX_ROWS).length);
 
   // React draws the rows once, their cells empty. What the cells say, and
   // how many of the rows show (their box's height), is up to `play` alone:
@@ -103,7 +104,7 @@ function TransactionsLoader({ message }: { message: string }) {
       </p>
       <TableFrame aria-hidden className="text-ink-muted">
         <TableHeader>
-          <HeaderRow template={TEMPLATE}>
+          <HeaderRow template={template}>
             <CornerCell>
               <TableMenuFace />
             </CornerCell>
@@ -120,7 +121,7 @@ function TransactionsLoader({ message }: { message: string }) {
         </TableHeader>
         <div ref={rowsRef} className="overflow-hidden">
           {Array.from({ length: MAX_ROWS }, (_, row) => (
-            <TableRow key={row} template={TEMPLATE}>
+            <TableRow key={row} template={template}>
               <RowNumberCell>{row + 1}</RowNumberCell>
               {columns.map(({ header, meta }, column) => (
                 <Cell key={String(header)} align={meta!.align} tabular={meta!.tabular}>

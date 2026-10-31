@@ -103,6 +103,9 @@ export const LIST_TRANSACTIONS = `
   ${LISTED_FROM}
 `;
 
+/** How many transactions there are, as `count`: as many as `LIST_TRANSACTIONS` lists. */
+export const COUNT_TRANSACTIONS = "SELECT COUNT(*) AS count FROM transactions";
+
 /**
  * Transactions of `LIST_TRANSACTIONS`, by id. Bind `[JSON.stringify(ids)]`.
  * Read the result with `listedTransactions`.

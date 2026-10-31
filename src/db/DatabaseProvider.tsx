@@ -9,10 +9,11 @@ import {
 } from "react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { pollWhileVisible } from "../lib/pollWhileVisible.ts";
-import type { Session } from "../lib/session.ts";
+import { saveRowNumberDigits, type Session } from "../lib/session.ts";
 import { DatabaseOpenError, openDatabase, openNewerDatabase, type Database } from "./database.ts";
 import { DatabaseContext, type DatabaseState } from "./databaseContext.ts";
 import { EditHistory } from "./editHistory.ts";
+import { COUNT_TRANSACTIONS } from "./queries/transactions.ts";
 import { createQueryClient, databaseKey, refreshAfterWrites } from "./queryClient.ts";
 import { keepTransactionsInSync } from "./transactions.ts";
 
@@ -30,6 +31,25 @@ function ready(database: Database): DatabaseState {
 /** Whether the server turned the session away. */
 function isSessionEnded(error: unknown) {
   return error instanceof DatabaseOpenError && error.code === "UNAUTHORIZED";
+}
+
+/** How many transactions `database` has, or null if it couldn't say. */
+function countTransactions(database: Database) {
+  return database.query(COUNT_TRANSACTIONS).then(
+    (rows) => Number(rows[0]!.count),
+    () => null,
+  );
+}
+
+/**
+ * Keeps how many digits the `counted` transactions have with the session
+ * with `token`, for the row numbers' room the next time they load (see
+ * session.ts). A failure is let go: they'd take the room they take.
+ */
+async function rememberRowNumberDigits(token: string, counted: Promise<number | null>) {
+  const count = await counted;
+  if (count === null) return;
+  await saveRowNumberDigits(token, String(count).length).catch(() => {});
 }
 
 /**
@@ -82,6 +102,13 @@ function DatabaseProvider({
     // The database itself knows of unsaved changes as soon as they're made.
     const canReplace = () => !opened!.unsaved && !savingRef.current && holdsRef.current === 0;
 
+    /** Shows `database`, as downloaded: the version the next load gets too, unless it's saved first. */
+    function show(database: Database) {
+      opened = database;
+      setState(ready(database));
+      void rememberRowNumberDigits(session.token, countTransactions(database));
+    }
+
     async function checkForUpdate() {
       if (checking || !opened || !canReplace()) return;
       checking = true;
@@ -90,8 +117,7 @@ function DatabaseProvider({
         if (!newer) return;
         // Something changed while it downloaded.
         if (cancelled || !canReplace()) return newer.close();
-        opened = newer;
-        setState(ready(newer));
+        show(newer);
       } catch (error) {
         // Logging out now would lose what changed during the check.
         if (isSessionEnded(error) && !cancelled && canReplace()) sessionEnded();
@@ -104,8 +130,7 @@ function DatabaseProvider({
     openDatabase(session).then(
       (database) => {
         if (cancelled) return database.close();
-        opened = database;
-        setState(ready(database));
+        show(database);
         stopPolling = pollWhileVisible(() => void checkForUpdate(), UPDATE_INTERVAL);
       },
       (error: unknown) => {
@@ -148,10 +173,15 @@ function DatabaseProvider({
 
   async function save() {
     if (state.status !== "ready") return null;
+    const { database } = state;
     savingRef.current = true;
     setSaving(true);
     try {
-      return await state.database.save();
+      // Counted just before it's exported, so as many as are saved.
+      const counted = countTransactions(database);
+      const result = await database.save();
+      if (result.success) void rememberRowNumberDigits(session.token, counted);
+      return result;
     } finally {
       setSaving(false);
     }
@@ -169,7 +199,17 @@ function DatabaseProvider({
 
   return (
     <QueryClientProvider client={queryClient}>
-      <DatabaseContext value={{ state, openingSince, dirty, saving, save, holdUpdates }}>
+      <DatabaseContext
+        value={{
+          state,
+          openingSince,
+          rowNumberDigits: session.rowNumberDigits ?? null,
+          dirty,
+          saving,
+          save,
+          holdUpdates,
+        }}
+      >
         {children}
       </DatabaseContext>
     </QueryClientProvider>

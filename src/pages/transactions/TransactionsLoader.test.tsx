@@ -21,10 +21,14 @@ beforeEach(async () => {
   await page.viewport(1280, 800);
 });
 
-/** The database, opening since `openingSince` (as performance.now()). */
-const opening = (openingSince: number) => ({
+/**
+ * The database, opening since `openingSince` (as performance.now()), its
+ * row numbers having had `rowNumberDigits` when last opened or saved.
+ */
+const opening = (openingSince: number, rowNumberDigits: number | null = null) => ({
   state: { status: "loading" } as const,
   openingSince,
+  rowNumberDigits,
   dirty: false,
   saving: false,
   save: async () => null,
@@ -67,6 +71,30 @@ describe("TransactionsLoader", () => {
       "Amount",
       "Remarks",
     ]);
+  });
+
+  it("gives the row numbers as much room as they had when last opened or saved, and its own at least", async () => {
+    const openingSince = performance.now();
+    const loader = (digits: number | null) => (
+      <DatabaseContext value={opening(openingSince, digits)}>
+        <TransactionsLoader message="Opening your database…" />
+      </DatabaseContext>
+    );
+    const screen = await render(loader(null));
+    const corner = () => loaderHeaderCells()[0]!;
+    const own = corner().getBoundingClientRect().width;
+    // A digit's room: tabular figures are each as wide as a 0, a `ch`.
+    const probe = document.createElement("span");
+    probe.style.cssText = "display: inline-block; width: 1ch";
+    corner().append(probe);
+    const digit = probe.getBoundingClientRect().width;
+    probe.remove();
+
+    await screen.rerender(loader(5));
+    expect(corner().getBoundingClientRect().width).toBeCloseTo(own + 2 * digit, 1);
+
+    await screen.rerender(loader(1));
+    expect(corner().getBoundingClientRect().width).toBeCloseTo(own, 1);
   });
 
   it("shows a row more a step, numbered from 1", async () => {

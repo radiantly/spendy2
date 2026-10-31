@@ -36,6 +36,12 @@ export type DatabaseContextValue = {
    * on it, then on what's read from it, to carry on from where it was.
    */
   openingSince: number;
+  /**
+   * How many digits the count of transactions had when the database was
+   * last opened or saved with the session (see session.ts), for a loader to
+   * give the row numbers as much room as the table will. Null if unknown.
+   */
+  rowNumberDigits: number | null;
   /** Whether the database differs from the version last saved. */
   dirty: boolean;
   saving: boolean;
