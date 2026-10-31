@@ -101,40 +101,113 @@ describe("ProfileMenu", () => {
       await expect.poll(() => getComputedStyle(button).backgroundColor).toBe("rgb(15, 15, 15)");
     });
 
-    /** Hovers the avatar, from off it, and waits for its ring to turn `color`, and back. */
-    async function expectRingWhileHovered(button: Element, color: string) {
-      // Off it, where tests before may have left it.
+    /**
+     * The figure's head the avatar shows while hovered: its drawn line, and
+     * the face it's round.
+     */
+    const hoverHead = (button: Element) => ({
+      line: button.querySelector("svg")!,
+      face: button.querySelectorAll("img")[1]!,
+    });
+    const shown = (element: Element) => element.checkVisibility({ opacityProperty: true });
+    /** The line's color, #e9e5dc. */
+    const LINE = "rgb(233, 229, 220)";
+    const TRANSPARENT = "rgba(0, 0, 0, 0)";
+
+    /**
+     * Renders the menu, the mouse off the avatar, where tests before may have
+     * left it, and waits for the head to fade.
+     */
+    async function renderUnhovered() {
+      const button = await renderMenu();
       await mouse.move({ x: 0, y: 0 });
-      await expect.poll(() => getComputedStyle(button).borderTopColor).not.toBe(color);
+      await expect.poll(() => shown(hoverHead(button).line)).toBe(false);
+      return button;
+    }
+
+    it("shows the ring, not the figure's head, at rest", async () => {
+      const button = await renderUnhovered();
+
+      expect(getComputedStyle(button).borderTopColor).toBe(LINE);
+      expect(shown(hoverHead(button).line)).toBe(false);
+      expect(shown(hoverHead(button).face)).toBe(false);
+    });
+
+    it("shows the figure's head instead of the ring while hovered, and the ring again after", async () => {
+      const button = await renderUnhovered();
 
       await userEvent.hover(avatarButton());
 
-      await expect.poll(() => getComputedStyle(button).borderTopColor).toBe(color);
+      await expect.poll(() => shown(hoverHead(button).line)).toBe(true);
+      expect(shown(hoverHead(button).face)).toBe(true);
+      await expect.poll(() => getComputedStyle(button).borderTopColor).toBe(TRANSPARENT);
       await userEvent.unhover(avatarButton());
-      await expect.poll(() => getComputedStyle(button).borderTopColor).not.toBe(color);
-    }
-
-    it("turns its ring the ink's color while hovered", async () => {
-      const button = await renderMenu();
-
-      // The ink, #0f0f0f.
-      await expectRingWhileHovered(button, "rgb(15, 15, 15)");
+      await expect.poll(() => shown(hoverHead(button).line)).toBe(false);
+      await expect.poll(() => getComputedStyle(button).borderTopColor).toBe(LINE);
     });
 
-    it("turns its ring lime while hovered in the dark", async () => {
+    it("draws just the head, round the whole face, as the menu opens with it", async () => {
+      const button = await renderUnhovered();
+      await userEvent.hover(avatarButton());
+      const { line, face } = hoverHead(button);
+      const ring = button.getBoundingClientRect();
+      const { left, top, width, height } = face.getBoundingClientRect();
+
+      expect(line.querySelectorAll("path")).toHaveLength(1);
+      expect([left, top, width, height]).toEqual([ring.left, ring.top, 46, 46]);
+      expect(getComputedStyle(face).clipPath).toBe("none");
+
+      await userEvent.click(avatarButton());
+
+      await expect.element(menu()).toBeVisible();
+      const opened = head().getBoundingClientRect();
+      expect([opened.left, opened.top, opened.width, opened.height]).toEqual([
+        left,
+        top,
+        width,
+        height,
+      ]);
+    });
+
+    it("draws the head in lime, the face lime on dark, in the dark", async () => {
       await preferDark();
-      const button = await renderMenu();
+      const button = await renderUnhovered();
+
+      await userEvent.hover(avatarButton());
 
       // Lime, #daf65e.
-      await expectRingWhileHovered(button, "rgb(218, 246, 94)");
+      await expect
+        .poll(() => getComputedStyle(hoverHead(button).line).color)
+        .toBe("rgb(218, 246, 94)");
+      await expectAvatarColors(hoverHead(button).face, ["#18181b", "#daf65e"]);
     });
 
-    it("fades its ring as it changes color, as the page's other colors change", async () => {
-      const button = await renderMenu();
-      const { transitionProperty, transitionDuration } = getComputedStyle(button);
+    it("keeps the head's drawing close round it, so the page doesn't scroll sideways", async () => {
+      const button = await renderUnhovered();
+      const ring = button.getBoundingClientRect();
+      const drawing = hoverHead(button).line.getBoundingClientRect();
 
-      expect(transitionProperty.split(", ")).toContain("border-color");
-      expect(transitionDuration.split(", ")[0]).toBe("0.15s");
+      // 16px from the page's edge, as in the header.
+      expect(innerWidth - ring.right).toBe(16);
+      expect(drawing.right - ring.right).toBeLessThan(8);
+      expect(document.documentElement.scrollWidth).toBe(document.documentElement.clientWidth);
+    });
+
+    it("fades between the ring and the head", async () => {
+      const button = await renderUnhovered();
+      const fades = (element: Element, property: string) => {
+        const { transitionProperty, transitionDuration } = getComputedStyle(element);
+        const durations = transitionDuration.split(", ");
+        const at = transitionProperty.split(", ").indexOf(property);
+        // The durations repeat for properties past the last.
+        return at !== -1 && durations[at % durations.length] === "0.15s";
+      };
+
+      expect(fades(button, "border-color")).toBe(true);
+      // The head's shown by its wrapper's opacity.
+      expect(fades(hoverHead(button).line.closest("[aria-hidden]:not(svg)")!, "opacity")).toBe(
+        true,
+      );
     });
 
     it("shows the middle of its image, a circle as tall as Save, the image no smaller", async () => {

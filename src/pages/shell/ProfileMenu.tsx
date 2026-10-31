@@ -73,20 +73,30 @@ function ProfileMenu({ username, onLogOut }: { username: string; onLogOut: () =>
         aria-expanded={open}
         onClick={() => toggle(true)}
         // A ring round the avatar, as tall as the tabs' pill: 2px, 3px out,
-        // the page's color between. Hovered, it's dark, or lime in the dark.
-        className="rounded-full border-2 border-line bg-canvas p-0.75 transition-colors outline-none hover:border-ink focus-visible:ring-3 focus-visible:ring-focus dark:hover:border-lime"
+        // the page's color between. Hovered, the figure's head shows instead.
+        className="group relative rounded-full border-2 border-line bg-canvas p-0.75 transition-colors outline-none hover:border-transparent focus-visible:ring-3 focus-visible:ring-focus"
         style={{ anchorName: AVATAR_ANCHOR }}
       >
         {/* Only its middle shows, a circle as tall as Save (36px): the image
           is the figure's head's size, and over the ring, so the face is
           where the head's is. On lime in the dark: the figure's head, over
-          it while the menu's open, is drawn in lime. */}
+          it while hovered or the menu's open, is drawn in lime. */}
         <UserAvatar
           username={username}
           alt={`Logged in as ${username}`}
           className="-m-1.25 size-11.5 max-w-none [clip-path:circle(1.125rem)]"
           dark="on-lime"
         />
+        {/* The figure's head, as the menu opens with it, over the ring's
+          whole box, fading in while hovered. */}
+        <span
+          aria-hidden
+          className="pointer-events-none absolute -inset-0.5 opacity-0 transition-opacity group-hover:opacity-100 dark:text-lime"
+        >
+          <StickFigure headOnly>
+            <UserAvatar username={username} alt="" className="size-full" />
+          </StickFigure>
+        </span>
       </button>
       <dialog
         ref={dialogRef}
