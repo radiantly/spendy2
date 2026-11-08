@@ -1,13 +1,15 @@
 import type { BindingSpec } from "@sqlite.org/sqlite-wasm";
 import {
+  appendDatabasePart,
   downloadDatabase,
   downloadDatabaseIfChanged,
-  uploadDatabase,
+  replaceDatabase,
   type DownloadErrorCode,
+  type UploadErrorCode,
   type UploadResult,
 } from "../api/database.ts";
 import type { Session } from "../lib/session.ts";
-import { connect, transfer, type Connection } from "./rpc.ts";
+import { connect, RemoteError, transfer, type Connection } from "./rpc.ts";
 import type { DatabaseApi, Statement } from "./worker.ts";
 
 export class DatabaseOpenError extends Error {
@@ -19,6 +21,19 @@ export class DatabaseOpenError extends Error {
     this.code = code;
   }
 }
+
+/**
+ * How a save went. NEWER_VERSION means it was saved elsewhere by a newer
+ * version of the app, so this one can't move its changes onto it.
+ */
+export type SaveResult =
+  | { success: true; sha256: string }
+  | { success: false; code: SaveErrorCode };
+
+export type SaveErrorCode = UploadErrorCode | "NEWER_VERSION";
+
+/** How many times a save moves its changes onto a version saved elsewhere before giving up. */
+const MAX_REBASES = 3;
 
 /**
  * The user's database, open in a web worker. Changes stay in memory until
@@ -40,6 +55,7 @@ export class Database {
   #saving: Promise<unknown> = Promise.resolve();
   #unsaved = false;
   #version = 0;
+  #rebases = 0;
   /** Counts writes and saves, so only the latest one's answer decides `unsaved`. */
   #changeCount = 0;
   readonly #listeners = new Set<() => void>();
@@ -57,7 +73,10 @@ export class Database {
     this.#sha256 = sha256;
   }
 
-  /** The sha256 of the stored version this copy is based on; null if never saved. */
+  /**
+   * The sha256 of the last stored part this copy is based on, which the
+   * next save follows; null if never saved.
+   */
   get sha256() {
     return this.#sha256;
   }
@@ -73,11 +92,20 @@ export class Database {
   }
 
   /**
-   * Goes up each time the data changes (a write, undo or redo), for showing
-   * what changed elsewhere. Not for the version saved: see `sha256`.
+   * Goes up each time the data changes (a write, undo, redo or rebase), for
+   * showing what changed elsewhere. Not for the version saved: see `sha256`.
    */
   get version() {
     return this.#version;
+  }
+
+  /**
+   * Goes up each time a save moves this copy's changes onto a version saved
+   * elsewhere, bringing in what changed there: anything read from it is out
+   * of date, also what's otherwise kept up to date edit by edit.
+   */
+  get rebases() {
+    return this.#rebases;
   }
 
   /**
@@ -159,35 +187,80 @@ export class Database {
   }
 
   /**
-   * Uploads the current state, replacing the version this copy is based on.
-   * A CONFLICT is returned as is; this copy keeps its changes and its base.
+   * Uploads the changes since the version this copy is based on, or the
+   * whole database if it was never saved.
    *
-   * A save waits for the one before it: both would otherwise replace the
+   * If another version was saved since (elsewhere), the changes are moved
+   * onto it, bringing in what changed there, and uploaded again. If they
+   * change what was changed there too, a CONFLICT is returned, and this copy
+   * keeps its changes and its base.
+   *
+   * A save waits for the one before it: both would otherwise follow the
    * same version, and the second would see a conflict with itself.
    */
-  save(): Promise<UploadResult> {
-    const result = this.#saving.then(() => this.#upload());
+  save(): Promise<SaveResult> {
+    const result = this.#saving.then(() => this.#save());
     this.#saving = result.catch(() => {});
     return result;
   }
 
-  async #upload() {
-    const blob = await this.#connection.remote.export();
+  async #save(): Promise<SaveResult> {
+    for (let rebases = 0; ; rebases++) {
+      const result = await this.#upload();
+      if (result.success || result.code !== "CONFLICT" || rebases === MAX_REBASES) return result;
+      const rebased = await this.#rebase();
+      if (rebased !== null) return rebased;
+    }
+  }
+
+  async #upload(): Promise<UploadResult> {
+    const prepared = await this.#connection.remote.prepareSave();
+    // Nothing changed since the version saved.
+    if (prepared === null) return { success: true, sha256: this.#sha256! };
+
     let result: UploadResult;
     try {
-      result = await uploadDatabase(
-        this.#token,
-        blob,
-        this.#sha256 === null ? { ifNoneMatch: true } : { ifMatch: this.#sha256 },
-      );
+      result =
+        prepared.previous === null
+          ? await replaceDatabase(this.#token, prepared.part, { ifNoneMatch: true })
+          : await appendDatabasePart(this.#token, prepared.part, prepared.previous);
     } catch (error) {
       // The upload's error is what went wrong, whatever finishing says.
       await this.#change(() => this.#connection.remote.finishSave(false)).catch(() => {});
       throw error;
     }
-    if (result.success) this.#sha256 = result.sha256;
-    await this.#change(() => this.#connection.remote.finishSave(result.success));
-    return result;
+    const { sha256 } = await this.#change(() => this.#connection.remote.finishSave(result.success));
+    if (!result.success) return result;
+    this.#sha256 = sha256;
+    return { success: true, sha256: sha256! };
+  }
+
+  /**
+   * Moves the unsaved changes onto the version stored now. Returns null once
+   * they're moved, so they can be uploaded again, or why they couldn't be.
+   */
+  async #rebase(): Promise<SaveResult | null> {
+    const download = await downloadDatabase(this.#token);
+    if (!download.success)
+      return {
+        success: false,
+        code: download.code === "UNAUTHORIZED" ? "UNAUTHORIZED" : "UPLOAD_FAILED",
+      };
+
+    let moved;
+    try {
+      moved = await this.#change(() => this.#connection.remote.rebase(transfer(download.parts)));
+    } catch (error) {
+      if (error instanceof RemoteError && error.name === "DatabaseTooNewError")
+        return { success: false, code: "NEWER_VERSION" };
+      throw error;
+    }
+    if (!moved.rebased) return { success: false, code: "CONFLICT" };
+
+    this.#sha256 = moved.sha256;
+    this.#rebases++;
+    this.#changed();
+    return null;
   }
 
   /**
@@ -210,8 +283,8 @@ export class Database {
  * never saved. A new database isn't uploaded until the first `save()`.
  *
  * Throws DatabaseOpenError when the download fails, and a RemoteError when the
- * blob can't be decrypted or opened (its `code` is a DatabaseBlobErrorCode
- * for blob errors). Network failures throw.
+ * parts can't be read, decrypted or opened (its `code` is a
+ * DatabasePartErrorCode for errors in the parts). Network failures throw.
  */
 export async function openDatabase(session: Session): Promise<Database> {
   // Started first, so SQLite loads while the database downloads.
@@ -225,7 +298,7 @@ export async function openDatabase(session: Session): Promise<Database> {
     stopWorker(started);
     throw error;
   }
-  return openIn(started, session, download.success ? download : null);
+  return openIn(started, session, download.success ? download.parts : null);
 }
 
 /**
@@ -250,7 +323,7 @@ export async function openNewerDatabase(
   }
   if (download.sha256 === current.sha256) return null;
   // Most checks find nothing newer, so the worker starts only once there is.
-  return openIn(startWorker(), session, download);
+  return openIn(startWorker(), session, download.parts);
 }
 
 type DatabaseWorker = { worker: Worker; connection: Connection<DatabaseApi> };
@@ -267,19 +340,20 @@ function stopWorker({ worker, connection }: DatabaseWorker) {
 }
 
 /**
- * Opens `stored` in `started`, or creates a new database if it's null. Stops
- * the worker if that fails.
+ * Opens the stored `parts` in `started`, or creates a new database if
+ * they're null. Stops the worker if that fails.
  */
 async function openIn(
   started: DatabaseWorker,
   session: Session,
-  stored: { blob: Uint8Array<ArrayBuffer>; sha256: string } | null,
+  parts: Uint8Array<ArrayBuffer> | null,
 ) {
+  let opened;
   try {
-    await started.connection.remote.open(stored && transfer(stored.blob), session.kek);
+    opened = await started.connection.remote.open(parts && transfer(parts), session.kek);
   } catch (error) {
     stopWorker(started);
     throw error;
   }
-  return new Database(started.worker, started.connection, session.token, stored?.sha256 ?? null);
+  return new Database(started.worker, started.connection, session.token, opened.sha256);
 }

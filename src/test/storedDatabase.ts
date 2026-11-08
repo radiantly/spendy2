@@ -5,42 +5,144 @@
  *   vi.mock("../../api/database.ts", () => ({
  *     downloadDatabase: vi.fn(),
  *     downloadDatabaseIfChanged: vi.fn(),
- *     uploadDatabase: vi.fn(),
+ *     replaceDatabase: vi.fn(),
+ *     appendDatabasePart: vi.fn(),
  *   }));
  */
 import { vi } from "vitest";
-import { downloadDatabase, uploadDatabase } from "../api/database.ts";
+import { sha256Hex } from "../../worker/databaseParts.ts";
+import {
+  appendDatabasePart,
+  downloadDatabase,
+  downloadDatabaseIfChanged,
+  replaceDatabase,
+} from "../api/database.ts";
 import { openDatabase } from "../db/database.ts";
 import { deriveKek } from "../lib/kek.ts";
 import { saveSession, type Session } from "../lib/session.ts";
 import { EXPORT_KEY, TOKEN } from "./fixtures.ts";
 
-/** The sha256 of the stored database `loggedIn` sets up. */
-export const SHA_A = "a".repeat(64);
-export const SHA_B = "b".repeat(64);
+/** A stored database: its parts, one after the other, and the last one's sha256. */
+export type StoredDatabase = { parts: Uint8Array<ArrayBuffer>; sha256: string };
+
+/** What an upload's mock answers: the database ignores the hash, working out its own. */
+export const UPLOADED = { success: true, sha256: "0".repeat(64) } as const;
 
 export async function session(): Promise<Session> {
   return { username: "alice", token: TOKEN, kek: await deriveKek(EXPORT_KEY) };
 }
 
-/** Builds a stored database blob by running `sql` on a new database. */
-export async function storedDatabase(sql: string) {
+/** Builds a stored database, of one part, by running `sql` on a new database. */
+export async function storedDatabase(sql: string): Promise<StoredDatabase> {
   vi.mocked(downloadDatabase).mockResolvedValueOnce({ success: false, code: "NOT_FOUND" });
-  vi.mocked(uploadDatabase).mockResolvedValueOnce({ success: true, sha256: SHA_A });
+  vi.mocked(replaceDatabase).mockResolvedValueOnce(UPLOADED);
   const db = await openDatabase(await session());
   for (const statement of sql.split(";").filter((s) => s.trim())) await db.query(statement);
   await db.save();
-  const blob = vi.mocked(uploadDatabase).mock.calls.at(-1)![1];
+  const [, parts] = vi.mocked(replaceDatabase).mock.calls.at(-1)!;
   db.close();
-  vi.mocked(uploadDatabase).mockClear();
-  return blob;
+  vi.mocked(replaceDatabase).mockClear();
+  return { parts, sha256: await sha256Hex(parts) };
 }
 
-/** Logs in, with `stored` as the user's database (`SHA_A`), or none. */
-export async function loggedIn(stored: Uint8Array<ArrayBuffer> | null) {
+/** `stored` after `part`, a part uploaded after its last. */
+export async function withPart(
+  stored: StoredDatabase,
+  part: Uint8Array<ArrayBuffer>,
+): Promise<StoredDatabase> {
+  const parts = new Uint8Array(stored.parts.length + part.length);
+  parts.set(stored.parts);
+  parts.set(part, stored.parts.length);
+  return { parts, sha256: await sha256Hex(part) };
+}
+
+/** The download of `stored`; a copy each time, as opening it hands it to the worker. */
+export function downloadOf(stored: StoredDatabase) {
+  return { success: true, parts: stored.parts.slice(), sha256: stored.sha256 } as const;
+}
+
+/** The database the mocked API serves, or null for none: see `serve`. */
+let served: StoredDatabase | null = null;
+
+/**
+ * Logs in, with `stored` as the user's database, or none. The mocked API
+ * serves it, and saves change it (see `serve`).
+ */
+export async function loggedIn(stored: StoredDatabase | null) {
   await saveSession(await session());
-  if (stored === null)
-    vi.mocked(downloadDatabase).mockResolvedValue({ success: false, code: "NOT_FOUND" });
-  else
-    vi.mocked(downloadDatabase).mockResolvedValue({ success: true, blob: stored, sha256: SHA_A });
+  serve(stored);
+}
+
+/**
+ * Has the mocked API serve `stored`, or no database, from now on, as the
+ * server would: downloads get it, and uploads change it, if their
+ * precondition holds. A test can still have a call answer otherwise.
+ */
+export function serve(stored: StoredDatabase | null) {
+  served = stored;
+  const notFound = { success: false, code: "NOT_FOUND" } as const;
+  const conflict = { success: false, code: "CONFLICT" } as const;
+  vi.mocked(downloadDatabase).mockImplementation(async () =>
+    served === null ? notFound : downloadOf(served),
+  );
+  vi.mocked(downloadDatabaseIfChanged).mockImplementation(async (_token, sha256) => {
+    if (served === null) return notFound;
+    return sha256 === served.sha256 ? { success: false, code: "NOT_MODIFIED" } : downloadOf(served);
+  });
+  vi.mocked(replaceDatabase).mockImplementation(async (_token, parts, precondition) => {
+    const matches =
+      "ifMatch" in precondition ? precondition.ifMatch === served?.sha256 : served === null;
+    if (!matches) return conflict;
+    // Copied: the caller's array is the part it keeps.
+    served = { parts: parts.slice(), sha256: await sha256Hex(parts) };
+    return { success: true, sha256: served.sha256 };
+  });
+  vi.mocked(appendDatabasePart).mockImplementation(async (_token, part, ifMatch) => {
+    if (served === null || ifMatch !== served.sha256) return conflict;
+    served = await withPart(served, part);
+    return { success: true, sha256: served.sha256 };
+  });
+}
+
+/** The database the mocked API serves now, with what was saved to it. */
+export function servedDatabase() {
+  return served;
+}
+
+/**
+ * Runs `sql` on the database the mocked API serves now, and saves it there,
+ * as another device would. The mocked API's calls are cleared after, so a
+ * test only sees its own.
+ */
+export async function savedElsewhere(sql: string) {
+  const db = await openDatabase(await session());
+  try {
+    await db.batch(
+      sql
+        .split(";")
+        .filter((s) => s.trim())
+        .map((statement) => ({ sql: statement })),
+    );
+    const result = await db.save();
+    if (!result.success) throw new Error(`Couldn't save elsewhere: ${result.code}`);
+  } finally {
+    db.close();
+  }
+  for (const api of [
+    downloadDatabase,
+    downloadDatabaseIfChanged,
+    replaceDatabase,
+    appendDatabasePart,
+  ])
+    vi.mocked(api).mockClear();
+}
+
+/** Runs `sql` on the database the mocked API serves now. */
+export async function querySaved(sql: string) {
+  const db = await openDatabase(await session());
+  try {
+    return await db.query(sql);
+  } finally {
+    db.close();
+  }
 }

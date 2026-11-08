@@ -2,8 +2,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import { toast } from "sonner";
 import { logoutUser } from "../../api/auth.ts";
-import { downloadDatabase, downloadDatabaseIfChanged, uploadDatabase } from "../../api/database.ts";
-import { Database, openDatabase } from "../../db/database.ts";
+import {
+  appendDatabasePart,
+  downloadDatabase,
+  downloadDatabaseIfChanged,
+  replaceDatabase,
+} from "../../api/database.ts";
+import { Database } from "../../db/database.ts";
 import { GET_OVERVIEW_META } from "../../db/queries/overview.ts";
 import { LIST_CATEGORIES, LIST_TRANSACTIONS } from "../../db/queries/transactions.ts";
 import { ClosedError } from "../../db/rpc.ts";
@@ -15,7 +20,16 @@ import { SOURCE_HASH_SQL, TOKEN, transactionId } from "../../test/fixtures.ts";
 import { holdNext } from "../../test/holdNext.ts";
 import { rect, renderApp } from "../../test/renderAuthPage.tsx";
 import { openSqliteFile } from "../../test/sqliteFile.ts";
-import { loggedIn, SHA_A, SHA_B, session, storedDatabase } from "../../test/storedDatabase.ts";
+import {
+  loggedIn,
+  querySaved,
+  savedElsewhere,
+  downloadOf,
+  servedDatabase,
+  storedDatabase,
+  UPLOADED,
+  type StoredDatabase,
+} from "../../test/storedDatabase.ts";
 import {
   loaderHeaderCells,
   loaderShownRows,
@@ -27,23 +41,13 @@ import { loaderRowCount, MAX_ROWS, STEP } from "../transactions/loaderCells.ts";
 vi.mock("../../api/database.ts", () => ({
   downloadDatabase: vi.fn(),
   downloadDatabaseIfChanged: vi.fn(),
-  uploadDatabase: vi.fn(),
+  replaceDatabase: vi.fn(),
+  appendDatabasePart: vi.fn(),
 }));
 vi.mock("../../api/auth.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../api/auth.ts")>()),
   logoutUser: vi.fn(),
 }));
-
-/** Opens an uploaded blob and runs a query on it. */
-async function queryUploaded(blob: Uint8Array<ArrayBuffer>, sql: string) {
-  vi.mocked(downloadDatabase).mockResolvedValueOnce({ success: true, blob, sha256: SHA_B });
-  const db = await openDatabase(await session());
-  try {
-    return await db.query(sql);
-  } finally {
-    db.close();
-  }
-}
 
 const [OLDER, NEWER] = [1, 2].map(transactionId);
 const TWO_TRANSACTIONS = `
@@ -64,8 +68,10 @@ beforeEach(async () => {
   vi.mocked(logoutUser).mockReset();
   vi.mocked(logoutUser).mockResolvedValue({ success: true });
   vi.mocked(downloadDatabase).mockReset();
-  vi.mocked(uploadDatabase).mockReset();
-  vi.mocked(uploadDatabase).mockResolvedValue({ success: true, sha256: SHA_B });
+  vi.mocked(replaceDatabase).mockReset();
+  vi.mocked(replaceDatabase).mockResolvedValue(UPLOADED);
+  vi.mocked(appendDatabasePart).mockReset();
+  vi.mocked(appendDatabasePart).mockResolvedValue(UPLOADED);
   vi.mocked(downloadDatabaseIfChanged).mockReset();
   vi.mocked(downloadDatabaseIfChanged).mockResolvedValue({ success: false, code: "NOT_MODIFIED" });
   await page.viewport(1280, 800);
@@ -313,7 +319,8 @@ describe("TransactionsPage", () => {
   });
 
   it("marks an edit as unsaved and saves it", async () => {
-    await loggedIn(await storedDatabase(TWO_TRANSACTIONS));
+    const stored = await storedDatabase(TWO_TRANSACTIONS);
+    await loggedIn(stored);
     await renderApp("/transactions");
     await expect.element(page.getByText("Corner Market").shown()).toBeVisible();
     expect(saveButton().query()).toBeNull();
@@ -326,11 +333,11 @@ describe("TransactionsPage", () => {
     await userEvent.click(saveButton());
 
     await expect.element(saveButton()).not.toBeInTheDocument();
-    const [, blob, precondition] = vi.mocked(uploadDatabase).mock.calls[0]!;
-    expect(precondition).toEqual({ ifMatch: SHA_A });
-    expect(
-      await queryUploaded(blob, `SELECT counterparty FROM transactions WHERE id = '${NEWER}'`),
-    ).toEqual([{ counterparty: "Corner Shop" }]);
+    // Only the changes, after the part stored.
+    expect(appendDatabasePart).toHaveBeenCalledWith(TOKEN, expect.any(Uint8Array), stored.sha256);
+    expect(await querySaved(`SELECT counterparty FROM transactions WHERE id = '${NEWER}'`)).toEqual(
+      [{ counterparty: "Corner Shop" }],
+    );
   });
 
   it("shows an edited cell's new text at once, editing on into an empty cell below", async () => {
@@ -432,10 +439,13 @@ describe("TransactionsPage", () => {
     await expect.element(await cellOf("Café Lune", COUNTERPARTY)).toHaveTextContent("Café Lune");
   });
 
-  it("keeps the changes unsaved when saving conflicts", async () => {
+  it("keeps the changes unsaved when they conflict with ones saved elsewhere", async () => {
     await loggedIn(await storedDatabase(TWO_TRANSACTIONS));
-    vi.mocked(uploadDatabase).mockResolvedValue({ success: false, code: "CONFLICT" });
     await renderApp("/transactions");
+    await expect.element(page.getByText("Corner Market").shown()).toBeVisible();
+    await savedElsewhere(
+      `UPDATE transactions SET counterparty = 'Corner Store' WHERE id = '${NEWER}'`,
+    );
 
     await editCounterparty("Corner Market", "Corner Shop");
     await userEvent.click(saveButton());
@@ -444,15 +454,35 @@ describe("TransactionsPage", () => {
       .element(page.getByText(/saved from somewhere else since you opened it/).shown())
       .toBeVisible();
     await expect.element(saveButton()).toBeEnabled();
+    await expect.element(page.getByText("Corner Shop").shown()).toBeVisible();
+    expect(await querySaved(`SELECT counterparty FROM transactions WHERE id = '${NEWER}'`)).toEqual(
+      [{ counterparty: "Corner Store" }],
+    );
+  });
+
+  it("brings in changes saved elsewhere when saving its own", async () => {
+    await loggedIn(await storedDatabase(TWO_TRANSACTIONS));
+    await renderApp("/transactions");
+    await expect.element(page.getByText("Corner Market").shown()).toBeVisible();
+    await savedElsewhere(`UPDATE transactions SET counterparty = 'Café Sol' WHERE id = '${OLDER}'`);
+
+    await editCounterparty("Corner Market", "Corner Shop");
+    await userEvent.click(saveButton());
+
+    await expect.element(saveButton()).not.toBeInTheDocument();
+    await expect.poll(() => columnTexts(COUNTERPARTY)).toEqual(["Corner Shop", "Café Sol"]);
+    expect(
+      await querySaved("SELECT counterparty FROM transactions ORDER BY sort_key DESC"),
+    ).toEqual([{ counterparty: "Corner Shop" }, { counterparty: "Café Sol" }]);
   });
 
   it("keeps an edit made during a save unsaved", async () => {
     await loggedIn(await storedDatabase(TWO_TRANSACTIONS));
     let finishUpload!: () => void;
-    vi.mocked(uploadDatabase).mockImplementation(
+    vi.mocked(appendDatabasePart).mockImplementation(
       () =>
         new Promise((resolve) => {
-          finishUpload = () => resolve({ success: true, sha256: SHA_B });
+          finishUpload = () => resolve(UPLOADED);
         }),
     );
     await renderApp("/transactions");
@@ -538,10 +568,8 @@ describe("TransactionsPage", () => {
 
     await userEvent.click(saveButton());
     await expect.element(saveButton()).not.toBeInTheDocument();
-    const [, blob] = vi.mocked(uploadDatabase).mock.calls[0]!;
     expect(
-      await queryUploaded(
-        blob,
+      await querySaved(
         `SELECT c.name, c.parent, t.id FROM categories c
          LEFT JOIN transactions t ON t.category = c.name WHERE c.name = 'Coffee'`,
       ),
@@ -568,8 +596,7 @@ describe("TransactionsPage", () => {
 
     await userEvent.click(saveButton());
     await expect.element(saveButton()).not.toBeInTheDocument();
-    const [, blob] = vi.mocked(uploadDatabase).mock.calls[0]!;
-    expect(await queryUploaded(blob, "SELECT name FROM categories")).toEqual([]);
+    expect(await querySaved("SELECT name FROM categories")).toEqual([]);
   });
 
   it("re-creates a category deleted while the menus were behind", async () => {
@@ -592,9 +619,8 @@ describe("TransactionsPage", () => {
     await userEvent.click(saveButton());
     await expect.element(saveButton()).not.toBeInTheDocument();
     expect(showError).not.toHaveBeenCalled();
-    const [, blob] = vi.mocked(uploadDatabase).mock.calls[0]!;
     expect(
-      await queryUploaded(blob, "SELECT id, category FROM transactions ORDER BY sort_key DESC"),
+      await querySaved("SELECT id, category FROM transactions ORDER BY sort_key DESC"),
     ).toEqual([
       { id: NEWER, category: null },
       { id: OLDER, category: "Groceries" },
@@ -632,10 +658,9 @@ describe("TransactionsPage", () => {
     await userEvent.click(saveButton());
 
     await expect.element(saveButton()).not.toBeInTheDocument();
-    const [, blob] = vi.mocked(uploadDatabase).mock.calls[0]!;
-    expect(
-      await queryUploaded(blob, `SELECT account_name FROM transactions WHERE id = '${NEWER}'`),
-    ).toEqual([{ account_name: "Savings" }]);
+    expect(await querySaved(`SELECT account_name FROM transactions WHERE id = '${NEWER}'`)).toEqual(
+      [{ account_name: "Savings" }],
+    );
   });
 
   describe("sorting and filtering", () => {
@@ -782,10 +807,8 @@ describe("TransactionsPage", () => {
 
       await expect.element(saveButton()).not.toBeInTheDocument();
       expect(batch).toHaveBeenCalledTimes(1);
-      const [, blob] = vi.mocked(uploadDatabase).mock.calls[0]!;
       expect(
-        await queryUploaded(
-          blob,
+        await querySaved(
           "SELECT id, counterparty, category, amount, remarks FROM transactions ORDER BY sort_key DESC",
         ),
       ).toEqual([
@@ -854,10 +877,9 @@ describe("TransactionsPage", () => {
     expect(page.getByText("Corner Market").shown().query()).toBeNull();
     await userEvent.click(saveButton());
     await expect.element(saveButton()).not.toBeInTheDocument();
-    const [, blob] = vi.mocked(uploadDatabase).mock.calls[0]!;
-    expect(
-      await queryUploaded(blob, `SELECT counterparty FROM transactions WHERE id = '${NEWER}'`),
-    ).toEqual([{ counterparty: "Corner Store" }]);
+    expect(await querySaved(`SELECT counterparty FROM transactions WHERE id = '${NEWER}'`)).toEqual(
+      [{ counterparty: "Corner Store" }],
+    );
   });
 
   it("ignores an edit's write that fails because the database was closed", async () => {
@@ -887,8 +909,7 @@ describe("TransactionsPage", () => {
     const storedAmount = async () => {
       await userEvent.click(saveButton());
       await expect.element(saveButton()).not.toBeInTheDocument();
-      const [, blob] = vi.mocked(uploadDatabase).mock.calls[0]!;
-      return queryUploaded(blob, `SELECT amount FROM transactions WHERE id = '${NEWER}'`);
+      return querySaved(`SELECT amount FROM transactions WHERE id = '${NEWER}'`);
     };
 
     it("stores an edited amount rounded to its currency's stored decimals", async () => {
@@ -940,10 +961,8 @@ describe("TransactionsPage", () => {
         .toBe("€46.20");
       await userEvent.click(saveButton());
       await expect.element(saveButton()).not.toBeInTheDocument();
-      const [, blob] = vi.mocked(uploadDatabase).mock.calls[0]!;
       expect(
-        await queryUploaded(
-          blob,
+        await querySaved(
           `SELECT transactions.currency, transactions.amount,
             group_concat(conversions.currency) AS conversions
           FROM transactions JOIN conversions ON conversions.transaction_id = transactions.id
@@ -985,7 +1004,7 @@ describe("Save on a phone", () => {
     await userEvent.click(saveButton());
 
     await expect.element(saveButton()).not.toBeInTheDocument();
-    expect(uploadDatabase).toHaveBeenCalledTimes(1);
+    expect(appendDatabasePart).toHaveBeenCalledTimes(1);
   });
 
   it("doesn't cover the end of the page", async () => {
@@ -1131,23 +1150,18 @@ describe("switching pages", () => {
 });
 
 describe("a version saved elsewhere", () => {
-  const SHA_C = "c".repeat(64);
   /** Corner Market renamed, as if on another device. */
-  const RENAMED = `${TWO_TRANSACTIONS}; UPDATE transactions SET counterparty = 'Corner Shop' WHERE id = '${NEWER}'`;
-
-  async function savedElsewhere(sql: string) {
-    const blob = await storedDatabase(sql);
-    vi.mocked(downloadDatabaseIfChanged).mockResolvedValue({ success: true, blob, sha256: SHA_C });
-  }
+  const RENAME = `UPDATE transactions SET counterparty = 'Corner Shop' WHERE id = '${NEWER}'`;
 
   it("is shown in place of the open one", async () => {
     await opened();
-    await savedElsewhere(RENAMED);
+    const open = servedDatabase()!.sha256;
+    await savedElsewhere(RENAME);
 
     checkForUpdates();
 
     await expect.element(page.getByText("Corner Shop").shown()).toBeVisible();
-    expect(downloadDatabaseIfChanged).toHaveBeenCalledWith(TOKEN, SHA_A);
+    expect(downloadDatabaseIfChanged).toHaveBeenCalledWith(TOKEN, open);
     expect(saveButton().query()).toBeNull();
   });
 
@@ -1155,7 +1169,7 @@ describe("a version saved elsewhere", () => {
     await opened();
     await expect.poll(storedDigits).toBe(1);
     await saveRowNumberDigits(TOKEN, 5);
-    await savedElsewhere(RENAMED);
+    await savedElsewhere(RENAME);
 
     checkForUpdates();
 
@@ -1163,9 +1177,10 @@ describe("a version saved elsewhere", () => {
     await expect.poll(storedDigits).toBe(1);
   });
 
-  it("is then the version edits are saved over", async () => {
+  it("is then the version edits are saved after", async () => {
     await opened();
-    await savedElsewhere(RENAMED);
+    await savedElsewhere(RENAME);
+    const newer = servedDatabase()!.sha256;
     checkForUpdates();
     await expect.element(page.getByText("Corner Shop").shown()).toBeVisible();
 
@@ -1173,10 +1188,10 @@ describe("a version saved elsewhere", () => {
     await userEvent.click(saveButton());
 
     await expect.element(saveButton()).not.toBeInTheDocument();
-    const [, blob, precondition] = vi.mocked(uploadDatabase).mock.calls[0]!;
-    expect(precondition).toEqual({ ifMatch: SHA_C });
+    expect(appendDatabasePart).toHaveBeenCalledOnce();
+    expect(appendDatabasePart).toHaveBeenCalledWith(TOKEN, expect.any(Uint8Array), newer);
     expect(
-      await queryUploaded(blob, "SELECT counterparty FROM transactions ORDER BY sort_key DESC"),
+      await querySaved("SELECT counterparty FROM transactions ORDER BY sort_key DESC"),
     ).toEqual([{ counterparty: "Corner Shop" }, { counterparty: "Café Sol" }]);
   });
 
@@ -1193,14 +1208,14 @@ describe("a version saved elsewhere", () => {
         checkForUpdates();
         return vi.mocked(downloadDatabaseIfChanged).mock.lastCall;
       })
-      .toEqual([TOKEN, SHA_B]);
+      .toEqual([TOKEN, servedDatabase()!.sha256]);
   });
 
   it("isn't checked for while there are unsaved changes", async () => {
     await opened();
     await editCounterparty("Café Lumen", "Café Sol");
     await expect.element(saveButton()).toBeVisible();
-    await savedElsewhere(RENAMED);
+    await savedElsewhere(RENAME);
 
     checkForUpdates();
 
@@ -1210,7 +1225,7 @@ describe("a version saved elsewhere", () => {
 
   it("isn't checked for while a cell is being edited, but is once it isn't", async () => {
     await opened();
-    await savedElsewhere(RENAMED);
+    await savedElsewhere(RENAME);
     await userEvent.dblClick(page.getByText("Café Lumen").shown());
     await expect.element(page.getByRole("textbox")).toHaveFocus();
 
@@ -1224,12 +1239,14 @@ describe("a version saved elsewhere", () => {
 
   it("is dropped when an edit is made while it downloads", async () => {
     await opened();
-    const blob = await storedDatabase(RENAMED);
+    const open = servedDatabase()!.sha256;
+    await savedElsewhere(RENAME);
+    const download = vi.mocked(downloadDatabaseIfChanged).getMockImplementation()!;
     let finishDownload!: () => void;
     vi.mocked(downloadDatabaseIfChanged).mockImplementation(
-      () =>
+      (...args) =>
         new Promise((resolve) => {
-          finishDownload = () => resolve({ success: true, blob, sha256: SHA_C });
+          finishDownload = () => resolve(download(...args));
         }),
     );
 
@@ -1244,7 +1261,8 @@ describe("a version saved elsewhere", () => {
     await expect.element(page.getByText("Corner Market").shown()).toBeVisible();
     await userEvent.click(saveButton());
     await expect.element(saveButton()).not.toBeInTheDocument();
-    expect(vi.mocked(uploadDatabase).mock.calls[0]![2]).toEqual({ ifMatch: SHA_A });
+    // Saved after the version it opened first, then moved onto the newer one.
+    expect(vi.mocked(appendDatabasePart).mock.calls[0]![2]).toBe(open);
   });
 
   it("is checked for again after a check fails", async () => {
@@ -1252,7 +1270,7 @@ describe("a version saved elsewhere", () => {
     vi.mocked(downloadDatabaseIfChanged).mockRejectedValueOnce(new TypeError("Failed to fetch"));
     checkForUpdates();
     await expect.poll(() => vi.mocked(downloadDatabaseIfChanged).mock.calls).toHaveLength(1);
-    await savedElsewhere(RENAMED);
+    await savedElsewhere(RENAME);
 
     checkForUpdates();
 
@@ -1263,7 +1281,7 @@ describe("a version saved elsewhere", () => {
     await opened();
     await userEvent.click(await cellOf("Café Lumen", COUNTERPARTY));
     await userEvent.keyboard("{Escape}");
-    await savedElsewhere(`${TWO_TRANSACTIONS}; DELETE FROM transactions WHERE id = '${OLDER}'`);
+    await savedElsewhere(`DELETE FROM transactions WHERE id = '${OLDER}'`);
 
     checkForUpdates();
 
@@ -1290,12 +1308,12 @@ describe("loading the transactions", () => {
   }
 
   /** Logs in with `stored`, which downloads only once `finish` is called. */
-  async function downloadsWhenAsked(stored: Uint8Array<ArrayBuffer>) {
+  async function downloadsWhenAsked(stored: StoredDatabase) {
     await loggedIn(stored);
     let finish!: () => void;
     vi.mocked(downloadDatabase).mockReturnValue(
       new Promise((resolve) => {
-        finish = () => resolve({ success: true, blob: stored, sha256: SHA_A });
+        finish = () => resolve(downloadOf(stored));
       }),
     );
     return () => finish();
@@ -1418,7 +1436,9 @@ describe("loading the transactions", () => {
     await opened();
     await expect.poll(storedDigits).toBe(1);
     await saveRowNumberDigits(TOKEN, 5);
-    vi.mocked(uploadDatabase).mockResolvedValue({ success: false, code: "CONFLICT" });
+    await savedElsewhere(
+      `UPDATE transactions SET counterparty = 'Corner Store' WHERE id = '${NEWER}'`,
+    );
 
     await editCounterparty("Corner Market", "Corner Shop");
     await userEvent.click(saveButton());
@@ -1484,7 +1504,7 @@ describe("logging out", () => {
 
     await expect.poll(() => router.state.location.pathname).toBe("/login");
     expect(leave()).toBe(false);
-    expect(uploadDatabase).not.toHaveBeenCalled();
+    expect(appendDatabasePart).not.toHaveBeenCalled();
   });
 
   it("logs out though the server can't be reached", async () => {
@@ -1551,7 +1571,7 @@ describe("a session the server no longer accepts", () => {
 
     expect(router.state.location.pathname).toBe("/transactions");
     await expect.element(page.getByText("Café Sol").shown()).toBeVisible();
-    vi.mocked(uploadDatabase).mockResolvedValue({ success: false, code: "UNAUTHORIZED" });
+    vi.mocked(appendDatabasePart).mockResolvedValue({ success: false, code: "UNAUTHORIZED" });
     await userEvent.click(saveButton());
     await expect
       .element(page.getByText("Your session has ended. Log in again to save.").shown())
@@ -1580,8 +1600,7 @@ const cellAt = (index: number, column: number) =>
 async function uploaded(sql: string) {
   await userEvent.click(saveButton());
   await expect.element(saveButton()).not.toBeInTheDocument();
-  const [, blob] = vi.mocked(uploadDatabase).mock.calls.at(-1)!;
-  return queryUploaded(blob, sql);
+  return querySaved(sql);
 }
 
 describe("undo and redo on the transactions page", () => {
@@ -2025,20 +2044,18 @@ describe("undo and redo on the transactions page", () => {
     await editCounterparty("Café Lumen", "Café Sol");
     await userEvent.click(saveButton());
     await expect.element(saveButton()).not.toBeInTheDocument();
-    vi.mocked(downloadDatabaseIfChanged).mockResolvedValue({
-      success: true,
-      blob: await storedDatabase(
-        `${TWO_TRANSACTIONS}; UPDATE transactions SET counterparty = 'Corner Shop' WHERE id = '${NEWER}'`,
-      ),
-      sha256: "c".repeat(64),
-    });
+    await savedElsewhere(
+      `UPDATE transactions SET counterparty = 'Corner Shop' WHERE id = '${NEWER}'`,
+    );
     checkForUpdates();
     await expect.element(inTable("Corner Shop")).toBeVisible();
-    await focusGrid("Café Lumen");
+    await focusGrid("Café Sol");
 
     await undo();
+    // Give it the chance to (wrongly) undo the edit saved before.
+    await new Promise((resolve) => setTimeout(resolve, 200));
 
-    await expect.element(inTable("Café Lumen")).toBeVisible();
+    await expect.element(inTable("Café Sol")).toBeVisible();
     expect(saveButton().query()).toBeNull();
   });
 

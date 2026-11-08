@@ -21,6 +21,16 @@ const CONFLICTS: Record<number, string> = {
   5: "FOREIGN_KEY",
 };
 
+/** Changes that don't fit the database: it doesn't hold what they expect. */
+export class ChangesConflictError extends Error {
+  override name = "ChangesConflictError";
+
+  /** `conflicts` as SQLite names them: DATA, NOTFOUND, CONFLICT and so on. */
+  constructor(conflicts: readonly string[]) {
+    super(`The changes don't match the database (${conflicts.join(", ")})`);
+  }
+}
+
 /** Copies a buffer sqlite allocated out of the wasm heap, then frees it. */
 function takeBuffer(
   sqlite3: Sqlite3Static,
@@ -118,8 +128,8 @@ export function invert(sqlite3: Sqlite3Static, db: Database, changes: Uint8Array
  * include what triggers and foreign key actions did, so neither runs again:
  * that would do it twice.
  *
- * Throws if the database doesn't hold what the changes expect (a conflict),
- * leaving it as it was.
+ * Throws a ChangesConflictError if the database doesn't hold what the
+ * changes expect, leaving it as it was.
  */
 export function applyChanges(sqlite3: Sqlite3Static, db: Database, changes: Uint8Array) {
   const { capi, wasm } = sqlite3;
@@ -147,8 +157,7 @@ export function applyChanges(sqlite3: Sqlite3Static, db: Database, changes: Uint
           SQLITE_CHANGESETAPPLY_FKNOACTION,
         ),
       );
-      if (conflicts.length > 0)
-        throw new Error(`The changes don't match the database (${conflicts.join(", ")})`);
+      if (conflicts.length > 0) throw new ChangesConflictError(conflicts);
       db.checkRc(rc);
     } finally {
       capi.sqlite3_db_config(db, capi.SQLITE_DBCONFIG_ENABLE_TRIGGER, triggers, 0);

@@ -1,15 +1,21 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
-import { downloadDatabase, downloadDatabaseIfChanged, uploadDatabase } from "../../api/database.ts";
+import {
+  appendDatabasePart,
+  downloadDatabase,
+  downloadDatabaseIfChanged,
+  replaceDatabase,
+} from "../../api/database.ts";
 import { SOURCE_HASH_SQL, TOKEN, transactionId } from "../../test/fixtures.ts";
 import { renderApp } from "../../test/renderAuthPage.tsx";
-import { loggedIn, SHA_A, SHA_B, storedDatabase } from "../../test/storedDatabase.ts";
+import { loggedIn, storedDatabase, UPLOADED } from "../../test/storedDatabase.ts";
 import { DOCS_SITE } from "./docsSite.ts";
 
 vi.mock("../../api/database.ts", () => ({
   downloadDatabase: vi.fn(),
   downloadDatabaseIfChanged: vi.fn(),
-  uploadDatabase: vi.fn(),
+  replaceDatabase: vi.fn(),
+  appendDatabasePart: vi.fn(),
 }));
 
 // A stand-in for the docs site, which the tests shouldn't load.
@@ -24,8 +30,10 @@ const ONE_TRANSACTION = `
 
 beforeEach(async () => {
   vi.mocked(downloadDatabase).mockReset();
-  vi.mocked(uploadDatabase).mockReset();
-  vi.mocked(uploadDatabase).mockResolvedValue({ success: true, sha256: SHA_B });
+  vi.mocked(replaceDatabase).mockReset();
+  vi.mocked(replaceDatabase).mockResolvedValue(UPLOADED);
+  vi.mocked(appendDatabasePart).mockReset();
+  vi.mocked(appendDatabasePart).mockResolvedValue(UPLOADED);
   vi.mocked(downloadDatabaseIfChanged).mockReset();
   vi.mocked(downloadDatabaseIfChanged).mockResolvedValue({ success: false, code: "NOT_MODIFIED" });
   await page.viewport(1280, 800);
@@ -100,7 +108,8 @@ describe("DocsPage", () => {
   });
 
   it("keeps unsaved changes, and saves them from here", async () => {
-    await loggedIn(await storedDatabase(ONE_TRANSACTION));
+    const stored = await storedDatabase(ONE_TRANSACTION);
+    await loggedIn(stored);
     // building the stored database downloaded it too
     vi.mocked(downloadDatabase).mockClear();
     const { router } = await renderApp("/transactions");
@@ -118,6 +127,6 @@ describe("DocsPage", () => {
 
     await expect.element(saveButton()).not.toBeInTheDocument();
     expect(downloadDatabase).toHaveBeenCalledOnce();
-    expect(uploadDatabase).toHaveBeenCalledWith(TOKEN, expect.any(Uint8Array), { ifMatch: SHA_A });
+    expect(appendDatabasePart).toHaveBeenCalledWith(TOKEN, expect.any(Uint8Array), stored.sha256);
   });
 });

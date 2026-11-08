@@ -1,9 +1,21 @@
 import { reset } from "cloudflare:test";
 import * as opaque from "@serenity-kit/opaque";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { forwardFetchToWorker, loginToken, registerUser } from "../../worker/test/helpers.ts";
-import { toSha256Schema } from "../../worker/schemas.ts";
-import { downloadDatabase, downloadDatabaseIfChanged, uploadDatabase } from "./database.ts";
+import { NO_PREVIOUS_PART, sha256Hex } from "../../worker/databaseParts.ts";
+import {
+  chainedParts,
+  concatBytes,
+  databasePart,
+  forwardFetchToWorker,
+  loginToken,
+  registerUser,
+} from "../../worker/test/helpers.ts";
+import {
+  appendDatabasePart,
+  downloadDatabase,
+  downloadDatabaseIfChanged,
+  replaceDatabase,
+} from "./database.ts";
 import { TOKEN } from "../test/fixtures.ts";
 
 let token: string;
@@ -22,28 +34,28 @@ afterEach(async () => {
   await reset();
 });
 
-/** The server only checks the SPENDY magic and version byte. */
-function blob(content: string) {
-  const encoder = new TextEncoder();
-  return new Uint8Array([...encoder.encode("SPENDY"), 1, ...encoder.encode(content)]);
+/** A database of one part, `seed` telling it apart from others, stored as the first. */
+async function firstStored(seed = 0) {
+  const [part] = await chainedParts({ seed });
+  expect(await replaceDatabase(token, part!, { ifNoneMatch: true })).toMatchObject({
+    success: true,
+  });
+  return part!;
 }
-
-const sha256Of = (bytes: Uint8Array<ArrayBuffer>) =>
-  toSha256Schema.decodeAsync(bytes.slice().buffer);
 
 describe("downloadDatabase", () => {
   it("reports a user without a database as not found", async () => {
     expect(await downloadDatabase(token)).toEqual({ success: false, code: "NOT_FOUND" });
   });
 
-  it("returns the uploaded blob and its sha256", async () => {
-    const body = blob("first");
-    await uploadDatabase(token, body.slice(), { ifNoneMatch: true });
+  it("returns every part and the last one's sha256", async () => {
+    const [first, second] = await chainedParts({}, {});
+    await replaceDatabase(token, concatBytes([first!, second!]), { ifNoneMatch: true });
 
     expect(await downloadDatabase(token)).toEqual({
       success: true,
-      blob: body,
-      sha256: await sha256Of(body),
+      parts: concatBytes([first!, second!]),
+      sha256: await sha256Hex(second!),
     });
   });
 
@@ -63,30 +75,27 @@ describe("downloadDatabase", () => {
 
 describe("downloadDatabaseIfChanged", () => {
   it("reports the version it names as not modified", async () => {
-    const { sha256 } = await uploadDatabase(token, blob("first"), { ifNoneMatch: true }).then(
-      (result) => (result.success ? result : expect.unreachable()),
-    );
+    const part = await firstStored();
 
-    expect(await downloadDatabaseIfChanged(token, sha256)).toEqual({
+    expect(await downloadDatabaseIfChanged(token, await sha256Hex(part))).toEqual({
       success: false,
       code: "NOT_MODIFIED",
     });
   });
 
-  it("returns the newer blob and its sha256", async () => {
-    const first = blob("first");
-    await uploadDatabase(token, first.slice(), { ifNoneMatch: true });
-    const second = blob("second");
-    await uploadDatabase(token, second.slice(), { ifMatch: await sha256Of(first) });
+  it("returns every part when one was added since", async () => {
+    const first = await firstStored();
+    const second = databasePart(await sha256Hex(first));
+    await appendDatabasePart(token, second, await sha256Hex(first));
 
-    expect(await downloadDatabaseIfChanged(token, await sha256Of(first))).toEqual({
+    expect(await downloadDatabaseIfChanged(token, await sha256Hex(first))).toEqual({
       success: true,
-      blob: second,
-      sha256: await sha256Of(second),
+      parts: concatBytes([first, second]),
+      sha256: await sha256Hex(second),
     });
   });
 
-  it("reports a database that's gone as not found", async () => {
+  it("reports a user without a database as not found", async () => {
     expect(await downloadDatabaseIfChanged(token, "a".repeat(64))).toEqual({
       success: false,
       code: "NOT_FOUND",
@@ -94,56 +103,61 @@ describe("downloadDatabaseIfChanged", () => {
   });
 });
 
-describe("uploadDatabase", () => {
-  it("returns the sha256 of the stored blob", async () => {
-    const body = blob("first");
+describe("replaceDatabase", () => {
+  it("returns the sha256 of the last part stored", async () => {
+    const [part] = await chainedParts({});
 
-    expect(await uploadDatabase(token, body.slice(), { ifNoneMatch: true })).toEqual({
+    expect(await replaceDatabase(token, part!, { ifNoneMatch: true })).toEqual({
       success: true,
-      sha256: await sha256Of(body),
+      sha256: await sha256Hex(part!),
     });
   });
 
   it("replaces the version it names", async () => {
-    const first = await uploadDatabase(token, blob("first"), { ifNoneMatch: true });
-    if (!first.success) expect.unreachable();
+    const first = await firstStored();
+    const [second] = await chainedParts({ seed: 9 });
 
-    const second = await uploadDatabase(token, blob("second"), { ifMatch: first.sha256 });
-
-    expect(second).toEqual({ success: true, sha256: await sha256Of(blob("second")) });
+    expect(await replaceDatabase(token, second!, { ifMatch: await sha256Hex(first) })).toEqual({
+      success: true,
+      sha256: await sha256Hex(second!),
+    });
   });
 
-  it("reports a stale version as a conflict", async () => {
-    const first = await uploadDatabase(token, blob("first"), { ifNoneMatch: true });
-    if (!first.success) expect.unreachable();
-    await uploadDatabase(token, blob("second"), { ifMatch: first.sha256 });
+  it("reports a first upload over an existing database as a conflict", async () => {
+    await firstStored();
+    const [other] = await chainedParts({ seed: 9 });
 
-    expect(await uploadDatabase(token, blob("third"), { ifMatch: first.sha256 })).toEqual({
+    expect(await replaceDatabase(token, other!, { ifNoneMatch: true })).toEqual({
       success: false,
       code: "CONFLICT",
     });
   });
 
-  it("reports a first upload over an existing database as a conflict", async () => {
-    await uploadDatabase(token, blob("first"), { ifNoneMatch: true });
+  it("reports a stale version as a conflict", async () => {
+    const first = await firstStored();
+    const [second] = await chainedParts({ seed: 9 });
+    await replaceDatabase(token, second!, { ifMatch: await sha256Hex(first) });
+    const [third] = await chainedParts({ seed: 18 });
 
-    expect(await uploadDatabase(token, blob("other device"), { ifNoneMatch: true })).toEqual({
+    expect(await replaceDatabase(token, third!, { ifMatch: await sha256Hex(first) })).toEqual({
       success: false,
       code: "CONFLICT",
     });
   });
 
   it("reports an unknown session as unauthorized", async () => {
-    expect(await uploadDatabase(UNKNOWN_SESSION, blob("first"), { ifNoneMatch: true })).toEqual({
+    const [part] = await chainedParts({});
+
+    expect(await replaceDatabase(UNKNOWN_SESSION, part!, { ifNoneMatch: true })).toEqual({
       success: false,
       code: "UNAUTHORIZED",
     });
   });
 
-  it("reports a rejected blob as a generic failure", async () => {
-    const notSpendy = new Uint8Array(new TextEncoder().encode("plain sqlite file"));
+  it("reports parts the server rejects as a failed upload", async () => {
+    const part = databasePart("a".repeat(64));
 
-    expect(await uploadDatabase(token, notSpendy, { ifNoneMatch: true })).toEqual({
+    expect(await replaceDatabase(token, part, { ifNoneMatch: true })).toEqual({
       success: false,
       code: "UPLOAD_FAILED",
     });
@@ -152,8 +166,59 @@ describe("uploadDatabase", () => {
   it("throws when the server can't be reached", async () => {
     vi.stubGlobal("fetch", () => Promise.reject(new TypeError("Failed to fetch")));
 
-    await expect(uploadDatabase(token, blob("first"), { ifNoneMatch: true })).rejects.toThrow(
-      "Failed to fetch",
-    );
+    await expect(
+      replaceDatabase(token, databasePart(NO_PREVIOUS_PART), { ifNoneMatch: true }),
+    ).rejects.toThrow("Failed to fetch");
+  });
+});
+
+describe("appendDatabasePart", () => {
+  it("adds a part after the last one, returning its sha256", async () => {
+    const first = await firstStored();
+    const second = databasePart(await sha256Hex(first));
+
+    expect(await appendDatabasePart(token, second, await sha256Hex(first))).toEqual({
+      success: true,
+      sha256: await sha256Hex(second),
+    });
+    expect(await downloadDatabase(token)).toMatchObject({ parts: concatBytes([first, second]) });
+  });
+
+  it("reports a part after one that's no longer the last as a conflict", async () => {
+    const first = await firstStored();
+    await appendDatabasePart(token, databasePart(await sha256Hex(first)), await sha256Hex(first));
+    const late = databasePart(await sha256Hex(first), { seed: 9 });
+
+    expect(await appendDatabasePart(token, late, await sha256Hex(first))).toEqual({
+      success: false,
+      code: "CONFLICT",
+    });
+  });
+
+  it("reports adding to a database that isn't there as a conflict", async () => {
+    expect(
+      await appendDatabasePart(token, databasePart(NO_PREVIOUS_PART), NO_PREVIOUS_PART),
+    ).toEqual({ success: false, code: "CONFLICT" });
+  });
+
+  it("reports an unknown session as unauthorized", async () => {
+    const first = await firstStored();
+
+    expect(
+      await appendDatabasePart(
+        UNKNOWN_SESSION,
+        databasePart(await sha256Hex(first)),
+        await sha256Hex(first),
+      ),
+    ).toEqual({ success: false, code: "UNAUTHORIZED" });
+  });
+
+  it("reports a part the server rejects as a failed upload", async () => {
+    const first = await firstStored();
+
+    // It follows another part than the one If-Match names.
+    expect(
+      await appendDatabasePart(token, databasePart("a".repeat(64)), await sha256Hex(first)),
+    ).toEqual({ success: false, code: "UPLOAD_FAILED" });
   });
 });

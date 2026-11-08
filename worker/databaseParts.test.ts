@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   MIN_PART_LENGTH,
   NO_PREVIOUS_PART,
+  assemblePart,
+  partAad,
   partChainError,
   readParts,
   sha256Hex,
@@ -108,6 +110,52 @@ describe("readParts", () => {
     ],
   ])("rejects %s", async (_name, bytes, code) => {
     expect(await readParts(bytes)).toEqual({ success: false, code });
+  });
+});
+
+describe("partAad", () => {
+  it("is the previous part's hash, then the user version, little-endian", () => {
+    expect(partAad("ab".repeat(32), 0x01020304)).toEqual(
+      new Uint8Array([...Array<number>(32).fill(0xab), 0x04, 0x03, 0x02, 0x01]),
+    );
+  });
+
+  it.each(["", "ab".repeat(31), "AB".repeat(32), "zz".repeat(32)])(
+    "refuses a previous hash that isn't a sha256 in hex: %j",
+    (previousHash) => {
+      expect(() => partAad(previousHash, 1)).toThrow("Not a sha256");
+    },
+  );
+});
+
+describe("assemblePart", () => {
+  it("writes a part as the hand-written one is laid out", () => {
+    const part = handWrittenPart();
+
+    expect(
+      assemblePart({
+        wrappedKey: part.subarray(11, 51),
+        aad: part.subarray(51, 87),
+        nonce: part.subarray(87, 99),
+        ciphertext: part.subarray(99),
+      }),
+    ).toEqual(part);
+  });
+
+  it("writes a part readParts reads back", async () => {
+    const aad = partAad("cd".repeat(32), 5);
+
+    const part = assemblePart({
+      wrappedKey: new Uint8Array(40),
+      aad,
+      nonce: new Uint8Array(12),
+      ciphertext: new Uint8Array(16),
+    });
+
+    expect(await readParts(part)).toMatchObject({
+      success: true,
+      parts: [{ bytes: part, previousHash: "cd".repeat(32), userVersion: 5 }],
+    });
   });
 });
 

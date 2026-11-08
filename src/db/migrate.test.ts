@@ -106,6 +106,33 @@ describe("migrate", () => {
     expect(() => migrate(db, steps)).toThrow(DatabaseTooNewError);
   });
 
+  describe("up to a version", () => {
+    it("stops there", () => {
+      expect(migrate(db, steps, 1)).toEqual({ from: 0, to: 1 });
+
+      expect(userVersion()).toBe(1);
+      expect(tables()).toEqual(["a"]);
+    });
+
+    it("does nothing when the database is at it", () => {
+      migrate(db, steps, 1);
+
+      expect(migrate(db, steps, 1)).toEqual({ from: 1, to: 1 });
+      expect(tables()).toEqual(["a"]);
+    });
+
+    it("refuses a version newer than the app, changing nothing", () => {
+      expect(() => migrate(db, steps, 3)).toThrow(DatabaseTooNewError);
+      expect(userVersion()).toBe(0);
+    });
+
+    it("refuses a version the database is already past", () => {
+      migrate(db, steps);
+
+      expect(() => migrate(db, steps, 1)).toThrow("The database is at version 2, past version 1");
+    });
+  });
+
   describe("with foreign keys", () => {
     const parentAndChild: Migration = {
       version: 1,

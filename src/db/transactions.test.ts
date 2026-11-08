@@ -23,7 +23,8 @@ import {
 vi.mock("../api/database.ts", () => ({
   downloadDatabase: vi.fn(),
   downloadDatabaseIfChanged: vi.fn(),
-  uploadDatabase: vi.fn(),
+  replaceDatabase: vi.fn(),
+  appendDatabasePart: vi.fn(),
 }));
 
 /** The day the transactions are on. */

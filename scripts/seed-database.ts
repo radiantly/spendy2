@@ -7,18 +7,19 @@ import fs from "fs";
 import path from "path";
 import { confirm, intro, isCancel, outro, spinner, text } from "@clack/prompts";
 import sqlite3InitModule from "@sqlite.org/sqlite-wasm";
-import { encryptDatabase } from "../src/db/blob.ts";
 import { configureConnection } from "../src/db/connection.ts";
 import { migrate, migrationsFromFiles } from "../src/db/migrate.ts";
+import { encryptPart } from "../src/db/parts.ts";
 import { deriveKek } from "../src/lib/kek.ts";
 import { fail, onCancel, readEnv } from "./lib.ts";
 import { generateTestData } from "./testData.ts";
+import { NO_PREVIOUS_PART } from "../worker/databaseParts.ts";
 
 const scriptsEnvPath = path.join(import.meta.dirname, ".env");
 const migrationsDir = path.join(import.meta.dirname, "..", "src", "db", "migrations");
 
 async function request(endpoint: string, token: string, init: RequestInit = {}) {
-  const target = new URL("/api/users/me/database", endpoint);
+  const target = new URL("/api/users/me/database/parts", endpoint);
   try {
     return await fetch(target, {
       ...init,
@@ -84,17 +85,22 @@ const migrations = migrationsFromFiles(
 migrate(db, migrations);
 configureConnection(db);
 generateTestData(db, count, { brokerage });
+const userVersion = Number(db.selectValue("PRAGMA user_version"));
 const bytes = sqlite3.capi.sqlite3_js_db_export(db);
 db.close();
 
 progress.message("Encrypting");
-const blob = await encryptDatabase(bytes, await deriveKek(exportKey));
+// Uploaded as the only part, replacing every part there is.
+const part = await encryptPart(bytes, await deriveKek(exportKey), {
+  previousHash: NO_PREVIOUS_PART,
+  userVersion,
+});
 
-progress.message(`Uploading ${(blob.length / 1e6).toFixed(1)} MB`);
+progress.message(`Uploading ${(part.length / 1e6).toFixed(1)} MB`);
 const upload = await request(endpoint, token, {
   method: "PUT",
   headers: currentEtag === null ? { "If-None-Match": "*" } : { "If-Match": currentEtag },
-  body: blob,
+  body: part,
 });
 if (!upload.ok) {
   progress.stop("Upload failed");

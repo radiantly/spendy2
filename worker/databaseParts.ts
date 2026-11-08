@@ -13,8 +13,9 @@
  * - Integers are unsigned and little-endian.
  *
  * The server reads each header up to the AAD, and checks that the parts
- * chain; the rest is only read by clients. Runs in the worker and the
- * browser.
+ * chain; the rest is only read by clients, which write parts with partAad
+ * and assemblePart (see src/db/parts.ts). Runs in the worker, the browser
+ * and the scripts.
  */
 
 export const PART_MAGIC = new TextEncoder().encode("SPENDY");
@@ -108,6 +109,41 @@ export function partChainError(
   return undefined;
 }
 
+/**
+ * A part's AAD: the sha256 of the part before it (NO_PREVIOUS_PART for
+ * part 0), in hex, and the user_version its content was written at.
+ */
+export function partAad(previousHash: string, userVersion: number) {
+  if (!/^[0-9a-f]{64}$/.test(previousHash)) throw new Error(`Not a sha256: ${previousHash}`);
+  const aad = new Uint8Array(AAD_LENGTH);
+  aad.set(fromHex(previousHash));
+  new DataView(aad.buffer).setUint32(SHA256_LENGTH, userVersion, true);
+  return aad;
+}
+
+/** A part from what goes in it; `aad` from `partAad`, `ciphertext` with its tag. */
+export function assemblePart({
+  wrappedKey,
+  aad,
+  nonce,
+  ciphertext,
+}: {
+  wrappedKey: Uint8Array;
+  aad: Uint8Array;
+  nonce: Uint8Array;
+  ciphertext: Uint8Array;
+}) {
+  const part = new Uint8Array(CIPHERTEXT_OFFSET + ciphertext.length);
+  part.set(PART_MAGIC);
+  part[VERSION_OFFSET] = PART_VERSION;
+  new DataView(part.buffer).setUint32(LENGTH_OFFSET, part.length, true);
+  part.set(wrappedKey, WRAPPED_KEY_OFFSET);
+  part.set(aad, AAD_OFFSET);
+  part.set(nonce, NONCE_OFFSET);
+  part.set(ciphertext, CIPHERTEXT_OFFSET);
+  return part;
+}
+
 /** The sha256 of `bytes`, in hex. */
 export async function sha256Hex(bytes: Uint8Array<ArrayBuffer>) {
   return toHex(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)));
@@ -115,4 +151,8 @@ export async function sha256Hex(bytes: Uint8Array<ArrayBuffer>) {
 
 function toHex(bytes: Uint8Array) {
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function fromHex(hex: string) {
+  return Uint8Array.from(hex.match(/../g) ?? [], (byte) => parseInt(byte, 16));
 }

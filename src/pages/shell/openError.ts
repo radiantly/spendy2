@@ -10,6 +10,8 @@ export function describeOpenError(error: unknown): string {
   if (error instanceof RemoteError) {
     if (error.code === "DECRYPTION_FAILED")
       return "Couldn't decrypt your database. It may have been changed by something other than Spendy.";
+    if (error.code === "BROKEN_CHAIN")
+      return "Your database is out of order or has pieces missing. It may have been changed by something other than Spendy.";
     if (error.code === "INVALID_FORMAT" || error.code === "UNSUPPORTED_VERSION")
       return "Your database is in a format this version of Spendy can't read.";
     if (error.name === "DatabaseTooNewError")

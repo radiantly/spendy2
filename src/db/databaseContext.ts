@@ -1,6 +1,5 @@
 import { createContext } from "react";
-import type { UploadResult } from "../api/database.ts";
-import type { Database } from "./database.ts";
+import type { Database, SaveResult } from "./database.ts";
 import type { EditHistory } from "./editHistory.ts";
 import type { EditedCell } from "./queries/transactions.ts";
 
@@ -49,7 +48,7 @@ export type DatabaseContextValue = {
    * Uploads the database. Edits made while it runs stay unsaved. Returns
    * null when there's no open database; network failures throw.
    */
-  save: () => Promise<UploadResult | null>;
+  save: () => Promise<SaveResult | null>;
   /**
    * Keeps a version saved elsewhere from replacing the open one until the
    * returned function is called, for state the replacement would lose.

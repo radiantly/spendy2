@@ -45,18 +45,21 @@ export function createQueryClient() {
 export const databaseKey = (database: Database) => [database.id] as const;
 
 /**
- * Marks `database`'s data out of date after each write, undo and redo, until
- * the returned function is called. What's on screen is read again straight
- * away, the rest once it's shown. Data updated in place is left alone.
+ * Marks `database`'s data out of date after each write, undo, redo and
+ * rebase, until the returned function is called. What's on screen is read
+ * again straight away, the rest once it's shown. Data updated in place is
+ * left alone, unless a rebase brought in changes made elsewhere: nothing
+ * updated it for those.
  */
 export function refreshAfterWrites(queryClient: QueryClient, database: Database) {
-  let version = database.version;
+  let { version, rebases } = database;
   return database.subscribe(() => {
     if (database.version === version) return;
-    version = database.version;
+    const rebased = database.rebases !== rebases;
+    ({ version, rebases } = database);
     void queryClient.invalidateQueries({
       queryKey: databaseKey(database),
-      predicate: (query) => !query.meta?.updatedInPlace,
+      predicate: rebased ? undefined : (query) => !query.meta?.updatedInPlace,
     });
   });
 }

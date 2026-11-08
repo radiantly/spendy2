@@ -1,17 +1,23 @@
 import { beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { page, userEvent, type Locator } from "vitest/browser";
-import { downloadDatabase, downloadDatabaseIfChanged, uploadDatabase } from "../../api/database.ts";
+import {
+  appendDatabasePart,
+  downloadDatabase,
+  downloadDatabaseIfChanged,
+  replaceDatabase,
+} from "../../api/database.ts";
 import { renderApp } from "../../test/renderAuthPage.tsx";
 import { pageWidth, rect } from "../../test/renderAuthPage.tsx";
 import { itFailsInFirefox } from "../../test/browsers.ts";
 import { SOURCE_HASH_SQL, transactionId } from "../../test/fixtures.ts";
 import { holdNext } from "../../test/holdNext.ts";
-import { loggedIn, storedDatabase } from "../../test/storedDatabase.ts";
+import { loggedIn, savedElsewhere, storedDatabase } from "../../test/storedDatabase.ts";
 
 vi.mock("../../api/database.ts", () => ({
   downloadDatabase: vi.fn(),
   downloadDatabaseIfChanged: vi.fn(),
-  uploadDatabase: vi.fn(),
+  replaceDatabase: vi.fn(),
+  appendDatabasePart: vi.fn(),
 }));
 // A fixed today; faking Date itself stops expect.element's retries.
 vi.mock("../../lib/period.ts", async (importOriginal) => ({
@@ -83,7 +89,8 @@ const DATA = [
 
 beforeEach(async () => {
   vi.mocked(downloadDatabase).mockReset();
-  vi.mocked(uploadDatabase).mockReset();
+  vi.mocked(replaceDatabase).mockReset();
+  vi.mocked(appendDatabasePart).mockReset();
   vi.mocked(downloadDatabaseIfChanged).mockReset();
   vi.mocked(downloadDatabaseIfChanged).mockResolvedValue({ success: false, code: "NOT_MODIFIED" });
   await page.viewport(1400, 1000);
@@ -586,14 +593,7 @@ describe("OverviewPage", () => {
       await opened();
       await userEvent.selectOptions(currency(), "INR");
       await expect.element(region("Spent")).toMatchTextContent("₹5,000");
-      const newer = await storedDatabase(
-        `${DATA}; DELETE FROM transactions WHERE currency = 'INR'`,
-      );
-      vi.mocked(downloadDatabaseIfChanged).mockResolvedValue({
-        success: true,
-        blob: newer,
-        sha256: "c".repeat(64),
-      });
+      await savedElsewhere("DELETE FROM transactions WHERE currency = 'INR'");
 
       document.dispatchEvent(new Event("visibilitychange"));
 
@@ -829,12 +829,7 @@ describe("OverviewPage", () => {
   it("shows a newer version saved elsewhere", async () => {
     await opened();
     await expect.element(region("Spent")).toMatchTextContent("$1,397");
-    const newer = await storedDatabase(`${DATA}; DELETE FROM transactions WHERE category = 'Rent'`);
-    vi.mocked(downloadDatabaseIfChanged).mockResolvedValue({
-      success: true,
-      blob: newer,
-      sha256: "c".repeat(64),
-    });
+    await savedElsewhere("DELETE FROM transactions WHERE category = 'Rent'");
 
     document.dispatchEvent(new Event("visibilitychange"));
 

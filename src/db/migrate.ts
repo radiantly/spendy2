@@ -34,9 +34,16 @@ export class DatabaseTooNewError extends Error {
 }
 
 /**
- * Applies every migration newer than the database's `user_version`, each in
- * its own transaction so a failure leaves the database at the last good
- * version. Returns the version before and after.
+ * Applies every migration newer than the database's `user_version`, up to
+ * version `to` (the latest by default), each in its own transaction so a
+ * failure leaves the database at the last good version. Returns the version
+ * before and after. Throws a DatabaseTooNewError if the database or `to` is
+ * past the latest migration, and an Error if the database is past `to`.
+ *
+ * Every database is brought to a version by the same migrations, and stored
+ * changesets are applied on top of the result (see worker.ts), so a
+ * migration must do the same to the same data every time: no random(),
+ * no current date or time.
  *
  * Foreign keys are off while migrating, so a migration can rebuild a table:
  * with them on, dropping it would cascade to the rows referencing it. A
@@ -52,19 +59,24 @@ export class DatabaseTooNewError extends Error {
  * trigger refers to a dropped table. Without one, what refers to the table
  * finds it again by name, and the API docs show its statement as written.
  */
-export function migrate(db: Database, migrations: readonly Migration[]) {
+export function migrate(
+  db: Database,
+  migrations: readonly Migration[],
+  to = migrations.at(-1)?.version ?? 0,
+) {
   const from = Number(db.selectValue("PRAGMA user_version"));
   const latest = migrations.at(-1)?.version ?? 0;
-  if (from > latest)
+  if (Math.max(from, to) > latest)
     throw new DatabaseTooNewError(
-      `The database is at version ${from}, but this app only knows up to ${latest}`,
+      `The database needs version ${Math.max(from, to)}, but this app only knows up to ${latest}`,
     );
+  if (from > to) throw new Error(`The database is at version ${from}, past version ${to}`);
 
   const foreignKeys = Number(db.selectValue("PRAGMA foreign_keys"));
   db.exec("PRAGMA foreign_keys = OFF");
   try {
     for (const { version, sql } of migrations) {
-      if (version <= from) continue;
+      if (version <= from || version > to) continue;
       db.transaction((tx) => {
         tx.exec(sql);
         const violations = tx.selectObjects("PRAGMA foreign_key_check");
@@ -80,5 +92,5 @@ export function migrate(db: Database, migrations: readonly Migration[]) {
     db.exec(`PRAGMA foreign_keys = ${foreignKeys}`);
   }
 
-  return { from, to: Math.max(from, latest) };
+  return { from, to };
 }

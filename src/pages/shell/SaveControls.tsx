@@ -1,13 +1,14 @@
 import { toast } from "sonner";
 import { FiSave } from "react-icons/fi";
-import type { UploadErrorCode } from "../../api/database.ts";
+import type { SaveErrorCode } from "../../db/database.ts";
 import { useDatabase } from "../../db/useDatabase.ts";
 
-const SAVE_ERRORS: Record<UploadErrorCode, string> = {
+const SAVE_ERRORS: Record<SaveErrorCode, string> = {
   CONFLICT:
     "Your database was saved from somewhere else since you opened it. Saving here would overwrite those changes.",
   UNAUTHORIZED: "Your session has ended. Log in again to save.",
-  TOO_LARGE: "Your database is too large to save.",
+  NEWER_VERSION:
+    "Your database was saved from somewhere else by a newer version of Spendy. Reload the page to update.",
   UPLOAD_FAILED: "Couldn't save. Try again in a moment.",
 };
 
