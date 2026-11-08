@@ -1,12 +1,31 @@
 import { DurableObject } from "cloudflare:workers";
 import * as opaque from "@serenity-kit/opaque";
+import type { z } from "zod";
 import {
   partChainError,
   readParts,
   type PartChainError,
   type PartFormatError,
 } from "../databaseParts.ts";
+import {
+  DATABASE_UPDATES_CLOSE,
+  databaseUpdatesAuthSchema,
+  tokenSchema,
+  type databaseUpdateSchema,
+} from "../schemas.ts";
 import { StoredDatabase } from "./StoredDatabase.ts";
+
+/**
+ * What a socket watching the database keeps through hibernation: the
+ * session it authenticated as, null until it has.
+ */
+type SocketAttachment = { sessionId: string | null };
+
+const sessionOf = (ws: WebSocket) => (ws.deserializeAttachment() as SocketAttachment).sessionId;
+
+/** Closes `ws` for not being, or no longer being, an active session's. */
+const closeUnauthorized = (ws: WebSocket) =>
+  ws.close(DATABASE_UPDATES_CLOSE.UNAUTHORIZED, "UNAUTHORIZED");
 
 export class UserStore extends DurableObject<Env> {
   // for login
@@ -15,6 +34,12 @@ export class UserStore extends DurableObject<Env> {
   private loginAttempts = 0;
 
   private readonly database = new StoredDatabase(this.ctx.storage);
+
+  constructor(ctx: DurableObjectState, env: Env) {
+    super(ctx, env);
+    // A client's keepalive, answered without waking the object.
+    ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
+  }
 
   private getKv<K extends keyof KvSchema>(key: K): KvSchema[K] | undefined {
     return this.ctx.storage.kv.get<KvSchema[K]>(key);
@@ -31,7 +56,10 @@ export class UserStore extends DurableObject<Env> {
   }
 
   async alarm() {
-    if (this.database.lastPart() === undefined) await this.ctx.storage.deleteAll();
+    if (this.database.lastPart() !== undefined) return;
+    await this.ctx.storage.deleteAll();
+    // The user is gone, and every session with them.
+    for (const ws of this.ctx.getWebSockets()) closeUnauthorized(ws);
   }
 
   async registerNewUser(registrationRecord: string): Promise<RegisterNewUserResponse> {
@@ -109,6 +137,8 @@ export class UserStore extends DurableObject<Env> {
       "ACTIVE_SESSIONS",
       new Set([sessionId, ...sessions.values().take(this.env.MAX_SESSIONS_PER_USER - 1)]),
     );
+    // The session it pushed out, if any, is over.
+    this.closeEndedSockets();
 
     return { success: true, sessionId };
   }
@@ -117,6 +147,7 @@ export class UserStore extends DurableObject<Env> {
     const sessions = this.getKv("ACTIVE_SESSIONS") ?? new Set();
     if (!sessions.delete(sessionId)) return { success: false, code: "UNAUTHORIZED" };
     this.putKv("ACTIVE_SESSIONS", sessions);
+    this.closeEndedSockets();
     return { success: true };
   }
 
@@ -159,6 +190,7 @@ export class UserStore extends DurableObject<Env> {
       return { success: false, code: "PRECONDITION_FAILED" };
 
     this.database.replace(parts);
+    this.sendUpdate();
     return { success: true, sha256: parts.at(-1)!.hash };
   }
 
@@ -186,6 +218,7 @@ export class UserStore extends DurableObject<Env> {
     if (code !== undefined) return { success: false, code };
 
     this.database.append(part);
+    this.sendUpdate();
     return { success: true, sha256: part.hash };
   }
 
@@ -221,6 +254,75 @@ export class UserStore extends DurableObject<Env> {
     const part = this.database.streamPart(index);
     if (part === undefined) return { success: false, code: "NOT_FOUND" };
     return { success: true, body: part.stream, byteLength: part.byteLength, sha256: part.hash };
+  }
+
+  /**
+   * Opens a socket that watches the database (see routes/users/updates.ts).
+   * It's sent nothing until its first message authenticates it, which must
+   * come within SOCKET_AUTH_TIMEOUT_SECONDS.
+   */
+  async fetch() {
+    const { 0: client, 1: server } = new WebSocketPair();
+    this.ctx.acceptWebSocket(server);
+    server.serializeAttachment({ sessionId: null } satisfies SocketAttachment);
+    // A timer keeps the object from hibernating until then, so it fires.
+    setTimeout(() => {
+      if (sessionOf(server) === null)
+        server.close(DATABASE_UPDATES_CLOSE.AUTH_TIMEOUT, "AUTH_TIMEOUT");
+    }, this.env.SOCKET_AUTH_TIMEOUT_SECONDS * 1000);
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
+  /**
+   * A socket's first message authenticates it, as an active session of this
+   * user; the socket is closed if it doesn't. Once it has, it's sent the
+   * database's last part, and anything else it sends is ignored.
+   */
+  async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
+    if (sessionOf(ws) !== null) return;
+    const sessionId = this.sessionAuthenticatedBy(message);
+    if (sessionId === null) return closeUnauthorized(ws);
+    ws.serializeAttachment({ sessionId } satisfies SocketAttachment);
+    ws.send(this.updateMessage());
+  }
+
+  /** The active session of this user `message` authenticates as, if it does. */
+  private sessionAuthenticatedBy(message: string | ArrayBuffer) {
+    if (typeof message !== "string") return null;
+    let json: unknown;
+    try {
+      json = JSON.parse(message);
+    } catch {
+      return null;
+    }
+    const auth = databaseUpdatesAuthSchema.safeParse(json);
+    if (!auth.success) return null;
+    const token = tokenSchema.safeDecode(auth.data.token);
+    if (!token.success || token.data.username !== this.username) return null;
+    return this.isActiveSession(token.data.sessionId) ? token.data.sessionId : null;
+  }
+
+  /** What a socket is told of the database: its last part, as it is now. */
+  private updateMessage() {
+    const update: z.input<typeof databaseUpdateSchema> = {
+      sha256: this.database.lastPart()?.hash ?? null,
+    };
+    return JSON.stringify(update);
+  }
+
+  /** Tells every authenticated socket the database's last part, after it changed. */
+  private sendUpdate() {
+    const message = this.updateMessage();
+    for (const ws of this.ctx.getWebSockets()) if (sessionOf(ws) !== null) ws.send(message);
+  }
+
+  /** Closes the authenticated sockets whose sessions have ended. */
+  private closeEndedSockets() {
+    const sessions = this.getKv("ACTIVE_SESSIONS") ?? new Set();
+    for (const ws of this.ctx.getWebSockets()) {
+      const sessionId = sessionOf(ws);
+      if (sessionId !== null && !sessions.has(sessionId)) closeUnauthorized(ws);
+    }
   }
 }
 

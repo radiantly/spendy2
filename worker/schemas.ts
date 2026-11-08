@@ -36,3 +36,21 @@ export const databaseEtagSchema = z.codec(z.string().regex(/^".{64}"$/), z.hash(
   decode: (etag) => etag.slice(1, -1),
   encode: (hash) => `"${hash}"`,
 });
+
+/**
+ * The socket a client watches the database with (see routes/users/updates.ts):
+ * the first message it sends is `databaseUpdatesAuthSchema`, and each it's
+ * sent is a `databaseUpdateSchema`.
+ */
+export const databaseUpdatesAuthSchema = z.strictObject({ token: z.string() });
+
+/** The sha256 of the database's last part, null without a database. */
+export const databaseUpdateSchema = z.strictObject({ sha256: z.hash("sha256").nullable() });
+
+/** The codes the server closes a database updates socket with. */
+export const DATABASE_UPDATES_CLOSE = {
+  /** The token isn't for an active session of the user, or the session has ended since. */
+  UNAUTHORIZED: 4401,
+  /** No token came in time. */
+  AUTH_TIMEOUT: 4408,
+} as const;
