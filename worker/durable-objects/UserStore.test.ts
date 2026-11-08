@@ -2,9 +2,16 @@ import { env } from "cloudflare:workers";
 import { reset, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import * as opaque from "@serenity-kit/opaque";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
-import { DATABASE_BLOB_MAGIC, DATABASE_BLOB_VERSION, toSha256Schema } from "../schemas.ts";
-import { loginToken, registerUser } from "../test/helpers.ts";
-import { DATABASE_CHUNK_BYTES, type UserStore } from "./UserStore.ts";
+import { NO_PREVIOUS_PART, sha256Hex } from "../databaseParts.ts";
+import {
+  chainedParts,
+  concatBytes,
+  databasePart,
+  loginToken,
+  registerUser,
+} from "../test/helpers.ts";
+import { DATABASE_CHUNK_BYTES } from "./StoredDatabase.ts";
+import type { UserStore } from "./UserStore.ts";
 
 const CLEANUP_DELAY_MS = env.USER_CLEANUP_DELAY_SECONDS * 1000;
 
@@ -14,6 +21,9 @@ afterEach(() => reset());
 function startLoginRequest() {
   return opaque.client.startLogin({ password: "password" }).startLoginRequest;
 }
+
+/** The body of an upload: `parts`, one after the other. */
+const streamOf = (...parts: Uint8Array[]) => new Response(concatBytes(parts)).body!;
 
 function getRegistrationRecord(state: DurableObjectState) {
   return state.storage.kv.get<string>("REGISTRATION_RECORD");
@@ -127,16 +137,21 @@ describe("UserStore", () => {
     it("keeps a user who has saved a database", async () => {
       const stub = env.USER.getByName("alice");
       await stub.registerNewUser("record");
-      await runInDurableObject(stub, (_instance, state) => {
-        state.storage.kv.put("ACTIVE_SESSIONS", new Set([crypto.randomUUID()]));
-        state.storage.kv.put("DATABASE_SHA256", "0".repeat(64));
+      const session = crypto.randomUUID();
+      const part = databasePart(NO_PREVIOUS_PART);
+      await runInDurableObject(stub, async (instance, state) => {
+        state.storage.kv.put("ACTIVE_SESSIONS", new Set([session]));
+        await instance.replaceDatabase(session, streamOf(part), null);
       });
 
       expect(await runDurableObjectAlarm(stub)).toBe(true);
 
-      await runInDurableObject(stub, (_instance, state) => {
+      await runInDurableObject(stub, async (instance, state) => {
         expect(getRegistrationRecord(state)).toBe("record");
-        expect(state.storage.kv.get("DATABASE_SHA256")).toBe("0".repeat(64));
+        expect(await instance.downloadDatabase(session, null)).toMatchObject({
+          success: true,
+          sha256: await sha256Hex(part),
+        });
       });
     });
   });
@@ -177,30 +192,19 @@ describe("UserStore", () => {
   });
 
   describe("database", () => {
-    /** The body of an upload. */
-    const streamOf = (bytes: Uint8Array) => new Response(bytes).body!;
-
-    const sha256Of = (bytes: Uint8Array) => toSha256Schema.decodeAsync(bytes.slice().buffer);
-
-    /**
-     * A database of `size` bytes, whose content differs all along it so
-     * chunks out of order would show.
-     */
-    function blob(size: number) {
-      const bytes = Uint8Array.from({ length: size }, (_, i) => i % 251);
-      bytes.set([...DATABASE_BLOB_MAGIC, DATABASE_BLOB_VERSION]);
-      return bytes;
-    }
-
     it("does not write storage when an unknown user uploads or downloads", async () => {
       const stub = env.USER.getByName("nobody");
+      const part = databasePart(NO_PREVIOUS_PART);
 
       await runInDurableObject(stub, async (instance, state) => {
         const unauthorized = { success: false, code: "UNAUTHORIZED" };
-        expect(await instance.uploadDatabase(crypto.randomUUID(), streamOf(blob(8)), null)).toEqual(
-          unauthorized,
-        );
-        expect(await instance.downloadDatabase(crypto.randomUUID(), null)).toEqual(unauthorized);
+        const session = crypto.randomUUID();
+        expect(await instance.replaceDatabase(session, streamOf(part), null)).toEqual(unauthorized);
+        expect(
+          await instance.appendDatabasePart(session, streamOf(part), NO_PREVIOUS_PART),
+        ).toEqual(unauthorized);
+        expect(await instance.downloadDatabase(session, null)).toEqual(unauthorized);
+        expect(await instance.downloadDatabasePart(session, 0)).toEqual(unauthorized);
 
         expect(hasStorage(state)).toBe(false);
       });
@@ -216,17 +220,53 @@ describe("UserStore", () => {
       });
     }
 
+    const bytesOf = async (stream: ReadableStream<Uint8Array>) =>
+      new Uint8Array(await new Response(stream).arrayBuffer());
+
+    /** A download's body, once it's all read, and what the download said of it. */
+    async function readDownload({
+      body,
+      byteLength,
+      sha256,
+    }: {
+      body: ReadableStream<Uint8Array>;
+      byteLength: number;
+      sha256: string;
+    }) {
+      return { body: await bytesOf(body), byteLength, sha256 };
+    }
+
+    /** The stored database, as one download: every part and the last one's hash. */
+    async function stored(instance: UserStore) {
+      const result = await instance.downloadDatabase(SESSION, null);
+      if (!result.success || !result.modified) return result;
+      return readDownload(result);
+    }
+
+    /** What `stored` gives for `parts`, and `storedPart` for a single part. */
+    async function storedAs(parts: Uint8Array<ArrayBuffer>[]) {
+      const body = concatBytes(parts);
+      return { body, byteLength: body.length, sha256: await sha256Hex(parts.at(-1)!) };
+    }
+
+    /** The part at `index`, as its download. */
+    async function storedPart(instance: UserStore, index: number) {
+      const result = await instance.downloadDatabasePart(SESSION, index);
+      if (!result.success) return result;
+      return readDownload(result);
+    }
+
     it.each([
       ["less than a chunk", DATABASE_CHUNK_BYTES - 1],
       ["exactly a chunk", DATABASE_CHUNK_BYTES],
       ["just over a chunk", DATABASE_CHUNK_BYTES + 1],
       ["several chunks", 3 * DATABASE_CHUNK_BYTES + 12345],
-    ])("returns a database of %s byte for byte, with its hash", async (_name, size) => {
-      const body = blob(size);
-      const sha256 = await sha256Of(body);
+    ])("returns a part of %s byte for byte, with its hash", async (_name, size) => {
+      const [part] = await chainedParts({ size });
+      const sha256 = await sha256Hex(part!);
 
       await inStore(async (instance) => {
-        expect(await instance.uploadDatabase(SESSION, streamOf(body), null)).toEqual({
+        expect(await instance.replaceDatabase(SESSION, streamOf(part!), null)).toEqual({
           success: true,
           sha256,
         });
@@ -234,62 +274,337 @@ describe("UserStore", () => {
 
         if (!result.success || !result.modified) expect.unreachable(JSON.stringify(result));
         expect(result.sha256).toBe(sha256);
+        expect(result.byteLength).toBe(size);
         // every() rather than toEqual: a failing toEqual would print megabytes
-        const downloaded = new Uint8Array(result.body);
+        const downloaded = await bytesOf(result.body);
         expect(downloaded.length).toBe(size);
-        expect(downloaded.every((byte, i) => byte === body[i])).toBe(true);
+        expect(downloaded.every((byte, i) => byte === part![i])).toBe(true);
       });
     });
 
-    it("stores a database in rows of at most a chunk, all replaced by the next", async () => {
+    it("stores each part in rows of at most a chunk, all replaced by the next upload", async () => {
       await inStore(async (instance, state) => {
-        const rowSizes = () =>
+        const rows = () =>
           state.storage.sql
-            .exec<{ size: number }>("SELECT length(data) AS size FROM database_chunks ORDER BY seq")
+            .exec<{ part: number; size: number }>(
+              `SELECT part, length(chunk) AS size FROM database_parts_chunks
+               ORDER BY part, chunk_idx`,
+            )
             .toArray()
-            .map(({ size }) => size);
+            .map(({ part, size }) => [part, size]);
 
-        const first = blob(2 * DATABASE_CHUNK_BYTES + 1);
-        await instance.uploadDatabase(SESSION, streamOf(first), null);
-        expect(rowSizes()).toEqual([DATABASE_CHUNK_BYTES, DATABASE_CHUNK_BYTES, 1]);
+        const first = await chainedParts({ size: 2 * DATABASE_CHUNK_BYTES + 1 }, { size: 200 });
+        await instance.replaceDatabase(SESSION, streamOf(...first), null);
+        expect(rows()).toEqual([
+          [0, DATABASE_CHUNK_BYTES],
+          [0, DATABASE_CHUNK_BYTES],
+          [0, 1],
+          [1, 200],
+        ]);
 
-        await instance.uploadDatabase(SESSION, streamOf(blob(10)), await sha256Of(first));
-        expect(rowSizes()).toEqual([10]);
+        const [second] = await chainedParts({ size: 300 });
+        await instance.replaceDatabase(SESSION, streamOf(second!), await sha256Hex(first[1]!));
+        expect(rows()).toEqual([[0, 300]]);
       });
     });
 
-    it("leaves the stored database as it was when the precondition fails", async () => {
-      const body = blob(10);
+    it("returns every part one after the other, with the last part's hash", async () => {
+      const parts = await chainedParts({}, { size: 300 }, {});
 
       await inStore(async (instance) => {
-        await instance.uploadDatabase(SESSION, streamOf(body), null);
-
-        expect(await instance.uploadDatabase(SESSION, streamOf(blob(20)), "9".repeat(64))).toEqual({
-          success: false,
-          code: "PRECONDITION_FAILED",
+        expect(await instance.replaceDatabase(SESSION, streamOf(...parts), null)).toEqual({
+          success: true,
+          sha256: await sha256Hex(parts[2]!),
         });
-        expect(await instance.downloadDatabase(SESSION, null)).toEqual({
+
+        expect(await stored(instance)).toEqual(await storedAs(parts));
+      });
+    });
+
+    it("returns each part on its own, with its own hash", async () => {
+      const parts = await chainedParts({}, { size: 300 });
+
+      await inStore(async (instance) => {
+        await instance.replaceDatabase(SESSION, streamOf(...parts), null);
+
+        for (const [i, part] of parts.entries())
+          expect(await storedPart(instance, i)).toEqual(await storedAs([part]));
+        expect(await instance.downloadDatabasePart(SESSION, 2)).toEqual({
+          success: false,
+          code: "NOT_FOUND",
+        });
+      });
+    });
+
+    it("finds no part without a database", async () => {
+      await inStore(async (instance) => {
+        expect(await instance.downloadDatabasePart(SESSION, 0)).toEqual({
+          success: false,
+          code: "NOT_FOUND",
+        });
+      });
+    });
+
+    it("adds parts after the last one", async () => {
+      const [first, second, third] = await chainedParts({}, {}, {});
+
+      await inStore(async (instance) => {
+        await instance.replaceDatabase(SESSION, streamOf(first!), null);
+
+        expect(
+          await instance.appendDatabasePart(SESSION, streamOf(second!), await sha256Hex(first!)),
+        ).toEqual({ success: true, sha256: await sha256Hex(second!) });
+        expect(
+          await instance.appendDatabasePart(SESSION, streamOf(third!), await sha256Hex(second!)),
+        ).toEqual({ success: true, sha256: await sha256Hex(third!) });
+
+        expect(await stored(instance)).toEqual(await storedAs([first!, second!, third!]));
+        expect(await storedPart(instance, 2)).toEqual(await storedAs([third!]));
+      });
+    });
+
+    describe("a download under way", () => {
+      /** Reads what's left of a download, after `read`. */
+      async function readRest(reader: ReadableStreamDefaultReader<Uint8Array>, read: Uint8Array[]) {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) return concatBytes(read);
+          read.push(value);
+        }
+      }
+
+      it.each([
+        ["the database's", (instance: UserStore) => instance.downloadDatabase(SESSION, null)],
+        ["a part's", (instance: UserStore) => instance.downloadDatabasePart(SESSION, 0)],
+      ])("errors when %s parts are replaced partway through it", async (_name, download) => {
+        const parts = await chainedParts({ size: 3 * DATABASE_CHUNK_BYTES });
+        const [other] = await chainedParts({ seed: 9 });
+
+        await inStore(async (instance) => {
+          await instance.replaceDatabase(SESSION, streamOf(...parts), null);
+          const result = await download(instance);
+          if (!result.success || !("body" in result)) expect.unreachable(JSON.stringify(result));
+          const reader = result.body.getReader();
+          // reads from the first chunk
+          await reader.read();
+
+          await instance.replaceDatabase(SESSION, streamOf(other!), await sha256Hex(parts[0]!));
+
+          await expect(readRest(reader, [])).rejects.toThrow(
+            "The database was replaced while it was being read",
+          );
+        });
+      });
+
+      it("sends the database as it was when it started, without parts added since", async () => {
+        const parts = await chainedParts({ size: 2 * DATABASE_CHUNK_BYTES }, {});
+        const added = databasePart(await sha256Hex(parts[1]!));
+
+        await inStore(async (instance) => {
+          await instance.replaceDatabase(SESSION, streamOf(...parts), null);
+          const result = await instance.downloadDatabase(SESSION, null);
+          if (!result.success || !result.modified) expect.unreachable(JSON.stringify(result));
+          const reader = result.body.getReader();
+          const { value: first } = await reader.read();
+
+          expect(
+            await instance.appendDatabasePart(SESSION, streamOf(added), await sha256Hex(parts[1]!)),
+          ).toMatchObject({ success: true });
+
+          // hashes rather than toEqual: a failing toEqual would print megabytes
+          const body = await readRest(reader, [first!]);
+          expect(await sha256Hex(body)).toBe(await sha256Hex(concatBytes(parts)));
+          expect(result.byteLength).toBe(body.length);
+        });
+      });
+    });
+
+    it("says the database is unmodified while given its last part's hash", async () => {
+      const parts = await chainedParts({}, {});
+
+      await inStore(async (instance) => {
+        await instance.replaceDatabase(SESSION, streamOf(...parts), null);
+
+        const sha256 = await sha256Hex(parts[1]!);
+        expect(await instance.downloadDatabase(SESSION, sha256)).toEqual({
+          success: true,
+          modified: false,
+          sha256,
+        });
+        expect(await instance.downloadDatabase(SESSION, await sha256Hex(parts[0]!))).toMatchObject({
           success: true,
           modified: true,
-          body: body.buffer,
-          sha256: await sha256Of(body),
+        });
+      });
+    });
+
+    describe("preconditions", () => {
+      const PRECONDITION_FAILED = { success: false, code: "PRECONDITION_FAILED" };
+
+      it("leaves the stored database as it was when a replacement's fails", async () => {
+        const parts = await chainedParts({}, {});
+        const [other] = await chainedParts({ seed: 99 });
+
+        await inStore(async (instance) => {
+          await instance.replaceDatabase(SESSION, streamOf(...parts), null);
+
+          // the first part's hash, another, or none at all, rather than the last part's
+          for (const ifMatch of [await sha256Hex(parts[0]!), "9".repeat(64), null])
+            expect(await instance.replaceDatabase(SESSION, streamOf(other!), ifMatch)).toEqual(
+              PRECONDITION_FAILED,
+            );
+          expect(await stored(instance)).toEqual(await storedAs(parts));
+        });
+      });
+
+      it("leaves the stored database as it was when an addition's fails", async () => {
+        const parts = await chainedParts({}, {});
+        // follows the first part, which is no longer the last
+        const late = databasePart(await sha256Hex(parts[0]!), { seed: 99 });
+
+        await inStore(async (instance) => {
+          await instance.replaceDatabase(SESSION, streamOf(...parts), null);
+
+          expect(
+            await instance.appendDatabasePart(SESSION, streamOf(late), await sha256Hex(parts[0]!)),
+          ).toEqual(PRECONDITION_FAILED);
+          expect(await stored(instance)).toEqual(await storedAs(parts));
+        });
+      });
+
+      it("can't create a database by adding a part", async () => {
+        await inStore(async (instance, state) => {
+          const part = databasePart(NO_PREVIOUS_PART);
+
+          expect(
+            await instance.appendDatabasePart(SESSION, streamOf(part), NO_PREVIOUS_PART),
+          ).toEqual(PRECONDITION_FAILED);
+          expect(await stored(instance)).toEqual({ success: false, code: "NOT_FOUND" });
+          const tables = state.storage.sql
+            .exec("SELECT name FROM sqlite_master WHERE name LIKE 'database%'")
+            .toArray();
+          expect(tables).toEqual([]);
+        });
+      });
+    });
+
+    describe("chain", () => {
+      it.each([
+        [
+          "part 0 points at a part",
+          async () => [databasePart("a".repeat(64))],
+          "BROKEN_PART_CHAIN",
+        ],
+        [
+          "a part points at another part than the one before it",
+          async () => {
+            const [first, second] = await chainedParts({}, {});
+            return [first!, second!, databasePart(await sha256Hex(first!), { seed: 9 })];
+          },
+          "BROKEN_PART_CHAIN",
+        ],
+        [
+          "the user version goes down",
+          () => chainedParts({ userVersion: 3 }, { userVersion: 2 }),
+          "USER_VERSION_DECREASED",
+        ],
+      ])("rejects a replacement where %s, storing nothing", async (_name, partsOf, code) => {
+        const parts = await partsOf();
+
+        await inStore(async (instance) => {
+          expect(await instance.replaceDatabase(SESSION, streamOf(...parts), null)).toEqual({
+            success: false,
+            code,
+          });
+          expect(await stored(instance)).toEqual({ success: false, code: "NOT_FOUND" });
+        });
+      });
+
+      it("accepts a replacement whose user version stays the same or goes up", async () => {
+        const parts = await chainedParts(
+          { userVersion: 1 },
+          { userVersion: 1 },
+          { userVersion: 4 },
+        );
+
+        await inStore(async (instance) => {
+          expect(await instance.replaceDatabase(SESSION, streamOf(...parts), null)).toMatchObject({
+            success: true,
+          });
+        });
+      });
+
+      it("rejects an addition that doesn't point at the last part, adding nothing", async () => {
+        const parts = await chainedParts({}, {});
+        const last = await sha256Hex(parts[1]!);
+
+        await inStore(async (instance) => {
+          await instance.replaceDatabase(SESSION, streamOf(...parts), null);
+
+          for (const previousHash of [await sha256Hex(parts[0]!), NO_PREVIOUS_PART])
+            expect(
+              await instance.appendDatabasePart(
+                SESSION,
+                streamOf(databasePart(previousHash)),
+                last,
+              ),
+            ).toEqual({ success: false, code: "BROKEN_PART_CHAIN" });
+          expect(await stored(instance)).toEqual(await storedAs(parts));
+        });
+      });
+
+      it("adds a part whose user version is the last part's or higher, but not lower", async () => {
+        const [first] = await chainedParts({ userVersion: 3 });
+        const same = databasePart(await sha256Hex(first!), { userVersion: 3 });
+        const lower = databasePart(await sha256Hex(same), { userVersion: 2 });
+        const higher = databasePart(await sha256Hex(same), { userVersion: 4 });
+
+        await inStore(async (instance) => {
+          await instance.replaceDatabase(SESSION, streamOf(first!), null);
+          const append = async (part: Uint8Array, after: Uint8Array<ArrayBuffer>) =>
+            instance.appendDatabasePart(SESSION, streamOf(part), await sha256Hex(after));
+
+          expect(await append(same, first!)).toMatchObject({ success: true });
+          expect(await append(lower, same)).toEqual({
+            success: false,
+            code: "USER_VERSION_DECREASED",
+          });
+          expect(await append(higher, same)).toMatchObject({ success: true });
+          expect(await stored(instance)).toEqual(await storedAs([first!, same, higher]));
+        });
+      });
+
+      it("rejects adding two parts at once", async () => {
+        const [first] = await chainedParts({});
+        const second = databasePart(await sha256Hex(first!));
+        const third = databasePart(await sha256Hex(second), { seed: 9 });
+
+        await inStore(async (instance) => {
+          await instance.replaceDatabase(SESSION, streamOf(first!), null);
+
+          expect(
+            await instance.appendDatabasePart(
+              SESSION,
+              streamOf(second, third),
+              await sha256Hex(first!),
+            ),
+          ).toEqual({ success: false, code: "INVALID_PART_LENGTH" });
+          expect(await stored(instance)).toEqual(await storedAs([first!]));
         });
       });
     });
 
     it.each([
       ["no magic", new Uint8Array(8), "MISSING_SPENDY_MAGIC"],
-      ["another version", new Uint8Array([...DATABASE_BLOB_MAGIC, 2, 0]), "INVALID_VERSION_BYTE"],
+      ["version 1", databasePart(NO_PREVIOUS_PART).with(6, 0x01), "INVALID_VERSION_BYTE"],
+      ["a cut-off part", databasePart(NO_PREVIOUS_PART).subarray(0, -1), "INVALID_PART_LENGTH"],
     ])("rejects a body with %s, storing nothing", async (_name, body, code) => {
       await inStore(async (instance) => {
-        expect(await instance.uploadDatabase(SESSION, streamOf(body), null)).toEqual({
+        expect(await instance.replaceDatabase(SESSION, streamOf(body), null)).toEqual({
           success: false,
           code,
         });
-        expect(await instance.downloadDatabase(SESSION, null)).toEqual({
-          success: false,
-          code: "NOT_FOUND",
-        });
+        expect(await stored(instance)).toEqual({ success: false, code: "NOT_FOUND" });
       });
     });
 
@@ -313,12 +628,19 @@ describe("UserStore", () => {
         ...(state.storage.kv.get<Set<string>>("ACTIVE_SESSIONS") ?? []),
       ];
 
+      const part = databasePart(NO_PREVIOUS_PART);
       const uses: [string, (instance: UserStore, sessionId: string) => Promise<unknown>][] = [
         [
-          "an upload",
-          (instance, sessionId) => instance.uploadDatabase(sessionId, streamOf(blob(8)), null),
+          "a replacement",
+          (instance, sessionId) => instance.replaceDatabase(sessionId, streamOf(part), null),
+        ],
+        [
+          "an addition",
+          (instance, sessionId) =>
+            instance.appendDatabasePart(sessionId, streamOf(part), NO_PREVIOUS_PART),
         ],
         ["a download", (instance, sessionId) => instance.downloadDatabase(sessionId, null)],
+        ["a part's download", (instance, sessionId) => instance.downloadDatabasePart(sessionId, 0)],
       ];
 
       it.each(uses)("keeps the order on %s by a session in the newer half", async (_name, use) => {

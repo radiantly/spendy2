@@ -1,15 +1,20 @@
 import { DurableObject } from "cloudflare:workers";
 import * as opaque from "@serenity-kit/opaque";
-import { databaseBlobSchema, toSha256Schema } from "../schemas.ts";
-
-// Maximum BLOB size for durable object is 2MB. Thus DB is stored in 1MiB chunks
-export const DATABASE_CHUNK_BYTES = 1024 * 1024;
+import {
+  partChainError,
+  readParts,
+  type PartChainError,
+  type PartFormatError,
+} from "../databaseParts.ts";
+import { StoredDatabase } from "./StoredDatabase.ts";
 
 export class UserStore extends DurableObject<Env> {
   // for login
   private loginState?: string;
   private loginOnlyAfter = 0;
   private loginAttempts = 0;
+
+  private readonly database = new StoredDatabase(this.ctx.storage);
 
   private getKv<K extends keyof KvSchema>(key: K): KvSchema[K] | undefined {
     return this.ctx.storage.kv.get<KvSchema[K]>(key);
@@ -26,7 +31,7 @@ export class UserStore extends DurableObject<Env> {
   }
 
   async alarm() {
-    if (this.getKv("DATABASE_SHA256") === undefined) await this.ctx.storage.deleteAll();
+    if (this.database.lastPart() === undefined) await this.ctx.storage.deleteAll();
   }
 
   async registerNewUser(registrationRecord: string): Promise<RegisterNewUserResponse> {
@@ -129,94 +134,124 @@ export class UserStore extends DurableObject<Env> {
     return true;
   }
 
-  async uploadDatabase(
+  /**
+   * Replaces the database with the parts `stream` holds, which must chain
+   * from part 0. `ifMatch` is the sha256 of the last part replaced, or null
+   * if there must be no database yet.
+   */
+  async replaceDatabase(
     sessionId: string,
     stream: ReadableStream<Uint8Array>,
-    current_hash: string | null,
+    ifMatch: string | null,
   ): Promise<UploadDatabaseResponse> {
     if (!this.isActiveSession(sessionId)) return { success: false, code: "UNAUTHORIZED" };
 
-    const body = await new Response(stream).arrayBuffer();
-    const header = databaseBlobSchema.safeDecode(body);
-    if (!header.success) {
-      // A wrong magic also fails the version check; the first issue is the cause.
-      const cause = header.error.issues[0]?.message;
-      return {
-        success: false,
-        code: cause === "INVALID_VERSION_BYTE" ? "INVALID_VERSION_BYTE" : "MISSING_SPENDY_MAGIC",
-      };
+    const read = await readParts(new Uint8Array(await new Response(stream).arrayBuffer()));
+    if (!read.success) return read;
+    const { parts } = read;
+    for (const [i, part] of parts.entries()) {
+      const code = partChainError(part, i === 0 ? undefined : parts[i - 1]);
+      if (code !== undefined) return { success: false, code };
     }
-    const sha256 = await toSha256Schema.decodeAsync(body);
 
-    if ((this.getKv("DATABASE_SHA256") ?? null) !== current_hash)
+    // no await from here on, so nothing is stored between the check and the write
+    if ((this.database.lastPart()?.hash ?? null) !== ifMatch)
       return { success: false, code: "PRECONDITION_FAILED" };
 
-    this.ctx.storage.transactionSync(() => {
-      const { sql } = this.ctx.storage;
-      sql.exec(`
-        DROP TABLE IF EXISTS database_chunks;
-        CREATE TABLE database_chunks (
-          seq  INTEGER PRIMARY KEY, -- position, from 0
-          data BLOB NOT NULL        -- at most DATABASE_CHUNK_BYTES
-        ) STRICT;
-        `);
-      for (let seq = 0; seq * DATABASE_CHUNK_BYTES < body.byteLength; seq++) {
-        const start = seq * DATABASE_CHUNK_BYTES;
-        sql.exec(
-          "INSERT INTO database_chunks (seq, data) VALUES (?, ?)",
-          seq,
-          body.slice(start, start + DATABASE_CHUNK_BYTES),
-        );
-      }
-      this.putKv("DATABASE_SHA256", sha256);
-    });
-    return { success: true, sha256 };
+    this.database.replace(parts);
+    return { success: true, sha256: parts.at(-1)!.hash };
   }
 
+  /**
+   * Adds the part `stream` holds after the last part, whose sha256
+   * `ifMatch` must be. Only replaceDatabase can create a database.
+   */
+  async appendDatabasePart(
+    sessionId: string,
+    stream: ReadableStream<Uint8Array>,
+    ifMatch: string,
+  ): Promise<UploadDatabaseResponse> {
+    if (!this.isActiveSession(sessionId)) return { success: false, code: "UNAUTHORIZED" };
+
+    const read = await readParts(new Uint8Array(await new Response(stream).arrayBuffer()));
+    if (!read.success) return read;
+    // one part, so its length is the body's
+    if (read.parts.length !== 1) return { success: false, code: "INVALID_PART_LENGTH" };
+    const [part] = read.parts;
+
+    // no await from here on, so nothing is stored between the check and the write
+    const last = this.database.lastPart();
+    if (last?.hash !== ifMatch) return { success: false, code: "PRECONDITION_FAILED" };
+    const code = partChainError(part, last);
+    if (code !== undefined) return { success: false, code };
+
+    this.database.append(part);
+    return { success: true, sha256: part.hash };
+  }
+
+  /**
+   * Every part, one after the other, unless `ifNoneMatch` is the last part's
+   * sha256. The body streams the parts as they are now, and errors if a
+   * replace drops them before it's read.
+   */
   async downloadDatabase(
     sessionId: string,
-    current_hash: string | null,
+    ifNoneMatch: string | null,
   ): Promise<DownloadDatabaseResponse> {
     if (!this.isActiveSession(sessionId)) return { success: false, code: "UNAUTHORIZED" };
 
-    const current = this.getKv("DATABASE_SHA256");
-    if (current === undefined) return { success: false, code: "NOT_FOUND" };
-    if (current === current_hash) return { success: true, modified: false, sha256: current };
+    const last = this.database.lastPart();
+    if (last === undefined) return { success: false, code: "NOT_FOUND" };
+    if (last.hash === ifNoneMatch) return { success: true, modified: false, sha256: last.hash };
 
-    const chunks = this.ctx.storage.sql
-      .exec<{ data: ArrayBuffer }>("SELECT data FROM database_chunks ORDER BY seq")
-      .toArray();
-    const body = new Uint8Array(chunks.reduce((size, { data }) => size + data.byteLength, 0));
-    let offset = 0;
-    for (const { data } of chunks) {
-      body.set(new Uint8Array(data), offset);
-      offset += data.byteLength;
-    }
-    return { success: true, modified: true, body: body.buffer, sha256: current };
+    const { stream, byteLength } = this.database.streamAll();
+    return { success: true, modified: true, body: stream, byteLength, sha256: last.hash };
+  }
+
+  /**
+   * The part at `index`, counting from 0. The body errors if a replace drops
+   * the part before it's read.
+   */
+  async downloadDatabasePart(
+    sessionId: string,
+    index: number,
+  ): Promise<DownloadDatabasePartResponse> {
+    if (!this.isActiveSession(sessionId)) return { success: false, code: "UNAUTHORIZED" };
+
+    const part = this.database.streamPart(index);
+    if (part === undefined) return { success: false, code: "NOT_FOUND" };
+    return { success: true, body: part.stream, byteLength: part.byteLength, sha256: part.hash };
   }
 }
 
 interface KvSchema {
   REGISTRATION_RECORD: string;
   ACTIVE_SESSIONS: Set<string>;
-  DATABASE_SHA256: string;
 }
 
+/** `sha256` is the last part's, the ETag of the whole database. */
 export type UploadDatabaseResponse =
   | { success: true; sha256: string }
   | {
       success: false;
-      code:
-        | "UNAUTHORIZED"
-        | "MISSING_SPENDY_MAGIC"
-        | "INVALID_VERSION_BYTE"
-        | "PRECONDITION_FAILED";
+      code: "UNAUTHORIZED" | PartFormatError | PartChainError | "PRECONDITION_FAILED";
     };
 
+/** `sha256` is the last part's, the ETag of the whole database. */
 export type DownloadDatabaseResponse =
-  | { success: true; modified: true; body: ArrayBuffer; sha256: string }
+  | ({ success: true; modified: true; sha256: string } & StreamedBody)
   | { success: true; modified: false; sha256: string }
   | { success: false; code: "UNAUTHORIZED" | "NOT_FOUND" };
+
+export type DownloadDatabasePartResponse =
+  | ({ success: true; sha256: string } & StreamedBody)
+  | { success: false; code: "UNAUTHORIZED" | "NOT_FOUND" };
+
+/** A body that's streamed, and how many bytes it has. */
+interface StreamedBody {
+  body: ReadableStream<Uint8Array>;
+  byteLength: number;
+}
 
 export type RegisterNewUserResponse =
   | { success: true }
