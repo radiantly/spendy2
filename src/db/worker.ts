@@ -13,12 +13,12 @@ import sqlite3InitModule, {
   type Database,
   type Sqlite3Static,
 } from "@sqlite.org/sqlite-wasm";
-import { NO_PREVIOUS_PART, sha256Hex } from "../../worker/databaseParts.ts";
+import { NO_PREVIOUS_PART, sha256Hex, type DatabasePart } from "../../worker/databaseParts.ts";
 import { applyChanges, ChangesConflictError, invert, Session } from "./changes.ts";
 import { configureConnection } from "./connection.ts";
 import { migrate } from "./migrate.ts";
 import { MIGRATIONS } from "./migrations.ts";
-import { decryptPart, encryptPart, readChain } from "./parts.ts";
+import { DatabasePartError, decryptPart, encryptPart, readChain } from "./parts.ts";
 import { expose, transfer, type WorkerScope } from "./rpc.ts";
 
 const sqlite3Promise = sqlite3InitModule();
@@ -29,6 +29,8 @@ let db: Database | undefined;
 let kek: CryptoKey | undefined;
 /** The sha256 of the stored chain's last part, which the next save follows; null if never saved. */
 let head: string | null = null;
+/** How many parts the stored chain has: where the next part goes. */
+let partCount = 0;
 /** The changes since the version last saved (or opened). */
 let baseline: Session | undefined;
 /**
@@ -36,6 +38,23 @@ let baseline: Session | undefined;
  * once it's encrypted. They replace `baseline` and `head` once it's saved.
  */
 let pending: { baseline: Session; head?: string } | undefined;
+
+/**
+ * How moving the unsaved changes onto a newer stored version went (see
+ * `rebase` and `catchUp`): `moved`, with the version the next save follows
+ * now; `conflict`, nothing changed, as they change what was changed there
+ * too; or `unchained`, nothing changed, as the parts don't follow this
+ * copy's, so the whole chain is needed.
+ */
+type Moved =
+  | { outcome: "moved"; unsaved: boolean; sha256: string; parts: number }
+  | { outcome: "conflict"; unsaved: boolean }
+  | { outcome: "unchained"; unsaved: boolean };
+
+/** That the unsaved changes were moved onto the version `head` and `partCount` are now. */
+function moved(): Moved {
+  return { outcome: "moved", unsaved: unsaved(), sha256: head!, parts: partCount };
+}
 
 function openDb() {
   if (db === undefined) throw new Error("The database isn't open");
@@ -106,7 +125,7 @@ async function replay(sqlite3: Sqlite3Static, bytes: Uint8Array<ArrayBuffer>, ke
     next.close();
     throw error;
   }
-  return { db: next, head: parts.at(-1)!.hash };
+  return { db: next, head: parts.at(-1)!.hash, parts: parts.length };
 }
 
 /** A new database, migrated to the latest version. */
@@ -126,19 +145,23 @@ const api = {
   /**
    * Opens the downloaded parts, or creates a new database when there are
    * none, brought up to the latest version. Replaces any open database.
-   * Returns the sha256 of the last part, null for a new database.
+   * Returns the sha256 of the last part, null for a new database, and how
+   * many parts there are.
    */
   async open(parts: Uint8Array<ArrayBuffer> | null, key: CryptoKey) {
     const sqlite3 = await sqlite3Promise;
     const opened =
-      parts === null ? { db: create(sqlite3), head: null } : await replay(sqlite3, parts, key);
+      parts === null
+        ? { db: create(sqlite3), head: null, parts: 0 }
+        : await replay(sqlite3, parts, key);
 
     closeDb();
     db = opened.db;
     head = opened.head;
+    partCount = opened.parts;
     kek = key;
     baseline = new Session(sqlite3, opened.db);
-    return { created: parts === null, sha256: head };
+    return { created: parts === null, sha256: head, parts: partCount };
   },
 
   /**
@@ -183,8 +206,8 @@ const api = {
   /**
    * After uploading the last part `prepareSave` made: if it was `saved`,
    * changes are counted from it from now on, and the next save follows it.
-   * Returns whether there are unsaved changes, and the sha256 of the last
-   * part saved.
+   * Returns whether there are unsaved changes, the sha256 of the last part
+   * saved, and how many parts there are.
    */
   async finishSave(saved: boolean) {
     openDb();
@@ -192,40 +215,91 @@ const api = {
       baseline!.end();
       baseline = pending.baseline;
       head = pending.head;
+      partCount++;
     } else pending?.baseline.end();
     pending = undefined;
-    return { unsaved: unsaved(), sha256: head };
+    return { unsaved: unsaved(), sha256: head, parts: partCount };
   },
 
   /**
-   * Moves the unsaved changes onto `parts`, a newer stored version, so the
-   * next save follows it. If they don't fit it (they change what was
-   * changed there too), nothing changes and `rebased` is false.
+   * Moves the unsaved changes onto `parts`, the whole of a newer stored
+   * version, so the next save follows it (see `Moved`).
    *
    * Every unsaved change moves, also those made while the parts were read:
    * nothing awaits once they're taken.
    */
-  async rebase(parts: Uint8Array<ArrayBuffer>) {
+  async rebase(parts: Uint8Array<ArrayBuffer>): Promise<Moved> {
     const sqlite3 = await sqlite3Promise;
     openDb();
     const next = await replay(sqlite3, parts, kek!);
 
     const nextBaseline = new Session(sqlite3, next.db);
     try {
-      applyChanges(sqlite3, next.db, baseline!.changes());
+      // What was made there too is no conflict.
+      applyChanges(sqlite3, next.db, baseline!.changes(), { skipMade: true });
     } catch (error) {
       nextBaseline.end();
       next.db.close();
-      if (error instanceof ChangesConflictError)
-        return { rebased: false as const, unsaved: unsaved() };
+      if (error instanceof ChangesConflictError) return { outcome: "conflict", unsaved: unsaved() };
       throw error;
     }
 
     closeDb();
     db = next.db;
     head = next.head;
+    partCount = next.parts;
     baseline = nextBaseline;
-    return { rebased: true as const, unsaved: unsaved(), sha256: next.head };
+    return moved();
+  },
+
+  /**
+   * Moves the unsaved changes onto the version `parts` make: the parts
+   * stored after this copy's (see `Moved`), so the rest needn't be read
+   * again. In one transaction, the unsaved changes are undone, `parts`
+   * applied, and the unsaved changes made again. They're `unchained`
+   * unless they follow this copy's last part, written at the user version
+   * it's at: one written at another needs the migrations between first.
+   *
+   * Every unsaved change moves, as in `rebase`.
+   */
+  async catchUp(parts: Uint8Array<ArrayBuffer>): Promise<Moved> {
+    const sqlite3 = await sqlite3Promise;
+    const current = openDb();
+    const unchained = (): Moved => ({ outcome: "unchained", unsaved: unsaved() });
+    if (head === null) return unchained();
+    let read: DatabasePart[];
+    try {
+      read = await readChain(parts, { hash: head, userVersion: 0 });
+    } catch (error) {
+      if (error instanceof DatabasePartError && error.code === "BROKEN_CHAIN") return unchained();
+      throw error;
+    }
+    const version = Number(current.selectValue("PRAGMA user_version"));
+    if (read.some(({ userVersion }) => userVersion !== version)) return unchained();
+    const changesets = await Promise.all(read.map((part) => decryptPart(part, kek!)));
+
+    const changes = baseline!.changes();
+    let nextBaseline: Session | undefined;
+    try {
+      current.transaction(() => {
+        // Back to the version last saved, on to the newer one, and on again.
+        if (changes.length > 0) applyChanges(sqlite3, current, invert(sqlite3, current, changes));
+        for (const changeset of changesets) applyChanges(sqlite3, current, changeset);
+        nextBaseline = new Session(sqlite3, current);
+        // What was made there too is no conflict.
+        if (changes.length > 0) applyChanges(sqlite3, current, changes, { skipMade: true });
+      });
+    } catch (error) {
+      nextBaseline?.end();
+      if (error instanceof ChangesConflictError) return { outcome: "conflict", unsaved: unsaved() };
+      throw error;
+    }
+
+    baseline!.end();
+    baseline = nextBaseline!;
+    head = read.at(-1)!.hash;
+    partCount += read.length;
+    return moved();
   },
 
   /**
@@ -285,6 +359,7 @@ const api = {
   async close() {
     closeDb();
     head = null;
+    partCount = 0;
     kek = undefined;
   },
 };

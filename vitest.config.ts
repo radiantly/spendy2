@@ -69,8 +69,9 @@ export default defineConfig({
             miniflare: {
               bindings: {
                 OPAQUE_SERVER_SETUP: opaque.server.createSetup(),
-                // So a test can see a socket time out without waiting the real time.
-                SOCKET_AUTH_TIMEOUT_SECONDS: 0.2,
+                // So a test can see a socket time out without waiting the real
+                // time, and still has the time to upload before it authenticates.
+                SOCKET_AUTH_TIMEOUT_SECONDS: 1,
               },
             },
           }),

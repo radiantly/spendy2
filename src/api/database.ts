@@ -2,7 +2,7 @@ export type DownloadResult =
   | { success: true; parts: Uint8Array<ArrayBuffer>; sha256: string }
   | { success: false; code: DownloadErrorCode };
 
-/** NOT_FOUND means the user has never saved a database. */
+/** NOT_FOUND means the user has never saved a database, or a part asked for isn't there. */
 export type DownloadErrorCode = "NOT_FOUND" | "UNAUTHORIZED" | "DOWNLOAD_FAILED";
 
 /** `sha256` is the stored database's last part's, its ETag. */
@@ -26,24 +26,19 @@ const PARTS_URL = "/api/users/me/database/parts";
 
 /** Every stored part, one after the other. Network failures throw. */
 export async function downloadDatabase(token: string): Promise<DownloadResult> {
-  return readDownload(await fetchParts(token));
+  return readDownload(await fetchParts(token, PARTS_URL));
 }
 
 /**
- * Downloads the database only if its last part isn't the one `sha256`
- * names; NOT_MODIFIED if it still is. Network failures throw.
+ * The stored part at `index`, counting from 0, as `parts`, with its sha256;
+ * NOT_FOUND if there's no such part. Network failures throw.
  */
-export async function downloadDatabaseIfChanged(
-  token: string,
-  sha256: string,
-): Promise<DownloadResult | { success: false; code: "NOT_MODIFIED" }> {
-  const res = await fetchParts(token, { "If-None-Match": `"${sha256}"` });
-  if (res.status === 304) return { success: false, code: "NOT_MODIFIED" };
-  return readDownload(res);
+export async function downloadDatabasePart(token: string, index: number): Promise<DownloadResult> {
+  return readDownload(await fetchParts(token, `${PARTS_URL}/${index}`));
 }
 
-function fetchParts(token: string, headers: Record<string, string> = {}) {
-  return fetch(PARTS_URL, { headers: { Authorization: `Bearer ${token}`, ...headers } });
+function fetchParts(token: string, url: string) {
+  return fetch(url, { headers: { Authorization: `Bearer ${token}` } });
 }
 
 async function readDownload(res: Response): Promise<DownloadResult> {

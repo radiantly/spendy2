@@ -2,7 +2,7 @@ import type { BindingSpec } from "@sqlite.org/sqlite-wasm";
 import {
   appendDatabasePart,
   downloadDatabase,
-  downloadDatabaseIfChanged,
+  downloadDatabasePart,
   replaceDatabase,
   type DownloadErrorCode,
   type UploadErrorCode,
@@ -32,6 +32,29 @@ export type SaveResult =
 
 export type SaveErrorCode = UploadErrorCode | "NEWER_VERSION";
 
+/**
+ * How bringing in what was saved elsewhere went (see `catchUp`): `updated`
+ * if anything was. CONFLICT and NEWER_VERSION are as for a save; this copy
+ * then keeps its changes and its base.
+ */
+export type CatchUpResult =
+  | { success: true; updated: boolean }
+  | {
+      success: false;
+      code: "CONFLICT" | "NEWER_VERSION" | Exclude<DownloadErrorCode, "NOT_FOUND">;
+    };
+
+/** `parts`, one after the other, as they're downloaded. */
+function concat(parts: readonly Uint8Array<ArrayBuffer>[]) {
+  const bytes = new Uint8Array(parts.reduce((size, part) => size + part.length, 0));
+  let offset = 0;
+  for (const part of parts) {
+    bytes.set(part, offset);
+    offset += part.length;
+  }
+  return bytes;
+}
+
 /** How many times a save moves its changes onto a version saved elsewhere before giving up. */
 const MAX_REBASES = 3;
 
@@ -51,7 +74,9 @@ export class Database {
   readonly #connection: Connection<DatabaseApi>;
   readonly #token: string;
   #sha256: string | null;
-  /** Settles when the latest save has; saves run one at a time. */
+  /** How many parts are stored up to `#sha256`'s: where the next one is. */
+  #parts: number;
+  /** Settles when the latest save or catch-up has; they run one at a time. */
   #saving: Promise<unknown> = Promise.resolve();
   #unsaved = false;
   #version = 0;
@@ -65,12 +90,13 @@ export class Database {
     worker: Worker,
     connection: Connection<DatabaseApi>,
     token: string,
-    sha256: string | null,
+    { sha256, parts }: { sha256: string | null; parts: number },
   ) {
     this.#worker = worker;
     this.#connection = connection;
     this.#token = token;
     this.#sha256 = sha256;
+    this.#parts = parts;
   }
 
   /**
@@ -100,9 +126,10 @@ export class Database {
   }
 
   /**
-   * Goes up each time a save moves this copy's changes onto a version saved
-   * elsewhere, bringing in what changed there: anything read from it is out
-   * of date, also what's otherwise kept up to date edit by edit.
+   * Goes up each time this copy's changes are moved onto a version saved
+   * elsewhere, bringing in what changed there (see `catchUp` and `save`):
+   * anything read from it is out of date, also what's otherwise kept up to
+   * date edit by edit (see `keepTransactionsInSync`).
    */
   get rebases() {
     return this.#rebases;
@@ -208,9 +235,86 @@ export class Database {
     for (let rebases = 0; ; rebases++) {
       const result = await this.#upload();
       if (result.success || result.code !== "CONFLICT" || rebases === MAX_REBASES) return result;
-      const rebased = await this.#rebase();
-      if (rebased !== null) return rebased;
+      const caught = await this.#catchUp();
+      if (!caught.success)
+        return {
+          success: false,
+          code: caught.code === "DOWNLOAD_FAILED" ? "UPLOAD_FAILED" : caught.code,
+        };
     }
+  }
+
+  /**
+   * Brings in what was saved elsewhere, unless `sha256`, the stored
+   * database's last part as the server last said, is the one this copy is
+   * based on: the unsaved changes are moved onto it, as a save does when it
+   * finds another version saved since (see `save`). Only the parts saved
+   * since are downloaded, unless the stored version isn't one that follows
+   * this copy's.
+   *
+   * It waits for any save, and saves wait for it: both move this copy's base.
+   */
+  catchUp(sha256: string | null): Promise<CatchUpResult> {
+    const result = this.#saving.then(() =>
+      sha256 === this.#sha256 ? { success: true as const, updated: false } : this.#catchUp(),
+    );
+    this.#saving = result.catch(() => {});
+    return result;
+  }
+
+  async #catchUp(): Promise<CatchUpResult> {
+    if (this.#sha256 !== null) {
+      const added = await this.#downloadPartsAdded();
+      if (!added.success) return added;
+      if (added.parts.length > 0) {
+        const moved = await this.#move(() =>
+          this.#connection.remote.catchUp(transfer(concat(added.parts))),
+        );
+        // Otherwise they don't follow this copy's: the whole chain is needed.
+        if (moved !== null) return moved;
+      }
+    }
+    const download = await downloadDatabase(this.#token);
+    if (!download.success)
+      return download.code === "NOT_FOUND"
+        ? { success: true, updated: false }
+        : { success: false, code: download.code };
+    if (download.sha256 === this.#sha256) return { success: true, updated: false };
+    return (await this.#move(() => this.#connection.remote.rebase(transfer(download.parts))))!;
+  }
+
+  /** The parts stored after the ones this copy is based on, by downloading each in turn. */
+  async #downloadPartsAdded() {
+    const parts: Uint8Array<ArrayBuffer>[] = [];
+    for (let index = this.#parts; ; index++) {
+      const download = await downloadDatabasePart(this.#token, index);
+      if (download.success) parts.push(download.parts);
+      else if (download.code === "NOT_FOUND") return { success: true as const, parts };
+      else return { success: false as const, code: download.code };
+    }
+  }
+
+  /**
+   * Moves the unsaved changes onto a newer version, as `move` does in the
+   * worker, taking what it says. Null if the parts don't follow this copy's.
+   */
+  async #move(move: () => ReturnType<DatabaseApi["rebase"]>): Promise<CatchUpResult | null> {
+    let moved;
+    try {
+      moved = await this.#change(move);
+    } catch (error) {
+      if (error instanceof RemoteError && error.name === "DatabaseTooNewError")
+        return { success: false, code: "NEWER_VERSION" };
+      throw error;
+    }
+    if (moved.outcome === "unchained") return null;
+    if (moved.outcome === "conflict") return { success: false, code: "CONFLICT" };
+
+    this.#sha256 = moved.sha256;
+    this.#parts = moved.parts;
+    this.#rebases++;
+    this.#changed();
+    return { success: true, updated: true };
   }
 
   async #upload(): Promise<UploadResult> {
@@ -229,38 +333,13 @@ export class Database {
       await this.#change(() => this.#connection.remote.finishSave(false)).catch(() => {});
       throw error;
     }
-    const { sha256 } = await this.#change(() => this.#connection.remote.finishSave(result.success));
+    const { sha256, parts } = await this.#change(() =>
+      this.#connection.remote.finishSave(result.success),
+    );
     if (!result.success) return result;
     this.#sha256 = sha256;
+    this.#parts = parts;
     return { success: true, sha256: sha256! };
-  }
-
-  /**
-   * Moves the unsaved changes onto the version stored now. Returns null once
-   * they're moved, so they can be uploaded again, or why they couldn't be.
-   */
-  async #rebase(): Promise<SaveResult | null> {
-    const download = await downloadDatabase(this.#token);
-    if (!download.success)
-      return {
-        success: false,
-        code: download.code === "UNAUTHORIZED" ? "UNAUTHORIZED" : "UPLOAD_FAILED",
-      };
-
-    let moved;
-    try {
-      moved = await this.#change(() => this.#connection.remote.rebase(transfer(download.parts)));
-    } catch (error) {
-      if (error instanceof RemoteError && error.name === "DatabaseTooNewError")
-        return { success: false, code: "NEWER_VERSION" };
-      throw error;
-    }
-    if (!moved.rebased) return { success: false, code: "CONFLICT" };
-
-    this.#sha256 = moved.sha256;
-    this.#rebases++;
-    this.#changed();
-    return null;
   }
 
   /**
@@ -301,31 +380,6 @@ export async function openDatabase(session: Session): Promise<Database> {
   return openIn(started, session, download.success ? download.parts : null);
 }
 
-/**
- * Downloads and opens the stored database if it's newer than `current`:
- * saved since `current` was, or, if `current` was never saved, saved for
- * the first time elsewhere. Returns null otherwise, including when there's
- * no stored database. `current` stays open.
- *
- * Throws as `openDatabase` does.
- */
-export async function openNewerDatabase(
-  session: Session,
-  current: Database,
-): Promise<Database | null> {
-  const download =
-    current.sha256 === null
-      ? await downloadDatabase(session.token)
-      : await downloadDatabaseIfChanged(session.token, current.sha256);
-  if (!download.success) {
-    if (download.code === "NOT_FOUND" || download.code === "NOT_MODIFIED") return null;
-    throw new DatabaseOpenError(download.code);
-  }
-  if (download.sha256 === current.sha256) return null;
-  // Most checks find nothing newer, so the worker starts only once there is.
-  return openIn(startWorker(), session, download.parts);
-}
-
 type DatabaseWorker = { worker: Worker; connection: Connection<DatabaseApi> };
 
 /** A new database worker, which starts loading SQLite straight away. */
@@ -355,5 +409,5 @@ async function openIn(
     stopWorker(started);
     throw error;
   }
-  return new Database(started.worker, started.connection, session.token, opened.sha256);
+  return new Database(started.worker, started.connection, session.token, opened);
 }

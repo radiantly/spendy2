@@ -1,13 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NO_PREVIOUS_PART, sha256Hex } from "../../worker/databaseParts.ts";
-import { DatabaseOpenError, openDatabase, openNewerDatabase, type Database } from "./database.ts";
+import { DatabaseOpenError, openDatabase, type Database } from "./database.ts";
 import { MIGRATIONS } from "./migrations.ts";
 import { encryptPart } from "./parts.ts";
 import { ClosedError } from "./rpc.ts";
 import {
   appendDatabasePart,
   downloadDatabase,
-  downloadDatabaseIfChanged,
+  downloadDatabasePart,
   replaceDatabase,
   type DownloadResult,
 } from "../api/database.ts";
@@ -17,7 +17,7 @@ import { EXPORT_KEY, TOKEN } from "../test/fixtures.ts";
 
 vi.mock("../api/database.ts", () => ({
   downloadDatabase: vi.fn(),
-  downloadDatabaseIfChanged: vi.fn(),
+  downloadDatabasePart: vi.fn(),
   replaceDatabase: vi.fn(),
   appendDatabasePart: vi.fn(),
 }));
@@ -49,11 +49,13 @@ async function download(): Promise<DownloadResult> {
 beforeEach(() => {
   stored = [];
   vi.mocked(downloadDatabase).mockReset().mockImplementation(download);
-  vi.mocked(downloadDatabaseIfChanged)
+  vi.mocked(downloadDatabasePart)
     .mockReset()
-    .mockImplementation(async (_token, sha256) =>
-      sha256 === (await storedHead()) ? { success: false, code: "NOT_MODIFIED" } : download(),
-    );
+    .mockImplementation(async (_token, index) => {
+      const part = stored[index];
+      if (part === undefined) return { success: false, code: "NOT_FOUND" };
+      return { success: true, parts: part.slice(), sha256: await sha256Hex(part) };
+    });
   vi.mocked(replaceDatabase)
     .mockReset()
     .mockImplementation(async (_token, parts, precondition) => {
@@ -376,7 +378,10 @@ describe("Database.save", () => {
       await elsewhere.batch(INSERT_SAVINGS);
       await elsewhere.save();
       await here.batch([{ sql: "UPDATE accounts SET type = 'Card'" }]);
-      vi.mocked(downloadDatabase).mockResolvedValueOnce({ success: false, code: "UNAUTHORIZED" });
+      vi.mocked(downloadDatabasePart).mockResolvedValueOnce({
+        success: false,
+        code: "UNAUTHORIZED",
+      });
 
       expect(await here.save()).toEqual({ success: false, code: "UNAUTHORIZED" });
       here.close();
@@ -403,81 +408,158 @@ describe("Database.save", () => {
   });
 });
 
-describe("openNewerDatabase", () => {
-  it("asks for the stored version only if it isn't the one open", async () => {
-    const [current, other] = await twoCopies(INSERT_CHECKING);
+describe("Database.catchUp", () => {
+  const INSERT_BROKERAGE = [
+    { sql: "INSERT INTO accounts VALUES ('brokerage', 'USD', 'Broker', NULL)" },
+  ];
 
-    expect(await openNewerDatabase(await session(), current)).toBeNull();
-    expect(downloadDatabaseIfChanged).toHaveBeenCalledWith(TOKEN, current.sha256);
-    current.close();
-    other.close();
+  it("does nothing when told the last part it's based on", async () => {
+    const [here, elsewhere] = await twoCopies(INSERT_CHECKING);
+    vi.mocked(downloadDatabase).mockClear();
+
+    expect(await here.catchUp(here.sha256)).toEqual({ success: true, updated: false });
+
+    expect(downloadDatabasePart).not.toHaveBeenCalled();
+    expect(downloadDatabase).not.toHaveBeenCalled();
+    here.close();
+    elsewhere.close();
   });
 
-  it("opens a newer version", async () => {
-    const [current, other] = await twoCopies(INSERT_CHECKING);
-    await other.batch(INSERT_SAVINGS);
-    await other.save();
+  it("brings in the parts saved since, downloading only them, keeping its unsaved changes", async () => {
+    const [here, elsewhere] = await twoCopies(INSERT_CHECKING);
+    await elsewhere.batch(INSERT_SAVINGS);
+    await elsewhere.save();
+    await here.batch(INSERT_BROKERAGE);
+    vi.mocked(downloadDatabase).mockClear();
 
-    const newer = await openNewerDatabase(await session(), current);
+    expect(await here.catchUp(await storedHead())).toEqual({ success: true, updated: true });
 
-    expect(newer!.sha256).toBe(await storedHead());
-    expect(await accountsOf(newer!)).toEqual(["checking", "savings"]);
-    // The open one is left to its owner.
-    expect(await accountsOf(current)).toEqual(["checking"]);
-    newer!.close();
-    current.close();
-    other.close();
+    // The one after its part 0, then none.
+    expect(vi.mocked(downloadDatabasePart).mock.calls.map(([, index]) => index)).toEqual([1, 2]);
+    expect(downloadDatabase).not.toHaveBeenCalled();
+    expect(here.sha256).toBe(await storedHead());
+    expect(await accountsOf(here)).toEqual(["brokerage", "checking", "savings"]);
+    expect(here.unsaved).toBe(true);
+    expect(here.rebases).toBe(1);
+    here.close();
+    elsewhere.close();
   });
 
-  it("ignores a download of the version already open", async () => {
-    const [current, other] = await twoCopies(INSERT_CHECKING);
-    vi.mocked(downloadDatabaseIfChanged).mockImplementation(download);
+  it("then saves after the parts it brought in", async () => {
+    const [here, elsewhere] = await twoCopies(INSERT_CHECKING);
+    await elsewhere.batch(INSERT_SAVINGS);
+    await elsewhere.save();
+    await here.batch(INSERT_BROKERAGE);
+    await here.catchUp(await storedHead());
+    const brought = await storedHead();
 
-    expect(await openNewerDatabase(await session(), current)).toBeNull();
-    current.close();
-    other.close();
+    expect(await here.save()).toMatchObject({ success: true });
+
+    expect(vi.mocked(appendDatabasePart).mock.lastCall?.[2]).toBe(brought);
+    expect(await storedAccounts()).toEqual(["brokerage", "checking", "savings"]);
+    here.close();
+    elsewhere.close();
   });
 
-  it("opens a database first saved elsewhere, when this one never was", async () => {
-    const current = await openDatabase(await session());
-    const [other] = await twoCopies(INSERT_SAVINGS);
-
-    const newer = await openNewerDatabase(await session(), current);
-
-    expect(newer!.sha256).toBe(await storedHead());
-    expect(downloadDatabaseIfChanged).not.toHaveBeenCalled();
-    newer!.close();
-    current.close();
-    other.close();
-  });
-
-  it("returns null while a database that was never saved still isn't", async () => {
-    const current = await openDatabase(await session());
-
-    expect(await openNewerDatabase(await session(), current)).toBeNull();
-    current.close();
-  });
-
-  it("returns null when the stored database is gone", async () => {
-    const [current, other] = await twoCopies(INSERT_CHECKING);
+  it("downloads all of a database stored in place of the one it's based on", async () => {
+    const [here, elsewhere] = await twoCopies(INSERT_CHECKING);
+    // A new database, stored as part 0 in place of the parts there were.
     stored = [];
+    const replacement = await openDatabase(await session());
+    await replacement.batch(INSERT_SAVINGS);
+    await replacement.save();
+    replacement.close();
 
-    expect(await openNewerDatabase(await session(), current)).toBeNull();
-    current.close();
-    other.close();
+    expect(await here.catchUp(await storedHead())).toEqual({ success: true, updated: true });
+
+    expect(downloadDatabase).toHaveBeenCalled();
+    expect(await accountsOf(here)).toEqual(["savings"]);
+    here.close();
+    elsewhere.close();
+  });
+
+  it("brings in a database first saved elsewhere, when this one never was", async () => {
+    const here = await openDatabase(await session());
+    const [elsewhere] = await twoCopies(INSERT_CHECKING);
+    await here.batch(INSERT_SAVINGS);
+
+    expect(await here.catchUp(await storedHead())).toEqual({ success: true, updated: true });
+
+    expect(here.sha256).toBe(await storedHead());
+    expect(await accountsOf(here)).toEqual(["checking", "savings"]);
+    here.close();
+    elsewhere.close();
+  });
+
+  it("changes nothing when its changes conflict with those brought in", async () => {
+    const [here, elsewhere] = await twoCopies(INSERT_CHECKING);
+    await elsewhere.batch([{ sql: "UPDATE accounts SET type = 'Card'" }]);
+    await elsewhere.save();
+    await here.batch([{ sql: "UPDATE accounts SET type = 'Cash'" }]);
+    const base = here.sha256;
+
+    expect(await here.catchUp(await storedHead())).toEqual({ success: false, code: "CONFLICT" });
+
+    expect(here.sha256).toBe(base);
+    expect(here.rebases).toBe(0);
+    expect(await here.query("SELECT type FROM accounts")).toEqual([{ type: "Cash" }]);
+    here.close();
+    elsewhere.close();
+  });
+
+  it("returns NEWER_VERSION for parts saved by a newer app", async () => {
+    const [here, elsewhere] = await twoCopies(INSERT_CHECKING);
+    stored.push(
+      await encryptPart(new Uint8Array(), await deriveKek(EXPORT_KEY), {
+        previousHash: (await storedHead())!,
+        userVersion: MIGRATIONS.length + 1,
+      }),
+    );
+
+    expect(await here.catchUp(await storedHead())).toEqual({
+      success: false,
+      code: "NEWER_VERSION",
+    });
+    here.close();
+    elsewhere.close();
   });
 
   it.each(["UNAUTHORIZED", "DOWNLOAD_FAILED"] as const)(
-    "throws when the download is %s",
+    "returns %s when downloading a part does",
     async (code) => {
-      const [current, other] = await twoCopies(INSERT_CHECKING);
-      vi.mocked(downloadDatabaseIfChanged).mockResolvedValue({ success: false, code });
+      const [here, elsewhere] = await twoCopies(INSERT_CHECKING);
+      await elsewhere.batch(INSERT_SAVINGS);
+      await elsewhere.save();
+      vi.mocked(downloadDatabasePart).mockResolvedValueOnce({ success: false, code });
 
-      await expect(openNewerDatabase(await session(), current)).rejects.toMatchObject({ code });
-      current.close();
-      other.close();
+      expect(await here.catchUp(await storedHead())).toEqual({ success: false, code });
+      expect(await accountsOf(here)).toEqual(["checking"]);
+      here.close();
+      elsewhere.close();
     },
   );
+
+  it("waits for a save, and brings in nothing once it's what the save stored", async () => {
+    const [here, elsewhere] = await twoCopies(INSERT_CHECKING);
+    await here.batch(INSERT_SAVINGS);
+    const append = vi.mocked(appendDatabasePart).getMockImplementation()!;
+    let finishUpload!: () => void;
+    vi.mocked(appendDatabasePart).mockImplementation(
+      (...args) => new Promise((resolve) => (finishUpload = () => resolve(append(...args)))),
+    );
+    const saved = here.save();
+    await vi.waitFor(() => expect(appendDatabasePart).toHaveBeenCalled());
+
+    // As the server says once the save's part is stored, before the save has heard.
+    const caught = here.catchUp("e".repeat(64));
+    finishUpload();
+    await saved;
+
+    expect(await caught).toEqual({ success: true, updated: false });
+    expect(here.rebases).toBe(0);
+    here.close();
+    elsewhere.close();
+  });
 });
 
 describe("Database.unsaved", () => {

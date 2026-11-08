@@ -48,18 +48,17 @@ export const databaseKey = (database: Database) => [database.id] as const;
  * Marks `database`'s data out of date after each write, undo, redo and
  * rebase, until the returned function is called. What's on screen is read
  * again straight away, the rest once it's shown. Data updated in place is
- * left alone, unless a rebase brought in changes made elsewhere: nothing
- * updated it for those.
+ * left alone: what keeps it up to date does so after rebases too (see
+ * `keepTransactionsInSync`).
  */
 export function refreshAfterWrites(queryClient: QueryClient, database: Database) {
-  let { version, rebases } = database;
+  let version = database.version;
   return database.subscribe(() => {
     if (database.version === version) return;
-    const rebased = database.rebases !== rebases;
-    ({ version, rebases } = database);
+    version = database.version;
     void queryClient.invalidateQueries({
       queryKey: databaseKey(database),
-      predicate: rebased ? undefined : (query) => !query.meta?.updatedInPlace,
+      predicate: (query) => !query.meta?.updatedInPlace,
     });
   });
 }

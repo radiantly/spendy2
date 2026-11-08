@@ -198,7 +198,8 @@ describe("opening and closing", () => {
     await userEvent.click(headerButton("Date"));
 
     expect(onCommit).toHaveBeenCalledWith([
-      { rowIndex: 1, field: "counterparty", patch: { counterparty: "Corner Shop" } },
+      // Shop 2 is t2: they count up together.
+      { id: "t2", field: "counterparty", patch: { counterparty: "Corner Shop" } },
     ]);
   });
 });

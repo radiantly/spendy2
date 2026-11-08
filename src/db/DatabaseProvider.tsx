@@ -8,17 +8,15 @@ import {
   type ReactNode,
 } from "react";
 import { QueryClientProvider } from "@tanstack/react-query";
-import { pollWhileVisible } from "../lib/pollWhileVisible.ts";
+import { watchDatabase } from "../api/databaseUpdates.ts";
 import { saveRowNumberDigits, type Session } from "../lib/session.ts";
-import { DatabaseOpenError, openDatabase, openNewerDatabase, type Database } from "./database.ts";
+import { DatabaseOpenError, openDatabase, type Database } from "./database.ts";
 import { DatabaseContext, type DatabaseState } from "./databaseContext.ts";
 import { EditHistory } from "./editHistory.ts";
 import { COUNT_TRANSACTIONS } from "./queries/transactions.ts";
 import { createQueryClient, databaseKey, refreshAfterWrites } from "./queryClient.ts";
+import { RemoteError } from "./rpc.ts";
 import { keepTransactionsInSync } from "./transactions.ts";
-
-/** How often to check for a version saved elsewhere (ms), while the page is visible. */
-const UPDATE_INTERVAL = 10_000;
 
 /** For `useSyncExternalStore` while there's no database: nothing ever changes. */
 const subscribeToNothing = () => () => {};
@@ -57,21 +55,30 @@ async function rememberRowNumberDigits(token: string, counted: Promise<number | 
  * closes when the provider unmounts. What the children read from it is
  * cached (see queryClient.ts), and kept up to date as it changes.
  *
- * While there's nothing to lose, a version saved elsewhere (another tab or
- * device) replaces the open one. Nothing is lost when there are no unsaved
- * changes, no save is running, and nothing has asked to hold updates back.
+ * What's saved elsewhere (another tab or device) is brought in as soon as
+ * the server says, with the unsaved changes moved onto it (see
+ * `Database.catchUp`), even while a cell is being edited: what's shown
+ * follows its transactions. `onUpdated` is called each time something is
+ * brought in, by this or by a save, and `onUpdateFailed` when it can't be:
+ * the unsaved changes change what was changed there too, or a newer
+ * version of the app saved it.
  *
  * `onSessionEnded` is called when the server no longer accepts `session`:
- * on opening, or on checking for a newer version while there's nothing to
- * lose. With unsaved changes, it's left for saving to report.
+ * on opening, or later while there's nothing to lose (no unsaved changes,
+ * and no save running). With unsaved changes, it's left for saving to
+ * report.
  */
 function DatabaseProvider({
   session,
   onSessionEnded,
+  onUpdated,
+  onUpdateFailed,
   children,
 }: {
   session: Session;
   onSessionEnded: () => void;
+  onUpdated?: () => void;
+  onUpdateFailed?: () => void;
   children: ReactNode;
 }) {
   const [state, setState] = useState<DatabaseState>({ status: "loading" });
@@ -85,53 +92,68 @@ function DatabaseProvider({
     () => database?.unsaved ?? false,
   );
 
-  // Whether a save is running. Set as soon as one starts, so a check
-  // finishing before the next render sees it.
+  // Whether a save is running. Set as soon as one starts, so what the
+  // server says before the next render sees it.
   const savingRef = useRef(false);
   useLayoutEffect(() => {
     savingRef.current = saving;
   });
-  const holdsRef = useRef(0);
   const sessionEnded = useEffectEvent(() => onSessionEnded());
+  const updated = useEffectEvent(() => onUpdated?.());
+  const updateFailed = useEffectEvent(() => onUpdateFailed?.());
 
   useEffect(() => {
     let cancelled = false;
-    let opened: Database | undefined;
-    let stopPolling: (() => void) | undefined;
-    let checking = false;
+    let stopWatching: (() => void) | undefined;
+    let stopRetrying: (() => void) | undefined;
+    // The last part the server said, while the unsaved changes conflict with
+    // what was saved up to it: tried again as they change, as undoing what
+    // conflicted lets it through.
+    let behind: { sha256: string | null } | null = null;
     // The database itself knows of unsaved changes as soon as they're made.
-    const canReplace = () => !opened!.unsaved && !savingRef.current && holdsRef.current === 0;
+    const nothingToLose = (database: Database) =>
+      !cancelled && !database.unsaved && !savingRef.current;
 
-    /** Shows `database`, as downloaded: the version the next load gets too, unless it's saved first. */
-    function show(database: Database) {
-      opened = database;
-      setState(ready(database));
-      void rememberRowNumberDigits(session.token, countTransactions(database));
-    }
-
-    async function checkForUpdate() {
-      if (checking || !opened || !canReplace()) return;
-      checking = true;
+    /** Brings in what was saved elsewhere into `database`, the server saying its last part is `sha256`. */
+    async function catchUp(database: Database, sha256: string | null) {
       try {
-        const newer = await openNewerDatabase(session, opened);
-        if (!newer) return;
-        // Something changed while it downloaded.
-        if (cancelled || !canReplace()) return newer.close();
-        show(newer);
+        const result = await database.catchUp(sha256);
+        if (cancelled) return;
+        if (result.success) {
+          behind = null;
+          return;
+        }
+        // Only a reload brings the newer app a newer version needs.
+        if (result.code === "CONFLICT") behind = { sha256 };
+        if (result.code === "CONFLICT" || result.code === "NEWER_VERSION") updateFailed();
+        else if (result.code === "UNAUTHORIZED" && nothingToLose(database)) sessionEnded();
+        // A download that failed is tried again on the next update; a save
+        // reports any lasting problem.
       } catch (error) {
-        // Logging out now would lose what changed during the check.
-        if (isSessionEnded(error) && !cancelled && canReplace()) sessionEnded();
-        // Anything else is tried again on the next check; saving reports any lasting problem.
-      } finally {
-        checking = false;
+        // What was saved can't be read (and the network failing is let go).
+        if (error instanceof RemoteError && !cancelled) updateFailed();
       }
     }
 
     openDatabase(session).then(
       (database) => {
         if (cancelled) return database.close();
-        show(database);
-        stopPolling = pollWhileVisible(() => void checkForUpdate(), UPDATE_INTERVAL);
+        setState(ready(database));
+        void rememberRowNumberDigits(session.token, countTransactions(database));
+        // From when it's open: the server says the last part straight away, so
+        // anything saved while it opened is brought in.
+        stopWatching = watchDatabase(session.username, session.token, {
+          onHead: (sha256) => void catchUp(database, sha256),
+          onSessionEnded: () => {
+            if (nothingToLose(database)) sessionEnded();
+          },
+        });
+        let { version } = database;
+        stopRetrying = database.subscribe(() => {
+          if (database.version === version) return;
+          version = database.version;
+          if (behind !== null) void catchUp(database, behind.sha256);
+        });
       },
       (error: unknown) => {
         if (cancelled) return;
@@ -141,27 +163,37 @@ function DatabaseProvider({
     );
     return () => {
       cancelled = true;
-      stopPolling?.();
+      stopWatching?.();
+      stopRetrying?.();
     };
   }, [session]);
 
   // While a database is the one shown, what's read from it is kept up to
-  // date. It closes, and its data is dropped, once it's no longer the one
-  // shown: replaced by a newer version or a new session, or unmounted. This
-  // runs after the pages using it have let go of it, so their unfinished
-  // reads are already ignored.
+  // date, and what's brought in from elsewhere is told. It closes, and its
+  // data is dropped, once it's no longer the one shown: a new session, or
+  // unmounted. This runs after the pages using it have let go of it, so
+  // their unfinished reads are already ignored.
   useEffect(() => {
     if (state.status !== "ready") return;
     const { database, history } = state;
     const stopRefreshing = refreshAfterWrites(queryClient, database);
     const stopSyncing = keepTransactionsInSync(queryClient, database, history);
+    let { rebases } = database;
+    const stopTelling = database.subscribe(() => {
+      if (database.rebases === rebases) return;
+      rebases = database.rebases;
+      updated();
+      // What came in may have more (or fewer) of them, as the next load has.
+      void rememberRowNumberDigits(session.token, countTransactions(database));
+    });
     return () => {
       stopRefreshing();
       stopSyncing();
+      stopTelling();
       database.close();
       queryClient.removeQueries({ queryKey: databaseKey(database) });
     };
-  }, [state, queryClient]);
+  }, [state, queryClient, session.token]);
 
   useEffect(() => {
     if (!dirty) return;
@@ -187,16 +219,6 @@ function DatabaseProvider({
     }
   }
 
-  function holdUpdates() {
-    holdsRef.current++;
-    let released = false;
-    return () => {
-      if (released) return;
-      released = true;
-      holdsRef.current--;
-    };
-  }
-
   return (
     <QueryClientProvider client={queryClient}>
       <DatabaseContext
@@ -207,7 +229,6 @@ function DatabaseProvider({
           dirty,
           saving,
           save,
-          holdUpdates,
         }}
       >
         {children}

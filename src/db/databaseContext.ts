@@ -49,11 +49,6 @@ export type DatabaseContextValue = {
    * null when there's no open database; network failures throw.
    */
   save: () => Promise<SaveResult | null>;
-  /**
-   * Keeps a version saved elsewhere from replacing the open one until the
-   * returned function is called, for state the replacement would lose.
-   */
-  holdUpdates: () => () => void;
 };
 
 export const DatabaseContext = createContext<DatabaseContextValue | null>(null);

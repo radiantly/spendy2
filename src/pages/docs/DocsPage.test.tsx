@@ -3,7 +3,7 @@ import { page, userEvent } from "vitest/browser";
 import {
   appendDatabasePart,
   downloadDatabase,
-  downloadDatabaseIfChanged,
+  downloadDatabasePart,
   replaceDatabase,
 } from "../../api/database.ts";
 import { SOURCE_HASH_SQL, TOKEN, transactionId } from "../../test/fixtures.ts";
@@ -13,10 +13,11 @@ import { DOCS_SITE } from "./docsSite.ts";
 
 vi.mock("../../api/database.ts", () => ({
   downloadDatabase: vi.fn(),
-  downloadDatabaseIfChanged: vi.fn(),
+  downloadDatabasePart: vi.fn(),
   replaceDatabase: vi.fn(),
   appendDatabasePart: vi.fn(),
 }));
+vi.mock("../../api/databaseUpdates.ts", () => ({ watchDatabase: vi.fn() }));
 
 // A stand-in for the docs site, which the tests shouldn't load.
 vi.mock("./docsSite.ts", () => ({ DOCS_SITE: "about:blank#docs" }));
@@ -34,8 +35,7 @@ beforeEach(async () => {
   vi.mocked(replaceDatabase).mockResolvedValue(UPLOADED);
   vi.mocked(appendDatabasePart).mockReset();
   vi.mocked(appendDatabasePart).mockResolvedValue(UPLOADED);
-  vi.mocked(downloadDatabaseIfChanged).mockReset();
-  vi.mocked(downloadDatabaseIfChanged).mockResolvedValue({ success: false, code: "NOT_MODIFIED" });
+  vi.mocked(downloadDatabasePart).mockReset();
   await page.viewport(1280, 800);
 });
 

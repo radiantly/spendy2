@@ -3,7 +3,7 @@ import { page, userEvent, type Locator } from "vitest/browser";
 import {
   appendDatabasePart,
   downloadDatabase,
-  downloadDatabaseIfChanged,
+  downloadDatabasePart,
   replaceDatabase,
 } from "../../api/database.ts";
 import { renderApp } from "../../test/renderAuthPage.tsx";
@@ -15,10 +15,11 @@ import { loggedIn, savedElsewhere, storedDatabase } from "../../test/storedDatab
 
 vi.mock("../../api/database.ts", () => ({
   downloadDatabase: vi.fn(),
-  downloadDatabaseIfChanged: vi.fn(),
+  downloadDatabasePart: vi.fn(),
   replaceDatabase: vi.fn(),
   appendDatabasePart: vi.fn(),
 }));
+vi.mock("../../api/databaseUpdates.ts", () => ({ watchDatabase: vi.fn() }));
 // A fixed today; faking Date itself stops expect.element's retries.
 vi.mock("../../lib/period.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../lib/period.ts")>()),
@@ -91,8 +92,7 @@ beforeEach(async () => {
   vi.mocked(downloadDatabase).mockReset();
   vi.mocked(replaceDatabase).mockReset();
   vi.mocked(appendDatabasePart).mockReset();
-  vi.mocked(downloadDatabaseIfChanged).mockReset();
-  vi.mocked(downloadDatabaseIfChanged).mockResolvedValue({ success: false, code: "NOT_MODIFIED" });
+  vi.mocked(downloadDatabasePart).mockReset();
   await page.viewport(1400, 1000);
 });
 

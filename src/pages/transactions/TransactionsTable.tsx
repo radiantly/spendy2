@@ -100,7 +100,13 @@ function motionFor(event: KeyboardEvent, pageRows: number): Motion | null {
 }
 
 type Editing = {
-  cell: CellPosition;
+  cell: HeldCell;
+  /**
+   * The cell's row as it was when the edit started: what the edit shows,
+   * and what it changes. Should the row change meanwhile (elsewhere), only
+   * what the edit changes from this is stored.
+   */
+  row: TransactionRow;
   /** Replaces the cell's text, when the edit was started by typing it. */
   text?: string;
   /** Replaces the cell's editable prefix, when the edit was started by typing it. */
@@ -133,12 +139,9 @@ type Drag = {
   ranging: boolean;
 };
 
-/**
- * A field to set on a transaction, as the columns it sets: `rowIndex` is
- * the transaction's position in `rows`.
- */
+/** A field to set on the transaction with `id`, as the columns it sets. */
 export type TransactionChange = {
-  rowIndex: number;
+  id: string;
   field: CellEditor["field"];
   patch: TransactionPatch;
 };
@@ -149,18 +152,28 @@ const columnOf = (field: CellEditor["field"]) =>
   columns.findIndex((column) => column.meta!.editor?.field === field);
 
 /**
- * Where the action bar asks for a row to be added: above or below row `row`
- * (its index in `rows`), the active cell's, or with no cell active, null.
+ * Where the action bar asks for a row to be added: above or below the
+ * transaction with `id`, the active cell's, or with no cell active, null.
  * `column` is the active cell's, or with none, the counterparty's: the new
  * row's cell there is selected once it's added (see `lastAdded`).
  */
-export type AddAt = { row: number | null; side: "above" | "below"; column: number };
+export type AddAt = { id: string | null; side: "above" | "below"; column: number };
 
 /** A row added where `AddAt` asked: its transaction's id, and the column to select. */
 export type Added = { id: string; column: number };
 
-/** A cell held by its row's transaction, to find again once the rows have changed. */
-type HeldCell = { id: string; column: number };
+/**
+ * A cell held by its row's transaction, to find again once the rows have
+ * changed: `row` is where it was last found, so where to look first.
+ */
+type HeldCell = { id: string; column: number; row: number };
+
+/** A selection held as its cells (see `HeldCell`), so it follows their rows. */
+type HeldSelection = { active: HeldCell; head: HeldCell };
+
+/** Whether two held cells are the same, found at the same row. */
+const sameHeld = (a: HeldCell, b: HeldCell) =>
+  a.id === b.id && a.column === b.column && a.row === b.row;
 
 /**
  * A header cell: a column's, by the column's index, or the corner's, over
@@ -211,8 +224,6 @@ type TransactionsTableProps = {
   currencies: readonly Currency[];
   /** Changes to store; several at once when a range is cleared. */
   onCommit: (changes: TransactionChange[]) => void;
-  /** Called when a cell starts being edited, and when it stops. */
-  onEditingChange?: (editing: boolean) => void;
   /**
    * The latest undo or redo, once `rows` show it. Each new one selects the
    * cells it changed, so it's clear what did (once the table is shown, if
@@ -245,19 +256,21 @@ type TransactionsTableProps = {
    * The action bar floating over the table (see ActionBar): `canUndo` and
    * `canRedo` are whether there's a change to undo and one to redo, `add`
    * adds a row (null while one can't be), `deleteRows` deletes rows (by
-   * their indexes in `rows`), `mark` is what marking the rows `marked` (by
-   * id) as `kind` against the row `picked` does, null while it would change
-   * nothing, `unmark` unmarks rows (by their indexes) as `kind`, and
-   * `render` renders the bar, given what its buttons do to the table.
+   * id), `mark` is what marking the rows `marked` (by id) as `kind`
+   * against the row `picked` does, null while it would change nothing,
+   * `unmark` unmarks rows (by id) as `kind`, `exists` is whether the
+   * transaction with an id is still there (not deleted since, as elsewhere),
+   * and `render` renders the bar, given what its buttons do to the table.
    * Without, there's none.
    */
   actionBar?: {
     canUndo: boolean;
     canRedo: boolean;
     add: ((at: AddAt) => void) | null;
-    deleteRows: (rows: number[]) => void;
+    deleteRows: (ids: string[]) => void;
     mark: (kind: MarkKind, marked: readonly string[], picked: string) => (() => void) | null;
-    unmark: (kind: MarkKind, rows: number[]) => void;
+    unmark: (kind: MarkKind, ids: string[]) => void;
+    exists: (id: string) => boolean;
     render: (actions: TableActions) => ReactNode;
   };
 };
@@ -275,7 +288,6 @@ function TransactionsTable({
   accounts,
   currencies,
   onCommit,
-  onEditingChange,
   lastUndoOrRedo,
   onUndoOrRedo,
   lastAdded = null,
@@ -303,19 +315,68 @@ function TransactionsTable({
     return (id: string) =>
       (numbers ??= new Map(rows.map((row, index) => [row.id, index + 1]))).get(id);
   }, [rows]);
-  // The rows can change under the selection, so it's kept to the cells there are.
-  const [unclamped, setSelection] = useState<GridSelection | null>(null);
-  const selection = unclamped && clampSelection(unclamped, size);
+  // Where each row is, by id: worked out once one's looked for away from
+  // where it was last found, and again only for other rows.
+  const indexOf = useMemo(() => {
+    let indexes: Map<string, number> | undefined;
+    return (id: string) => (indexes ??= new Map(rows.map((row, index) => [row.id, index]))).get(id);
+  }, [rows]);
+
+  /** `cell`, held by its row's transaction. */
+  const hold = ({ row, column }: CellPosition): HeldCell => ({ id: rows[row]!.id, column, row });
+
+  /** Where `cell` is now, if its row is still shown. */
+  function whereHeld({ id, column, row }: HeldCell): CellPosition | null {
+    if (rows[row]?.id === id) return { row, column };
+    const index = indexOf(id);
+    return index === undefined ? null : { row: index, column };
+  }
+
+  // Held by its cells' rows, so it follows them as the rows change. A cell
+  // whose row is gone falls on the row that took its place (or the last
+  // there is), which it then follows.
+  const [held, setHeld] = useState<HeldSelection | null>(null);
+
+  /** Where `held` is now, as positions in `rows`. */
+  function whereSelected(held: HeldSelection | null): GridSelection | null {
+    if (held === null) return null;
+    const active = whereHeld(held.active) ?? held.active;
+    return clampSelection({ active, head: whereHeld(held.head) ?? held.head }, size);
+  }
+  const selection = whereSelected(held);
+
+  /**
+   * Selects `next`, as positions in `rows`, or what it returns for the
+   * selection there is; returning that same one changes nothing.
+   */
+  function setSelection(
+    next: GridSelection | null | ((current: GridSelection | null) => GridSelection | null),
+  ) {
+    setHeld((current) => {
+      const resolved = whereSelected(current);
+      const value = typeof next === "function" ? next(resolved) : next;
+      if (value === resolved) return current;
+      return value && { active: hold(value.active), head: hold(value.head) };
+    });
+  }
+
+  // The edit closes, unsaved, if its row goes (deleted elsewhere).
   const [editing, setEditing] = useState<Editing | null>(null);
-  const isEditing = editing !== null;
-  // Before the browser can run anything else, so a parent holding something
-  // back during edits does so from the press that starts one.
-  useLayoutEffect(() => {
-    if (!isEditing) return;
-    onEditingChange?.(true);
-    // Also when the table goes away mid-edit.
-    return () => onEditingChange?.(false);
-  }, [isEditing, onEditingChange]);
+  const editingAt = editing && whereHeld(editing.cell);
+
+  // What's held follows where it was found, once the rows have changed: a
+  // row that's gone lets go of its cell, the selection holding the row that
+  // took its place, and the edit closing. Adjusted while rendering, as soon
+  // as it differs, so nothing is drawn from what was held before.
+  if (held !== null) {
+    const next = selection && { active: hold(selection.active), head: hold(selection.head) };
+    if (next === null || !sameHeld(next.active, held.active) || !sameHeld(next.head, held.head))
+      setHeld(next);
+  }
+  if (editing !== null && editingAt?.row !== editing.cell.row)
+    setEditing(
+      editingAt === null ? null : { ...editing, cell: { ...editing.cell, row: editingAt.row } },
+    );
   // Whether the edit has changed its cell: the action bar's undo and redo
   // depend on it (see EditHandle).
   const [editModified, setEditModified] = useState(false);
@@ -336,7 +397,18 @@ function TransactionsTable({
   const [findMatchesOnce] = useState(matchFinder);
   const found = pattern && findMatchesOnce(rows, pattern);
   const [started, setPicking] = useState<Picking | null>(null);
-  const picking = started?.since === lastUndoOrRedo ? started : null;
+  // Rows deleted elsewhere drop out of what's being marked, here and from
+  // now on; with none left, picking ends, as cancelling would. (Rows the
+  // view hides are still marked.)
+  const stillMarked = started?.marked.filter((id) => actionBar?.exists(id) ?? true) ?? [];
+  if (started !== null && stillMarked.length < started.marked.length)
+    setPicking(stillMarked.length === 0 ? null : { ...started, marked: stillMarked });
+  const picking =
+    started === null || started.since !== lastUndoOrRedo || stillMarked.length === 0
+      ? null
+      : stillMarked.length === started.marked.length
+        ? started
+        : { ...started, marked: stillMarked };
   // While picking, the active cell's row is the one picked, and this marks
   // against it, unless that would change nothing.
   const pickedRow = picking && selection ? selection.active.row : null;
@@ -349,9 +421,11 @@ function TransactionsTable({
   const cancelFromToast = useEffectEvent(() => {
     if (picking) cancelPicking(picking);
   });
+  // By its kind: rows dropping out of it don't explain it again.
+  const pickingKind = picking?.kind ?? null;
   useEffect(() => {
-    if (picking === null) return;
-    const { title, description } = PICKING_HELP[picking.kind];
+    if (pickingKind === null) return;
+    const { title, description } = PICKING_HELP[pickingKind];
     // Sonner says it was dismissed when it's taken away here too.
     let takenAway = false;
     const id = toast(title, {
@@ -366,7 +440,7 @@ function TransactionsTable({
       takenAway = true;
       toast.dismiss(id);
     };
-  }, [picking]);
+  }, [pickingKind]);
   const gridId = useId();
   const cellId = (cell: CellPosition) => `${gridId}-${cell.row}-${cell.column}`;
   const headerId = (header: HeaderCell) => `${gridId}-header-${header}`;
@@ -394,6 +468,9 @@ function TransactionsTable({
 
   const virtualizer = useWindowVirtualizer({
     count: rows.length,
+    // By transaction, so a row stays the same element (an edit in it too)
+    // when rows come or go before it.
+    getItemKey: (index) => rows[index]!.id,
     estimateSize: () => ROW_HEIGHT,
     overscan: 10,
     scrollMargin,
@@ -473,9 +550,9 @@ function TransactionsTable({
   }
 
   /** Starts editing `cell` as `start` says (see Editing). */
-  function startEditing(cell: CellPosition, start: Omit<Editing, "cell">) {
+  function startEditing(cell: CellPosition, start: Omit<Editing, "cell" | "row">) {
     setSelection(collapsed(cell));
-    setEditing({ cell, ...start });
+    setEditing({ cell: hold(cell), row: rows[cell.row]!, ...start });
   }
 
   /**
@@ -504,7 +581,10 @@ function TransactionsTable({
   function finishEditing(cell: CellPosition, how: FinishHow) {
     // Only if still editing this cell: pressing another cell finishes this
     // one after the other has started.
-    setEditing((current) => (current && samePosition(current.cell, cell) ? null : current));
+    const { id } = rows[cell.row]!;
+    setEditing((current) =>
+      current && current.cell.id === id && current.cell.column === cell.column ? null : current,
+    );
     if (how === "away") return;
     if (how === "down" || how === "up") enter(cell, how === "up");
     else {
@@ -515,26 +595,32 @@ function TransactionsTable({
     focusGrid();
   }
 
+  /**
+   * Stores what an edit of `row`'s cell changed: `started` is the row as it
+   * was when the edit started (see Editing), which is what the text is read
+   * against, and what it's changed from.
+   */
   function submit(
+    started: TransactionRow,
     row: TransactionRow,
-    rowIndex: number,
     editor: CellEditor,
     text: string,
     create: boolean,
     prefix: string | undefined,
   ): SubmitResult {
     // Unchanged text is never parsed, so a stored value the parser wouldn't
-    // accept can still be left as it is.
+    // accept can still be left as it is. Nor is it stored: the cell may have
+    // changed elsewhere since.
     if (
-      text === editor.editText(row) &&
-      (prefix === undefined || prefix === editor.prefix?.editText(row))
+      text === editor.editText(started) &&
+      (prefix === undefined || prefix === editor.prefix?.editText(started))
     )
       return { ok: true };
-    const result = editor.parse(text, row, { ...context, create, prefix });
+    const result = editor.parse(text, started, { ...context, create, prefix });
     if (!result.ok) return result;
     // Typed differently but the same value, like `1234.5` for `1234.50`.
     if (hasPatch(row, result.value)) return { ok: true };
-    onCommit([{ rowIndex, field: editor.field, patch: result.value }]);
+    onCommit([{ id: row.id, field: editor.field, patch: result.value }]);
     return { ok: true };
   }
 
@@ -553,7 +639,7 @@ function TransactionsTable({
         const row = rows[index]!;
         const cleared = clearedValue(editor, row);
         if (cleared.ok && !hasPatch(row, cleared.value))
-          changes.push({ rowIndex: index, field: editor.field, patch: cleared.value });
+          changes.push({ id: row.id, field: editor.field, patch: cleared.value });
       }
     }
     if (changes.length > 0) onCommit(changes);
@@ -603,10 +689,15 @@ function TransactionsTable({
   function addRow(add: (at: AddAt) => void, side: AddAt["side"]) {
     editHandleRef.current?.settle();
     add({
-      row: selection?.active.row ?? null,
+      id: selection ? rows[selection.active.row]!.id : null,
       side,
       column: selection?.active.column ?? columnOf("counterparty"),
     });
+  }
+
+  /** The transactions of the rows `selection` covers. */
+  function idsCovered(selection: GridSelection) {
+    return rowsCovered(selection).map((row) => rows[row]!.id);
   }
 
   /**
@@ -614,9 +705,9 @@ function TransactionsTable({
    * settled first (see EditHandle). The active cell's column stays active,
    * on the row that takes the first one's place, or the last there is.
    */
-  function deleteSelectedRows(deleteRows: (rows: number[]) => void, selection: GridSelection) {
+  function deleteSelectedRows(deleteRows: (ids: string[]) => void, selection: GridSelection) {
     editHandleRef.current?.settle();
-    deleteRows(rowsCovered(selection));
+    deleteRows(idsCovered(selection));
     setSelection(collapsed({ row: bounds(selection).top, column: selection.active.column }));
   }
 
@@ -626,12 +717,12 @@ function TransactionsTable({
    * selection stays as it is.
    */
   function unmarkSelectedRows(
-    unmark: (kind: MarkKind, rows: number[]) => void,
+    unmark: (kind: MarkKind, ids: string[]) => void,
     kind: MarkKind,
     selection: GridSelection,
   ) {
     editHandleRef.current?.settle();
-    unmark(kind, rowsCovered(selection));
+    unmark(kind, idsCovered(selection));
   }
 
   /**
@@ -642,11 +733,10 @@ function TransactionsTable({
   function startPicking(kind: MarkKind, selection: GridSelection) {
     editHandleRef.current?.settle();
     const { top, bottom } = bounds(selection);
-    const held = ({ row, column }: CellPosition) => ({ id: rows[row]!.id, column });
     setPicking({
       kind,
       marked: rows.slice(top, bottom + 1).map(({ id }) => id),
-      from: { active: held(selection.active), head: held(selection.head) },
+      from: { active: hold(selection.active), head: hold(selection.head) },
       since: lastUndoOrRedo,
     });
     setSelection(null);
@@ -659,12 +749,6 @@ function TransactionsTable({
   function confirmPicking(mark: () => void) {
     mark();
     setPicking(null);
-  }
-
-  /** Where `cell` is now, if its row is still shown. */
-  function whereHeld({ id, column }: HeldCell): CellPosition | null {
-    const row = rows.findIndex((row) => row.id === id);
-    return row === -1 ? null : { row, column };
   }
 
   /**
@@ -953,7 +1037,7 @@ function TransactionsTable({
   function handlePress(cell: CellPosition, event: MouseEvent, at: number | null) {
     const point: Point = { x: event.clientX, y: event.clientY };
     const input = inputRef.current;
-    const isEditing = editing !== null && samePosition(editing.cell, cell) && input !== null;
+    const isEditing = editingAt !== null && samePosition(editingAt, cell) && input !== null;
 
     if (picking) {
       // Picks its row: nothing is edited or ranged while picking.
@@ -1138,7 +1222,6 @@ function TransactionsTable({
         >
           {virtualizer.getVirtualItems().map((item) => {
             const row = rows[item.index]!;
-            const isEditingRow = editing?.cell.row === item.index;
             return (
               <TableRow
                 key={item.key}
@@ -1170,7 +1253,7 @@ function TransactionsTable({
                   const editor = meta.editor;
                   const position = { row: item.index, column };
                   const selected = area !== null && contains(area, position);
-                  const isEditing = isEditingRow && editing.cell.column === column;
+                  const edited = editingAt && samePosition(editingAt, position) ? editing : null;
                   const editText = editor?.editText(row);
                   const display = meta.display(row);
                   return (
@@ -1194,21 +1277,21 @@ function TransactionsTable({
                         selection !== null && !ranged && selection.active.row === item.index
                       }
                       editing={
-                        isEditing && editor
+                        edited && editor
                           ? {
-                              text: editing.text ?? editText!,
+                              text: edited.text ?? editor.editText(edited.row),
                               label: String(leafColumn.columnDef.header),
                               prefix: editor.prefix && {
-                                text: editing.prefix ?? editor.prefix.editText(row),
+                                text: edited.prefix ?? editor.prefix.editText(edited.row),
                                 label: editor.prefix.label,
                               },
-                              start: editing.start,
-                              typed: editing.text !== undefined || editing.prefix !== undefined,
+                              start: edited.start,
+                              typed: edited.text !== undefined || edited.prefix !== undefined,
                               menu: editor.menu?.(context),
                               paused: ranged,
                               inputRef,
                               submit: (text, create, prefix) =>
-                                submit(row, item.index, editor, text, create, prefix),
+                                submit(edited.row, row, editor, text, create, prefix),
                               finish: (how) => finishEditing(position, how),
                               history: onUndoOrRedo,
                               handleRef: editHandleRef,

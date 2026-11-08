@@ -3,13 +3,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { downloadDatabase } from "../api/database.ts";
 import { deriveKek } from "../lib/kek.ts";
 import { EXPORT_KEY, SOURCE_HASH, TOKEN, transactionId } from "../test/fixtures.ts";
-import { openDatabase, type Database } from "./database.ts";
+import { savedElsewhere, serve } from "../test/storedDatabase.ts";
+import { Database, openDatabase } from "./database.ts";
 import type { DatabaseHistory } from "./databaseContext.ts";
 import { EditHistory } from "./editHistory.ts";
-import { compareNewestFirst, newestFirst } from "./queries/transactions.ts";
+import { compareNewestFirst, LIST_TRANSACTIONS, newestFirst } from "./queries/transactions.ts";
 import { createQueryClient } from "./queryClient.ts";
 import {
   addTransaction,
+  commitTransactions,
   deleteTransactions,
   existing,
   keepTransactionsInSync,
@@ -22,10 +24,11 @@ import {
 
 vi.mock("../api/database.ts", () => ({
   downloadDatabase: vi.fn(),
-  downloadDatabaseIfChanged: vi.fn(),
+  downloadDatabasePart: vi.fn(),
   replaceDatabase: vi.fn(),
   appendDatabasePart: vi.fn(),
 }));
+vi.mock("../api/databaseUpdates.ts", () => ({ watchDatabase: vi.fn() }));
 
 /** The day the transactions are on. */
 const DAY = "2026-10-05";
@@ -600,5 +603,107 @@ describe("markTransactions", () => {
     expect(rowOf("Copy").duplicate_of).toBeNull();
     expect(rowOf("Other").duplicate_of).toBe(idOf("Copy"));
     expect(history.canUndo).toBe(false);
+  });
+});
+
+describe("changes saved elsewhere, brought in by a save", () => {
+  beforeEach(async () => {
+    serve(null);
+    await stored(["Café", "Market", "Bakery"]);
+    expect(await database.save()).toMatchObject({ success: true });
+  });
+
+  /** Saves `sql` elsewhere, then saves a change made here, which brings it in. */
+  async function bringIn(sql: string) {
+    await savedElsewhere(sql);
+    const { rebases } = database;
+    await database.batch([{ sql: "INSERT INTO categories VALUES ('Saved here', NULL)" }]);
+    expect(await database.save()).toMatchObject({ success: true });
+    expect(database.rebases).toBe(rebases + 1);
+  }
+
+  const counterparties = () => cached().rows.map((row) => row.counterparty);
+
+  it("replaces a transaction changed there where it is, keeping the rest as they were", async () => {
+    const before = cached();
+    const id = idOf("Market");
+
+    await bringIn(`UPDATE transactions SET counterparty = 'Market Hall' WHERE id = '${id}'`);
+
+    // Newest first, as they were read.
+    await expect.poll(counterparties).toEqual(["Bakery", "Market Hall", "Café"]);
+    expect(cached().read).toBe(before.read);
+    expect(cached().rows[0]).toBe(before.rows[0]);
+    expect(cached().rows[2]).toBe(before.rows[2]);
+    expect(cached().arrived).toEqual([]);
+  });
+
+  it("removes one deleted there, keeping its place", async () => {
+    const position = cached().positions.get(idOf("Market"));
+
+    await bringIn(`DELETE FROM transactions WHERE id = '${idOf("Market")}'`);
+
+    await expect.poll(() => [...cached().removed]).toEqual([position]);
+    expect(existing(cached()).map((row) => row.counterparty)).toEqual(["Bakery", "Café"]);
+  });
+
+  it("adds one added there after the rest, as arrived", async () => {
+    await bringIn(
+      `INSERT INTO transactions (id, source, account_name, currency, amount, counterparty, naive_date, sort_key)
+        VALUES ('${transactionId(99)}', x'${hex(SOURCE_HASH)}', 'Checking', 'USD', -100, 'Kiosk', '${DAY}', 9)`,
+    );
+
+    await expect.poll(counterparties).toEqual(["Bakery", "Market", "Café", "Kiosk"]);
+    expect(cached().arrived).toEqual([3]);
+    expect(cached().positions.get(transactionId(99))).toBe(3);
+  });
+
+  it("reads the categories, accounts and currencies again", async () => {
+    await bringIn(
+      "INSERT INTO categories VALUES ('From there', NULL); INSERT INTO accounts VALUES ('Savings', 'USD', 'Bank', NULL)",
+    );
+
+    await expect.poll(() => cached().categories.map(({ name }) => name)).toContain("From there");
+    expect(cached().accounts.map(({ name }) => name)).toContain("Savings");
+  });
+
+  it("keeps an edit made here while they were read, though it was read without it", async () => {
+    const id = idOf("Market");
+    await savedElsewhere(
+      `UPDATE transactions SET counterparty = 'Bakery Two' WHERE id = '${idOf("Bakery")}'`,
+    );
+    await database.batch([{ sql: "INSERT INTO categories VALUES ('Saved here', NULL)" }]);
+    // Sent as soon as it's asked for, but answered only once released.
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => (release = resolve));
+    let sent = false;
+    const query = Database.prototype.query;
+    const spy = vi.spyOn(Database.prototype, "query").mockImplementation(function (
+      this: Database,
+      sql,
+      bind,
+    ) {
+      const result = query.call(this, sql, bind);
+      if (sql !== LIST_TRANSACTIONS) return result;
+      spy.mockRestore();
+      sent = true;
+      return released.then(() => result);
+    });
+
+    await database.save();
+    await vi.waitFor(() => expect(sent).toBe(true));
+    await commitTransactions(
+      queryClient,
+      database,
+      history,
+      [{ id, field: "counterparty", patch: { counterparty: "Mine" } }],
+      "counterparty of Market",
+    );
+    release();
+
+    await expect.poll(counterparties).toEqual(["Bakery Two", "Mine", "Café"]);
+    expect(
+      await database.query("SELECT counterparty FROM transactions WHERE id = ?", [id]),
+    ).toEqual([{ counterparty: "Mine" }]);
   });
 });

@@ -7,6 +7,7 @@ import Header from "./Header.tsx";
 import { useHistoryKeys } from "./historyKeys.ts";
 import SaveControls from "./SaveControls.tsx";
 import { describeOpenError } from "./openError.ts";
+import { showUpdated, showUpdateFailed } from "./updateToasts.ts";
 
 /**
  * A page in the shell, shown at `path`. A `database` page shows the user's
@@ -52,6 +53,8 @@ function AppShell({ pages }: { pages: readonly ShellPage[] }) {
       key={state.session.token}
       session={state.session}
       onSessionEnded={() => endSession(state.session)}
+      onUpdated={showUpdated}
+      onUpdateFailed={showUpdateFailed}
     >
       <Layout
         header={

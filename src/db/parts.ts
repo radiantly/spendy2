@@ -43,10 +43,13 @@ export class DatabasePartError extends Error {
 
 /**
  * The parts `bytes` holds, one after the other, checked to chain from part
- * 0: each holds the hash of the one before it, and no user version is
- * lower than the one before it.
+ * 0, or from `after`, a part they follow: each holds the hash of the one
+ * before it, and no user version is lower than the one before it.
  */
-export async function readChain(bytes: Uint8Array<ArrayBuffer>): Promise<DatabasePart[]> {
+export async function readChain(
+  bytes: Uint8Array<ArrayBuffer>,
+  after?: Pick<DatabasePart, "hash" | "userVersion">,
+): Promise<DatabasePart[]> {
   const read = await readParts(bytes);
   if (!read.success) {
     if (read.code === "INVALID_VERSION_BYTE")
@@ -56,7 +59,7 @@ export async function readChain(bytes: Uint8Array<ArrayBuffer>): Promise<Databas
 
   const { parts } = read;
   for (const [i, part] of parts.entries())
-    if (partChainError(part, i === 0 ? undefined : parts[i - 1]) !== undefined)
+    if (partChainError(part, i === 0 ? after : parts[i - 1]) !== undefined)
       throw new DatabasePartError("BROKEN_CHAIN", `Part ${i} doesn't follow the part before it`);
   return parts;
 }

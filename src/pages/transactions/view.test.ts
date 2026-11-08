@@ -1,6 +1,14 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { ListedTransaction } from "../../db/queries/transactions.ts";
-import { DEFAULT_VIEW, filterValues, viewOrder, type TransactionsView } from "./view.ts";
+import {
+  DEFAULT_VIEW,
+  filterValues,
+  viewOrder,
+  withArrived,
+  type SortColumn,
+  type SortDirection,
+  type TransactionsView,
+} from "./view.ts";
 
 let count = 0;
 beforeEach(() => {
@@ -297,6 +305,95 @@ describe("viewOrder", () => {
         }),
       ).toEqual([kept.id]);
     });
+  });
+});
+
+describe("withArrived", () => {
+  /** The ids of `rows` with those at `arrived` placed into `order` as the view with `changes` would. */
+  function placed(
+    rows: ListedTransaction[],
+    order: number[],
+    arrived: number[],
+    changes: Partial<TransactionsView> = {},
+  ) {
+    const view = { ...DEFAULT_VIEW, ...changes };
+    return withArrived(order, arrived, rows, view, NAMES, TODAY).map((at) => rows[at]!.id);
+  }
+
+  it("puts an arrived row where the sort would, keeping the rest in order", () => {
+    const rows = [
+      row({ naive_date: "2026-10-03" }),
+      row({ naive_date: "2026-10-01" }),
+      row({ naive_date: "2026-10-02" }),
+    ];
+
+    expect(placed(rows, [0, 1], [2])).toEqual(ids([rows[0]!, rows[2]!, rows[1]!]));
+  });
+
+  it("keeps rows that are out of order where they are, placing among them as it passes", () => {
+    // The row at 1 was edited to a later date, but stays where it was.
+    const rows = [
+      row({ naive_date: "2026-10-05" }),
+      row({ naive_date: "2026-10-09" }),
+      row({ naive_date: "2026-10-01" }),
+      row({ naive_date: "2026-10-04" }),
+    ];
+
+    expect(placed(rows, [0, 1, 2], [3])).toEqual(ids([rows[0]!, rows[1]!, rows[3]!, rows[2]!]));
+  });
+
+  it("leaves out an arrived row the filters hide", () => {
+    const rows = [row(), row({ category: "Rent" })];
+
+    expect(placed(rows, [0], [1], { hiddenCategories: new Set(["Rent"]) })).toEqual(
+      ids([rows[0]!]),
+    );
+  });
+
+  it("places several that arrived together, in order among themselves", () => {
+    const rows = [
+      row({ naive_date: "2026-10-05" }),
+      row({ naive_date: "2026-10-01" }),
+      row({ naive_date: "2026-10-02" }),
+      row({ naive_date: "2026-10-09" }),
+      row({ naive_date: "2026-10-03" }),
+    ];
+
+    expect(placed(rows, [0, 1], [2, 3, 4])).toEqual(
+      ids([rows[3]!, rows[0]!, rows[4]!, rows[2]!, rows[1]!]),
+    );
+  });
+
+  // Placing into the order the view gives the rest must give what it gives all of them.
+  it.each(
+    (["date", "account", "counterparty", "category", "remarks"] as SortColumn[]).flatMap((column) =>
+      (["ascending", "descending"] as SortDirection[]).map((direction) => ({ column, direction })),
+    ),
+  )("places rows as viewOrder would, sorting by $column, $direction", (sort) => {
+    const values = ["b", "a", null, "c", "a", null, "b"];
+    const rows = values.map((text, i) =>
+      row({
+        naive_date: `2026-10-0${(i % 3) + 1}`,
+        account_name: ["Card", "Checking", "Savings"][i % 3]!,
+        counterparty: text ?? "z",
+        category: text === null ? null : "Groceries",
+        remarks: text,
+      }),
+    );
+    const view = { ...DEFAULT_VIEW, sort };
+    const all = viewOrder(rows, view, NAMES, TODAY);
+    const arrived = [1, 4, 6];
+
+    expect(
+      withArrived(
+        all.filter((at) => !arrived.includes(at)),
+        arrived,
+        rows,
+        view,
+        NAMES,
+        TODAY,
+      ),
+    ).toEqual(all);
   });
 });
 

@@ -74,7 +74,7 @@ describe("database worker", () => {
   it("creates a migrated database when there are no parts", async () => {
     const db = startWorker();
 
-    expect(await db.open(null, await kek())).toEqual({ created: true, sha256: null });
+    expect(await db.open(null, await kek())).toEqual({ created: true, sha256: null, parts: 0 });
 
     expect(await db.query("PRAGMA user_version")).toEqual([{ user_version: MIGRATIONS.length }]);
     expect(await db.query("PRAGMA foreign_keys")).toEqual([{ foreign_keys: 1 }]);
@@ -90,7 +90,7 @@ describe("database worker", () => {
 
     const second = startWorker();
 
-    expect(await second.open(part, await kek())).toEqual({ created: false, sha256 });
+    expect(await second.open(part, await kek())).toEqual({ created: false, sha256, parts: 1 });
     expect(await second.query("SELECT * FROM accounts")).toEqual([
       { name: "checking", display_currency: "SGD", type: "Bank", identifier: null },
     ]);
@@ -225,13 +225,21 @@ describe("database worker saves", () => {
     expect((await decryptPart(part, await kek())).length).toBeLessThan(200);
   });
 
-  it("returns the last part's hash once a save is done", async () => {
+  it("returns the last part's hash, and how many parts there are, once a save is done", async () => {
     const db = await opened();
-    const prepared = await db.prepareSave();
+    const first = await db.prepareSave();
 
     expect(await db.finishSave(true)).toEqual({
       unsaved: false,
-      sha256: await sha256Hex(prepared!.part),
+      sha256: await sha256Hex(first!.part),
+      parts: 1,
+    });
+    await db.batch([INSERT_CHECKING]);
+    const second = await db.prepareSave();
+    expect(await db.finishSave(true)).toEqual({
+      unsaved: false,
+      sha256: await sha256Hex(second!.part),
+      parts: 2,
     });
   });
 
@@ -249,6 +257,7 @@ describe("database worker saves", () => {
     expect(await reopened.open(concat(parts), await kek())).toEqual({
       created: false,
       sha256: await sha256Hex(parts[2]!),
+      parts: 3,
     });
     expect(await accounts(reopened)).toEqual(["brokerage", "savings"]);
   });
@@ -323,9 +332,10 @@ describe("database worker rebases", () => {
     await here.batch([INSERT_BROKERAGE]);
 
     expect(await here.rebase(concat([part0, part1]))).toEqual({
-      rebased: true,
+      outcome: "moved",
       unsaved: true,
       sha256: await sha256Hex(part1),
+      parts: 2,
     });
     expect(await accounts(here)).toEqual(["brokerage", "checking", "savings"]);
 
@@ -345,7 +355,7 @@ describe("database worker rebases", () => {
     const part1 = await save(elsewhere);
 
     expect(await here.rebase(concat([part0, part1]))).toMatchObject({
-      rebased: true,
+      outcome: "moved",
       unsaved: false,
     });
   });
@@ -356,7 +366,10 @@ describe("database worker rebases", () => {
     const part1 = await save(elsewhere);
     await here.batch([{ sql: "UPDATE accounts SET type = 'Cash' WHERE name = 'checking'" }]);
 
-    expect(await here.rebase(concat([part0, part1]))).toEqual({ rebased: false, unsaved: true });
+    expect(await here.rebase(concat([part0, part1]))).toEqual({
+      outcome: "conflict",
+      unsaved: true,
+    });
 
     expect(await here.query("SELECT type FROM accounts")).toEqual([{ type: "Cash" }]);
     expect((await here.prepareSave())?.previous).toBe(await sha256Hex(part0));
@@ -368,6 +381,175 @@ describe("database worker rebases", () => {
     const part1 = await save(elsewhere);
     const { changes } = await here.batch([INSERT_BROKERAGE]);
     await here.rebase(concat([part0, part1]));
+
+    expect(await here.undo(changes)).toEqual({ unsaved: false });
+    expect(await accounts(here)).toEqual(["checking", "savings"]);
+  });
+});
+
+describe("database worker catch-ups", () => {
+  /** Two copies of a stored database holding checking, and its part. */
+  async function twoCopies() {
+    const creator = startWorker();
+    await creator.open(null, await kek());
+    await creator.batch([INSERT_CHECKING]);
+    const part0 = await save(creator);
+    return { part0, here: await openedFrom([part0]), elsewhere: await openedFrom([part0]) };
+  }
+
+  it("moves unsaved changes onto the parts saved after its own, to save after them", async () => {
+    const { part0, here, elsewhere } = await twoCopies();
+    await elsewhere.batch([INSERT_SAVINGS]);
+    const part1 = await save(elsewhere);
+    await here.batch([INSERT_BROKERAGE]);
+
+    expect(await here.catchUp(part1)).toEqual({
+      outcome: "moved",
+      unsaved: true,
+      sha256: await sha256Hex(part1),
+      parts: 2,
+    });
+    expect(await accounts(here)).toEqual(["brokerage", "checking", "savings"]);
+
+    const part2 = await save(here);
+    expect(await partOf(part2)).toMatchObject({ previousHash: await sha256Hex(part1) });
+    expect(await accounts(await openedFrom([part0, part1, part2]))).toEqual([
+      "brokerage",
+      "checking",
+      "savings",
+    ]);
+  });
+
+  it("brings in several parts at once, counting only its own changes as unsaved", async () => {
+    const { here, elsewhere } = await twoCopies();
+    await elsewhere.batch([INSERT_SAVINGS]);
+    const part1 = await save(elsewhere);
+    await elsewhere.batch([INSERT_BROKERAGE]);
+    const part2 = await save(elsewhere);
+
+    expect(await here.catchUp(concat([part1, part2]))).toMatchObject({
+      outcome: "moved",
+      unsaved: false,
+      parts: 3,
+    });
+    expect(await accounts(here)).toEqual(["brokerage", "checking", "savings"]);
+  });
+
+  it("changes nothing when its changes conflict with those brought in", async () => {
+    const { part0, here, elsewhere } = await twoCopies();
+    await elsewhere.batch([{ sql: "UPDATE accounts SET type = 'Card' WHERE name = 'checking'" }]);
+    const part1 = await save(elsewhere);
+    await here.batch([{ sql: "UPDATE accounts SET type = 'Cash' WHERE name = 'checking'" }]);
+
+    expect(await here.catchUp(part1)).toEqual({ outcome: "conflict", unsaved: true });
+
+    expect(await here.query("SELECT type FROM accounts")).toEqual([{ type: "Cash" }]);
+    expect((await here.prepareSave())?.previous).toBe(await sha256Hex(part0));
+  });
+
+  it("says parts that don't follow its last part need the whole chain, changing nothing", async () => {
+    const { here } = await twoCopies();
+    // Another database altogether, saved twice.
+    const elsewhere = startWorker();
+    await elsewhere.open(null, await kek());
+    await elsewhere.batch([INSERT_SAVINGS]);
+    const unrelated = await save(elsewhere);
+    await elsewhere.batch([INSERT_BROKERAGE]);
+    const after = await save(elsewhere);
+
+    expect(await here.catchUp(after)).toEqual({ outcome: "unchained", unsaved: false });
+    expect(await here.catchUp(concat([unrelated, after]))).toMatchObject({ outcome: "unchained" });
+    expect(await accounts(here)).toEqual(["checking"]);
+  });
+
+  it("says parts written at another user version need the whole chain", async () => {
+    const { part0, here } = await twoCopies();
+    const older = await encryptPart(new Uint8Array(), await kek(), {
+      previousHash: await sha256Hex(part0),
+      userVersion: MIGRATIONS.length - 1,
+    });
+
+    expect(await here.catchUp(older)).toEqual({ outcome: "unchained", unsaved: false });
+  });
+
+  describe("with a change made there too", () => {
+    const CHANGES = [
+      ["the same delete", "DELETE FROM accounts WHERE name = 'checking'"],
+      ["the same update", "UPDATE accounts SET type = 'Card' WHERE name = 'checking'"],
+      ["the same insert", INSERT_SAVINGS.sql],
+    ] as const;
+
+    it.each(CHANGES)("takes %s as no conflict, leaving nothing unsaved", async (_name, sql) => {
+      const { here, elsewhere } = await twoCopies();
+      await elsewhere.batch([{ sql }]);
+      const part1 = await save(elsewhere);
+      await here.batch([{ sql }]);
+      const expected = await accounts(elsewhere);
+
+      expect(await here.catchUp(part1)).toMatchObject({ outcome: "moved", unsaved: false });
+      expect(await accounts(here)).toEqual(expected);
+    });
+
+    it.each(CHANGES)("takes %s as no conflict in a full rebase too", async (_name, sql) => {
+      const { part0, here, elsewhere } = await twoCopies();
+      await elsewhere.batch([{ sql }]);
+      const part1 = await save(elsewhere);
+      await here.batch([{ sql }]);
+
+      expect(await here.rebase(concat([part0, part1]))).toMatchObject({
+        outcome: "moved",
+        unsaved: false,
+      });
+    });
+
+    it("updates the columns not made there, keeping them unsaved", async () => {
+      const { here, elsewhere } = await twoCopies();
+      await elsewhere.batch([{ sql: "UPDATE accounts SET type = 'Card' WHERE name = 'checking'" }]);
+      const part1 = await save(elsewhere);
+      await here.batch([
+        { sql: "UPDATE accounts SET type = 'Card', identifier = '••1' WHERE name = 'checking'" },
+      ]);
+
+      expect(await here.catchUp(part1)).toMatchObject({ outcome: "moved", unsaved: true });
+      expect(await here.query("SELECT type, identifier FROM accounts")).toEqual([
+        { type: "Card", identifier: "••1" },
+      ]);
+    });
+
+    it.each([
+      ["an update to another value", "UPDATE accounts SET type = 'Cash' WHERE name = 'checking'"],
+      ["a delete of a row changed there", "DELETE FROM accounts WHERE name = 'checking'"],
+      [
+        "an insert of another row by its key",
+        "INSERT INTO accounts VALUES ('savings', 'EUR', 'Bank', NULL)",
+      ],
+    ])("still conflicts with %s", async (_name, sql) => {
+      const { here, elsewhere } = await twoCopies();
+      await elsewhere.batch([
+        { sql: "UPDATE accounts SET type = 'Card' WHERE name = 'checking'" },
+        INSERT_SAVINGS,
+      ]);
+      const part1 = await save(elsewhere);
+      await here.batch([{ sql }]);
+
+      expect(await here.catchUp(part1)).toEqual({ outcome: "conflict", unsaved: true });
+    });
+
+    it("leaves undo as strict as it was: an undo that no longer fits fails", async () => {
+      const { here } = await twoCopies();
+      const { changes } = await here.batch([INSERT_SAVINGS]);
+      await here.undo(changes);
+
+      await expect(here.undo(changes)).rejects.toThrow("The changes don't match the database");
+    });
+  });
+
+  it("keeps edits made before it undoable, where the parts brought in didn't change them", async () => {
+    const { here, elsewhere } = await twoCopies();
+    await elsewhere.batch([INSERT_SAVINGS]);
+    const part1 = await save(elsewhere);
+    const { changes } = await here.batch([INSERT_BROKERAGE]);
+    await here.catchUp(part1);
 
     expect(await here.undo(changes)).toEqual({ unsaved: false });
     expect(await accounts(here)).toEqual(["checking", "savings"]);
@@ -447,7 +629,7 @@ describe("database worker changes", () => {
     const { changes } = await db.batch([INSERT_CHECKING]);
     await db.prepareSave();
 
-    expect(await db.finishSave(false)).toEqual({ unsaved: true, sha256: null });
+    expect(await db.finishSave(false)).toEqual({ unsaved: true, sha256: null, parts: 0 });
     expect(await db.undo(changes)).toEqual({ unsaved: false });
   });
 
@@ -463,7 +645,7 @@ describe("database worker changes", () => {
     await rejection(db.prepareSave());
 
     // Had the part's version stayed, this would count it as saved.
-    expect(await db.finishSave(true)).toEqual({ unsaved: true, sha256: null });
+    expect(await db.finishSave(true)).toEqual({ unsaved: true, sha256: null, parts: 0 });
   });
 
   it("serializes the database as an SQLite file, unsaved changes too, still unsaved", async () => {

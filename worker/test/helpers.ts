@@ -92,6 +92,59 @@ export function forwardFetchToWorker() {
 /** What relative URLs resolve against, as on the page the app is served from. */
 const WORKER_ORIGIN = "http://localhost";
 
+/**
+ * A browser's WebSocket, as far as the frontend uses one, connected to the
+ * worker: it opens, is sent messages and closes as the browser's would.
+ */
+class WorkerWebSocket extends EventTarget {
+  #ws: WebSocket | undefined;
+  #closed = false;
+
+  constructor(url: string) {
+    super();
+    // Relative to the page, as a browser takes it.
+    const target = new URL(url, WORKER_ORIGIN);
+    void exports.default.fetch(target, { headers: { Upgrade: "websocket" } }).then((response) => {
+      const ws = response.webSocket;
+      if (!ws) {
+        this.#close(1006, "");
+        return;
+      }
+      ws.accept();
+      this.#ws = ws;
+      ws.addEventListener("message", ({ data }) =>
+        this.dispatchEvent(new MessageEvent("message", { data })),
+      );
+      ws.addEventListener("close", ({ code, reason }) => this.#close(code, reason));
+      if (this.#closed) ws.close();
+      else this.dispatchEvent(new Event("open"));
+    });
+  }
+
+  #close(code: number, reason: string) {
+    if (this.#closed) return;
+    this.#closed = true;
+    this.dispatchEvent(new CloseEvent("close", { code, reason }));
+  }
+
+  send(message: string) {
+    this.#ws!.send(message);
+  }
+
+  close() {
+    this.#ws?.close();
+    this.#close(1000, "");
+  }
+}
+
+/**
+ * Routes the global `WebSocket` to the worker, as `forwardFetchToWorker`
+ * does `fetch`. Undo with `vi.unstubAllGlobals()`.
+ */
+export function forwardWebSocketsToWorker() {
+  vi.stubGlobal("WebSocket", WorkerWebSocket);
+}
+
 export function post(path: string, body: unknown) {
   return exports.default.fetch(`http://localhost/api${path}`, {
     method: "POST",

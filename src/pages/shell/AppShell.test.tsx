@@ -5,7 +5,7 @@ import { logoutUser } from "../../api/auth.ts";
 import {
   appendDatabasePart,
   downloadDatabase,
-  downloadDatabaseIfChanged,
+  downloadDatabasePart,
   replaceDatabase,
 } from "../../api/database.ts";
 import { Database } from "../../db/database.ts";
@@ -25,6 +25,7 @@ import {
   querySaved,
   savedElsewhere,
   downloadOf,
+  endWatchedSession,
   servedDatabase,
   storedDatabase,
   UPLOADED,
@@ -40,10 +41,11 @@ import { loaderRowCount, MAX_ROWS, STEP } from "../transactions/loaderCells.ts";
 
 vi.mock("../../api/database.ts", () => ({
   downloadDatabase: vi.fn(),
-  downloadDatabaseIfChanged: vi.fn(),
+  downloadDatabasePart: vi.fn(),
   replaceDatabase: vi.fn(),
   appendDatabasePart: vi.fn(),
 }));
+vi.mock("../../api/databaseUpdates.ts", () => ({ watchDatabase: vi.fn() }));
 vi.mock("../../api/auth.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../api/auth.ts")>()),
   logoutUser: vi.fn(),
@@ -72,8 +74,7 @@ beforeEach(async () => {
   vi.mocked(replaceDatabase).mockResolvedValue(UPLOADED);
   vi.mocked(appendDatabasePart).mockReset();
   vi.mocked(appendDatabasePart).mockResolvedValue(UPLOADED);
-  vi.mocked(downloadDatabaseIfChanged).mockReset();
-  vi.mocked(downloadDatabaseIfChanged).mockResolvedValue({ success: false, code: "NOT_MODIFIED" });
+  vi.mocked(downloadDatabasePart).mockReset();
   await page.viewport(1280, 800);
 });
 
@@ -142,7 +143,6 @@ async function editCounterparty(from: string, to: string) {
 const list = () => page.getByRole("list", { name: "Transactions" });
 
 /** The page checks for a newer version when it's shown again, as well as every 10 seconds. */
-const checkForUpdates = () => document.dispatchEvent(new Event("visibilitychange"));
 
 /** Logged in, with the transactions page open on TWO_TRANSACTIONS. */
 async function opened() {
@@ -443,11 +443,11 @@ describe("TransactionsPage", () => {
     await loggedIn(await storedDatabase(TWO_TRANSACTIONS));
     await renderApp("/transactions");
     await expect.element(page.getByText("Corner Market").shown()).toBeVisible();
+    await editCounterparty("Corner Market", "Corner Shop");
     await savedElsewhere(
       `UPDATE transactions SET counterparty = 'Corner Store' WHERE id = '${NEWER}'`,
     );
 
-    await editCounterparty("Corner Market", "Corner Shop");
     await userEvent.click(saveButton());
 
     await expect
@@ -474,6 +474,27 @@ describe("TransactionsPage", () => {
     expect(
       await querySaved("SELECT counterparty FROM transactions ORDER BY sort_key DESC"),
     ).toEqual([{ counterparty: "Corner Shop" }, { counterparty: "Café Sol" }]);
+  });
+
+  it("shows a transaction added elsewhere where the sort puts it, moving no other", async () => {
+    await loggedIn(await storedDatabase(TWO_TRANSACTIONS));
+    await renderApp("/transactions");
+    await expect.element(page.getByText("Corner Market").shown()).toBeVisible();
+    // Last by its date now, but left where it is: an edited row stays put.
+    await userEvent.dblClick(await cellOf("Corner Market", DATE));
+    await page.getByRole("textbox").fill("2026-09-01");
+    await userEvent.keyboard("{Enter}");
+
+    // The 5th, newer than either now Corner Market is in September.
+    await savedElsewhere(
+      `INSERT INTO transactions (sort_key, id, source, account_name, amount, currency, counterparty, category, naive_date)
+        VALUES (1, '${transactionId(3)}', ${SOURCE_HASH_SQL}, 'Everyday Checking', -300, 'USD', 'Kiosk', NULL, '2026-10-05')`,
+    );
+
+    // Before the first row it sorts before; sorting again would put Corner Market last.
+    await expect
+      .poll(() => columnTexts(COUNTERPARTY))
+      .toEqual(["Kiosk", "Corner Market", "Café Lumen"]);
   });
 
   it("keeps an edit made during a save unsaved", async () => {
@@ -1152,41 +1173,51 @@ describe("switching pages", () => {
 describe("a version saved elsewhere", () => {
   /** Corner Market renamed, as if on another device. */
   const RENAME = `UPDATE transactions SET counterparty = 'Corner Shop' WHERE id = '${NEWER}'`;
+  const updatedToast = () => page.getByText("Successfully updated database");
+  const failedToast = () =>
+    page.getByText("The database has been updated elsewhere. Please reload the page.");
 
-  it("is shown in place of the open one", async () => {
+  it("is brought in as soon as it's saved, saying so", async () => {
     await opened();
-    const open = servedDatabase()!.sha256;
+
     await savedElsewhere(RENAME);
 
-    checkForUpdates();
+    await expect.element(page.getByText("Corner Shop").shown()).toBeVisible();
+    await expect.element(updatedToast()).toBeVisible();
+    expect(saveButton().query()).toBeNull();
+  });
+
+  it("downloads only the parts saved since", async () => {
+    await opened();
+
+    await savedElsewhere(RENAME);
 
     await expect.element(page.getByText("Corner Shop").shown()).toBeVisible();
-    expect(downloadDatabaseIfChanged).toHaveBeenCalledWith(TOKEN, open);
-    expect(saveButton().query()).toBeNull();
+    expect(downloadDatabase).not.toHaveBeenCalled();
+    expect(vi.mocked(downloadDatabasePart).mock.calls.map(([, index]) => index)).toEqual([1, 2]);
   });
 
   it("is remembered for how many digits its row numbers have", async () => {
     await opened();
     await expect.poll(storedDigits).toBe(1);
     await saveRowNumberDigits(TOKEN, 5);
-    await savedElsewhere(RENAME);
 
-    checkForUpdates();
+    await savedElsewhere(RENAME);
 
     await expect.element(page.getByText("Corner Shop").shown()).toBeVisible();
     await expect.poll(storedDigits).toBe(1);
   });
 
-  it("is then the version edits are saved after", async () => {
+  it("keeps the unsaved changes, which then save after it", async () => {
     await opened();
-    await savedElsewhere(RENAME);
-    const newer = servedDatabase()!.sha256;
-    checkForUpdates();
-    await expect.element(page.getByText("Corner Shop").shown()).toBeVisible();
-
     await editCounterparty("Café Lumen", "Café Sol");
-    await userEvent.click(saveButton());
 
+    await savedElsewhere(RENAME);
+
+    await expect.element(page.getByText("Corner Shop").shown()).toBeVisible();
+    await expect.element(page.getByText("Café Sol").shown()).toBeVisible();
+    const newer = servedDatabase()!.sha256;
+    await userEvent.click(saveButton());
     await expect.element(saveButton()).not.toBeInTheDocument();
     expect(appendDatabasePart).toHaveBeenCalledOnce();
     expect(appendDatabasePart).toHaveBeenCalledWith(TOKEN, expect.any(Uint8Array), newer);
@@ -1195,95 +1226,96 @@ describe("a version saved elsewhere", () => {
     ).toEqual([{ counterparty: "Corner Shop" }, { counterparty: "Café Sol" }]);
   });
 
-  it("is checked for against the version just saved", async () => {
+  it("is brought in while a cell is being edited, which carries on", async () => {
+    await opened();
+    await userEvent.dblClick(page.getByText("Café Lumen").shown());
+    await userEvent.keyboard("{End} Sol");
+
+    await savedElsewhere(RENAME);
+
+    await expect.element(page.getByText("Corner Shop").shown()).toBeVisible();
+    await expect.element(page.getByRole("textbox")).toHaveFocus();
+    await expect.element(page.getByRole("textbox")).toHaveValue("Café Lumen Sol");
+    await userEvent.keyboard("{Enter}");
+    await expect.element(page.getByText("Café Lumen Sol").shown()).toBeVisible();
+  });
+
+  it("says to reload when the unsaved changes conflict with it, keeping them", async () => {
+    await opened();
+    await editCounterparty("Corner Market", "Corner Store");
+
+    await savedElsewhere(RENAME);
+
+    await expect.element(failedToast()).toBeVisible();
+    await expect.element(page.getByText("Corner Store").shown()).toBeVisible();
+    await expect.element(saveButton()).toBeVisible();
+  });
+
+  it("is brought in once the change it conflicted with is undone", async () => {
+    await opened();
+    await editCounterparty("Corner Market", "Corner Store");
+    await savedElsewhere(RENAME);
+    await expect.element(failedToast()).toBeVisible();
+    await focusGrid("Corner Store");
+
+    await userEvent.keyboard("{Control>}z{/Control}");
+
+    await expect.element(page.getByText("Corner Shop").shown()).toBeVisible();
+    await expect.element(updatedToast()).toBeVisible();
+    await expect.element(failedToast()).not.toBeInTheDocument();
+    expect(saveButton().query()).toBeNull();
+  });
+
+  it("is brought in with a change made there too, as if it were no conflict", async () => {
     await opened();
     await editCounterparty("Corner Market", "Corner Shop");
-    await userEvent.click(saveButton());
+
+    await savedElsewhere(RENAME);
+
+    await expect.element(updatedToast()).toBeVisible();
+    expect(failedToast().query()).toBeNull();
+    // Nothing of this page's is left to save.
     await expect.element(saveButton()).not.toBeInTheDocument();
-
-    // Until the save has finished, which is a moment after Save goes (as
-    // soon as nothing's unsaved): a check before then is skipped.
-    await expect
-      .poll(() => {
-        checkForUpdates();
-        return vi.mocked(downloadDatabaseIfChanged).mock.lastCall;
-      })
-      .toEqual([TOKEN, servedDatabase()!.sha256]);
   });
 
-  it("isn't checked for while there are unsaved changes", async () => {
+  it("isn't brought in again once this page has saved it", async () => {
     await opened();
-    await editCounterparty("Café Lumen", "Café Sol");
-    await expect.element(saveButton()).toBeVisible();
-    await savedElsewhere(RENAME);
+    await editCounterparty("Corner Market", "Corner Shop");
 
-    checkForUpdates();
+    await userEvent.click(saveButton());
 
-    expect(downloadDatabaseIfChanged).not.toHaveBeenCalled();
-    await expect.element(page.getByText("Café Sol").shown()).toBeVisible();
-  });
-
-  it("isn't checked for while a cell is being edited, but is once it isn't", async () => {
-    await opened();
-    await savedElsewhere(RENAME);
-    await userEvent.dblClick(page.getByText("Café Lumen").shown());
-    await expect.element(page.getByRole("textbox")).toHaveFocus();
-
-    checkForUpdates();
-    expect(downloadDatabaseIfChanged).not.toHaveBeenCalled();
-    await userEvent.keyboard("{Escape}");
-    checkForUpdates();
-
-    await expect.element(page.getByText("Corner Shop").shown()).toBeVisible();
-  });
-
-  it("is dropped when an edit is made while it downloads", async () => {
-    await opened();
-    const open = servedDatabase()!.sha256;
-    await savedElsewhere(RENAME);
-    const download = vi.mocked(downloadDatabaseIfChanged).getMockImplementation()!;
-    let finishDownload!: () => void;
-    vi.mocked(downloadDatabaseIfChanged).mockImplementation(
-      (...args) =>
-        new Promise((resolve) => {
-          finishDownload = () => resolve(download(...args));
-        }),
-    );
-
-    checkForUpdates();
-    await editCounterparty("Café Lumen", "Café Sol");
-    await expect.element(saveButton()).toBeVisible();
-    finishDownload();
-    // Give it the chance to (wrongly) replace the data.
+    await expect.element(saveButton()).not.toBeInTheDocument();
+    // Give it the chance to (wrongly) download what it saved.
     await new Promise((resolve) => setTimeout(resolve, 200));
-
-    await expect.element(page.getByText("Café Sol").shown()).toBeVisible();
-    await expect.element(page.getByText("Corner Market").shown()).toBeVisible();
-    await userEvent.click(saveButton());
-    await expect.element(saveButton()).not.toBeInTheDocument();
-    // Saved after the version it opened first, then moved onto the newer one.
-    expect(vi.mocked(appendDatabasePart).mock.calls[0]![2]).toBe(open);
+    expect(downloadDatabasePart).not.toHaveBeenCalled();
+    expect(updatedToast().query()).toBeNull();
   });
 
-  it("is checked for again after a check fails", async () => {
+  it("deletes a row being marked as a duplicate without failing the page", async () => {
     await opened();
-    vi.mocked(downloadDatabaseIfChanged).mockRejectedValueOnce(new TypeError("Failed to fetch"));
-    checkForUpdates();
-    await expect.poll(() => vi.mocked(downloadDatabaseIfChanged).mock.calls).toHaveLength(1);
-    await savedElsewhere(RENAME);
+    await focusGrid("Café Lumen");
+    await userEvent.click(page.getByRole("button", { name: "Mark as duplicate" }));
+    await expect.element(page.getByText("Marking as duplicate")).toBeVisible();
+    // Picks it, to mark Café Lumen a duplicate of.
+    await userEvent.click(await cellOf("Corner Market", COUNTERPARTY));
+    await expect
+      .element(page.getByRole("button", { name: "Mark as duplicate of row 1" }))
+      .toBeVisible();
 
-    checkForUpdates();
+    await savedElsewhere(`DELETE FROM transactions WHERE id = '${OLDER}'`);
 
-    await expect.element(page.getByText("Corner Shop").shown()).toBeVisible();
+    await expect.element(page.getByText("Café Lumen").shown()).not.toBeInTheDocument();
+    await expect.element(page.getByText("Corner Market").shown()).toBeVisible();
+    // Its only row is gone, so the marking is over.
+    await expect.element(page.getByText("Marking as duplicate")).not.toBeInTheDocument();
   });
 
   it("keeps the active cell on a row that exists when it has fewer rows", async () => {
     await opened();
     await userEvent.click(await cellOf("Café Lumen", COUNTERPARTY));
     await userEvent.keyboard("{Escape}");
-    await savedElsewhere(`DELETE FROM transactions WHERE id = '${OLDER}'`);
 
-    checkForUpdates();
+    await savedElsewhere(`DELETE FROM transactions WHERE id = '${OLDER}'`);
 
     await expect.element(page.getByText("Café Lumen").shown()).not.toBeInTheDocument();
     const grid = page.getByRole("grid").element();
@@ -1436,11 +1468,11 @@ describe("loading the transactions", () => {
     await opened();
     await expect.poll(storedDigits).toBe(1);
     await saveRowNumberDigits(TOKEN, 5);
+    await editCounterparty("Corner Market", "Corner Shop");
     await savedElsewhere(
       `UPDATE transactions SET counterparty = 'Corner Store' WHERE id = '${NEWER}'`,
     );
 
-    await editCounterparty("Corner Market", "Corner Shop");
     await userEvent.click(saveButton());
 
     await expect
@@ -1539,33 +1571,21 @@ describe("a session the server no longer accepts", () => {
     await expect.poll(() => loadSession()).toBeNull();
   });
 
-  it("logs out when checking for a version saved elsewhere", async () => {
+  it("logs out when the server stops watching the database for it", async () => {
     const { router } = await opened();
-    vi.mocked(downloadDatabaseIfChanged).mockResolvedValue({
-      success: false,
-      code: "UNAUTHORIZED",
-    });
 
-    checkForUpdates();
+    endWatchedSession();
 
     await expect.poll(() => router.state.location.pathname).toBe("/login");
     await expect.poll(() => loadSession()).toBeNull();
   });
 
-  it("keeps an edit made while the check runs, for saving to report", async () => {
+  it("keeps unsaved changes when the server stops watching, for saving to report", async () => {
     const { router } = await opened();
-    let finishCheck!: () => void;
-    vi.mocked(downloadDatabaseIfChanged).mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          finishCheck = () => resolve({ success: false, code: "UNAUTHORIZED" });
-        }),
-    );
-
-    checkForUpdates();
     await editCounterparty("Café Lumen", "Café Sol");
     await expect.element(saveButton()).toBeVisible();
-    finishCheck();
+
+    endWatchedSession();
     // Give it the chance to (wrongly) log out.
     await new Promise((resolve) => setTimeout(resolve, 200));
 
@@ -2039,7 +2059,7 @@ describe("undo and redo on the transactions page", () => {
     await expect.element(inTable("Corner Market")).toBeVisible();
   });
 
-  it("forgets the history when a version saved elsewhere replaces the open one", async () => {
+  it("keeps the history across changes brought in from elsewhere", async () => {
     await opened();
     await editCounterparty("Café Lumen", "Café Sol");
     await userEvent.click(saveButton());
@@ -2047,16 +2067,31 @@ describe("undo and redo on the transactions page", () => {
     await savedElsewhere(
       `UPDATE transactions SET counterparty = 'Corner Shop' WHERE id = '${NEWER}'`,
     );
-    checkForUpdates();
     await expect.element(inTable("Corner Shop")).toBeVisible();
     await focusGrid("Café Sol");
 
     await undo();
-    // Give it the chance to (wrongly) undo the edit saved before.
-    await new Promise((resolve) => setTimeout(resolve, 200));
 
-    await expect.element(inTable("Café Sol")).toBeVisible();
-    expect(saveButton().query()).toBeNull();
+    await expect.element(inTable("Café Lumen")).toBeVisible();
+    await expect.element(inTable("Corner Shop")).toBeVisible();
+    await expect.element(saveButton()).toBeVisible();
+  });
+
+  it("says it can't undo an edit to a cell changed elsewhere since", async () => {
+    await opened();
+    await editCounterparty("Café Lumen", "Café Sol");
+    await userEvent.click(saveButton());
+    await expect.element(saveButton()).not.toBeInTheDocument();
+    await savedElsewhere(
+      `UPDATE transactions SET counterparty = 'Café Luna' WHERE id = '${OLDER}'`,
+    );
+    await expect.element(inTable("Café Luna")).toBeVisible();
+    await focusGrid("Café Luna");
+
+    await undo();
+
+    await expect.element(page.getByText(/^Couldn't undo that/).shown()).toBeVisible();
+    await expect.element(inTable("Café Luna")).toBeVisible();
   });
 
   it("can still undo earlier edits after one can't be written", async () => {

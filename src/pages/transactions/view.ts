@@ -163,20 +163,71 @@ export function viewOrder(
   order.sort(byRecent(rows));
 
   const { column, direction } = view.sort;
+  const textOf = sortTextOf(column, names);
+  // Oldest first is newest first the other way round, the same day's too.
+  if (textOf === null) return direction === "descending" ? order : order.reverse();
+  return sortByText(rows, order, textOf, direction);
+}
+
+/** The text `column` sorts transactions by, or null for the date. */
+function sortTextOf(column: SortColumn, names: ViewNames) {
   const listed = listedNames(names);
-  switch (column) {
-    case "date":
-      // Oldest first is newest first the other way round, the same day's too.
-      return direction === "descending" ? order : order.reverse();
-    case "account":
-      return sortByText(rows, order, listed.account, direction);
-    case "counterparty":
-      return sortByText(rows, order, (row) => row.counterparty, direction);
-    case "category":
-      return sortByText(rows, order, listed.category, direction);
-    case "remarks":
-      return sortByText(rows, order, (row) => row.remarks, direction);
+  const texts: Record<SortColumn, ((row: ListedTransaction) => string | null) | null> = {
+    date: null,
+    account: listed.account,
+    counterparty: (row) => row.counterparty,
+    category: listed.category,
+    remarks: (row) => row.remarks,
+  };
+  return texts[column];
+}
+
+/** Which of two transactions `view` puts first, as `viewOrder` does: negative if `a`. */
+function compareInView(view: TransactionsView, names: ViewNames) {
+  const { column, direction } = view.sort;
+  const textOf = sortTextOf(column, names);
+  if (textOf === null)
+    return direction === "descending"
+      ? compareNewestFirst
+      : (a: ListedTransaction, b: ListedTransaction) => compareNewestFirst(b, a);
+  const sign = direction === "ascending" ? 1 : -1;
+  return (a: ListedTransaction, b: ListedTransaction) => {
+    const [x, y] = [textOf(a), textOf(b)];
+    // Those without the text go last either way (see `sortByText`).
+    if (x === null || y === null) return x === y ? compareNewestFirst(a, b) : x === null ? 1 : -1;
+    return sign * collator.compare(x, y) || compareNewestFirst(a, b);
+  };
+}
+
+/**
+ * `order` with the rows at `arrived` (positions in `rows`) that `view`
+ * shows placed among its rows, where the view's sort would put them. The
+ * rows already in it keep their order, even where it's no longer the
+ * view's: an edited row stays where it was. The dates of a period are as of
+ * `today`.
+ */
+export function withArrived(
+  order: readonly number[],
+  arrived: readonly number[],
+  rows: Rows,
+  view: TransactionsView,
+  names: ViewNames,
+  today: NaiveDate,
+): number[] {
+  const shown = filterFor(view, names, today);
+  const compare = compareInView(view, names);
+  const before = (a: number, b: number) => compare(rows[a]!, rows[b]!) < 0;
+  const placing = arrived
+    .filter((position) => shown(rows[position]!))
+    .sort((a, b) => compare(rows[a]!, rows[b]!));
+  const placed: number[] = [];
+  let next = 0;
+  for (const position of order) {
+    while (next < placing.length && before(placing[next]!, position)) placed.push(placing[next++]!);
+    placed.push(position);
   }
+  placed.push(...placing.slice(next));
+  return placed;
 }
 
 /** What the transactions have that the filters can be set to. */

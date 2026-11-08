@@ -45,28 +45,29 @@ function nameOf({ counterparty }: TransactionRow) {
 
 /** Whether `change` stores what emptying its cell would, like 0 for an amount. */
 function clears(
-  { rowIndex, field, patch }: TransactionChange,
-  rows: readonly TransactionRow[],
+  { id, field, patch }: TransactionChange,
+  rowOf: (id: string) => TransactionRow,
   context: EditContext,
 ) {
-  const row = rows[rowIndex]!;
+  const row = rowOf(id);
   const cleared = columnOf(field).meta!.editor!.parse("", row, { ...context, create: false });
   return cleared.ok && hasPatch({ ...row, ...patch }, cleared.value);
 }
 
 /**
- * Describes making `changes` to `rows` (as they are before them).
- * `context` has the categories there are, so one that's new says so.
+ * Describes making `changes` to the transactions `rowOf` finds by id (as
+ * they are before them). `context` has the categories there are, so one
+ * that's new says so.
  */
 export function describeEdit(
   changes: readonly TransactionChange[],
-  rows: readonly TransactionRow[],
+  rowOf: (id: string) => TransactionRow,
   context: EditContext,
 ) {
   const { categories } = context;
   const [change] = changes;
   if (changes.length === 1 && change) {
-    const before = rows[change.rowIndex]!;
+    const before = rowOf(change.id);
     const after = { ...before, ...change.patch };
     const name = nameOf(before);
     const field = fieldName(change.field);
@@ -85,8 +86,8 @@ export function describeEdit(
   }
 
   const cells = plural(changes.length, "cell");
-  const transactions = plural(new Set(changes.map(({ rowIndex }) => rowIndex)).size, "transaction");
-  const cleared = changes.every((change) => clears(change, rows, context));
+  const transactions = plural(new Set(changes.map(({ id }) => id)).size, "transaction");
+  const cleared = changes.every((change) => clears(change, rowOf, context));
   return `${cleared ? "clearing" : "changes to"} ${cells} in ${transactions}`;
 }
 

@@ -16,7 +16,7 @@ import {
   type Placement,
   type Transactions,
 } from "../../db/transactions.ts";
-import { useHoldUpdates, useOpenDatabase } from "../../db/useDatabase.ts";
+import { useOpenDatabase } from "../../db/useDatabase.ts";
 import { useBreakpoint } from "../../hooks/useBreakpoint.ts";
 import { download } from "../../lib/download.ts";
 import { today } from "../../lib/period.ts";
@@ -41,16 +41,27 @@ import TransactionsTable, {
   type AddAt,
   type TransactionChange,
 } from "./TransactionsTable.tsx";
-import { DEFAULT_VIEW, filterValues, viewOrder, type TransactionsView } from "./view.ts";
+import {
+  DEFAULT_VIEW,
+  filterValues,
+  viewOrder,
+  withArrived,
+  type TransactionsView,
+} from "./view.ts";
 
 /** The message of an error a write rejected with. */
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
-/** The transactions a view showed, as positions in the rows of the read it was worked out from. */
+/**
+ * The transactions a view showed, as positions in the rows of the read it
+ * was worked out from, with the first `arrived` of the rows that came in
+ * from elsewhere since (see `Transactions`) placed among them.
+ */
 type Shown = {
   view: TransactionsView;
   read: Transactions["read"];
   order: number[];
+  arrived: number;
 };
 
 function TransactionsPage() {
@@ -65,9 +76,6 @@ function TransactionsPage() {
     ...query,
     placeholderData: keepPreviousData,
   });
-  // A newer version would replace the rows under the edit, losing it.
-  const [editing, setEditing] = useState(false);
-  useHoldUpdates(editing);
   const canUndo = useSyncExternalStore(history.subscribeToStacks, () => history.canUndo);
   const canRedo = useSyncExternalStore(history.subscribeToStacks, () => history.canRedo);
   const undoOrRedo = useUndoRedo(history);
@@ -80,7 +88,8 @@ function TransactionsPage() {
   // undo of one) changes them: an edited row stays where it is, even if
   // it no longer belongs there, until the view changes, rather than moving
   // away from under the edit. An added row is put beside the one it was
-  // added next to, and stays there in the same way.
+  // added next to, and stays there in the same way. Rows that come in from
+  // elsewhere are put where the view would, among the rest.
   const [shown, setShown] = useState<Shown | null>(null);
   // The latest row added, for the table to select.
   const [added, setAdded] = useState<Added | null>(null);
@@ -102,8 +111,15 @@ function TransactionsPage() {
   // again makes new ones.
   const current =
     shown !== null && shown.view === view && shown.read === loaded.read ? shown : null;
-  const order = current?.order ?? viewOrder(loaded.rows, view, names, today());
-  if (current === null) setShown({ view, read: loaded.read, order });
+  let order: number[];
+  if (current === null) {
+    order = viewOrder(loaded.rows, view, names, today());
+    setShown({ view, read: loaded.read, order, arrived: loaded.arrived.length });
+  } else if (current.arrived < loaded.arrived.length) {
+    const arrived = loaded.arrived.slice(current.arrived).filter((at) => !loaded.removed.has(at));
+    order = withArrived(current.order, arrived, loaded.rows, view, names, today());
+    setShown({ ...current, order, arrived: loaded.arrived.length });
+  } else order = current.order;
   // One removed since (an add undone) keeps its place, for if it comes back.
   const rows = order.flatMap((position) =>
     loaded.removed.has(position) ? [] : [loaded.rows[position]!],
@@ -111,17 +127,21 @@ function TransactionsPage() {
   const transactions = existing(loaded);
   const values = filterValues(transactions, names);
 
+  /** The transaction with `id`, as it's been read or changed since. */
+  const transactionOf = (id: string) => loaded.rows[loaded.positions.get(id)!]!;
+
+  /** Whether the transaction with `id` is still there: not deleted since it was read. */
+  const exists = (id: string) => {
+    const position = loaded.positions.get(id);
+    return position !== undefined && !loaded.removed.has(position);
+  };
+
   /** Stores the changes, saying so if they couldn't be (see `commitTransactions`). */
   const commit = (changes: readonly TransactionChange[]) => {
     if (changes.length === 0) return;
-    const updates = changes.map(({ rowIndex, field, patch }) => ({
-      id: rows[rowIndex]!.id,
-      field,
-      patch,
-    }));
     // Described as the rows are before it.
-    const description = describeEdit(changes, rows, { ...names, currencies });
-    commitTransactions(queryClient, database, history, updates, description).catch(
+    const description = describeEdit(changes, transactionOf, { ...names, currencies });
+    commitTransactions(queryClient, database, history, changes, description).catch(
       (error: unknown) => {
         toast.error(
           `Couldn't change ${changes.length === 1 ? "that transaction" : "those transactions"}: ${messageOf(error)}`,
@@ -134,10 +154,10 @@ function TransactionsPage() {
    * Adds a row where the action bar asked (see `AddAt`), showing it beside
    * the row it was added next to, and saying so if it couldn't be added.
    */
-  const add = ({ row, side, column }: AddAt) => {
+  const add = ({ id: besideId, side, column }: AddAt) => {
     // As the transactions are now, with an edit settled just before.
     const latest = queryClient.getQueryData(query.queryKey)!;
-    const beside = row === null ? null : latest.rows[latest.positions.get(rows[row]!.id)!]!;
+    const beside = besideId === null ? null : latest.rows[latest.positions.get(besideId)!]!;
     // Above is the newer side, but where the oldest are shown first.
     const oldestFirst = view.sort.column === "date" && view.sort.direction === "ascending";
     const placement: Placement =
@@ -180,11 +200,11 @@ function TransactionsPage() {
     );
   };
 
-  /** Deletes the rows at `indexes`, saying so if they couldn't be deleted. */
-  const deleteRows = (indexes: readonly number[]) => {
+  /** Deletes the transactions with `ids`, saying so if they couldn't be deleted. */
+  const deleteRows = (ids: readonly string[]) => {
     // As the transactions are now, with an edit settled just before.
     const latest = queryClient.getQueryData(query.queryKey)!;
-    const deleting = indexes.map((index) => latest.rows[latest.positions.get(rows[index]!.id)!]!);
+    const deleting = ids.map((id) => latest.rows[latest.positions.get(id)!]!);
     deleteTransactions(
       queryClient,
       database,
@@ -205,7 +225,6 @@ function TransactionsPage() {
    * table asks on every render, so working the marks out is kept quick.
    */
   const mark = (kind: MarkKind, marked: readonly string[], picked: string) => {
-    const transactionOf = (id: string) => loaded.rows[loaded.positions.get(id)!]!;
     const marks =
       kind === "duplicate"
         ? duplicateMarks(loaded, marked, picked)
@@ -224,11 +243,11 @@ function TransactionsPage() {
     };
   };
 
-  /** Unmarks the rows at `indexes` as `kind`, saying so if they couldn't be. */
-  const unmark = (kind: MarkKind, indexes: readonly number[]) => {
+  /** Unmarks the transactions with `ids` as `kind`, saying so if they couldn't be. */
+  const unmark = (kind: MarkKind, ids: readonly string[]) => {
     // As the transactions are now, with an edit settled just before.
     const latest = queryClient.getQueryData(query.queryKey)!;
-    const unmarking = indexes.map((index) => latest.rows[latest.positions.get(rows[index]!.id)!]!);
+    const unmarking = ids.map((id) => latest.rows[latest.positions.get(id)!]!);
     markTransactions(queryClient, database, history, {
       marks: unmarks(kind, unmarking),
       marked: unmarking.map(({ id }) => id),
@@ -283,7 +302,6 @@ function TransactionsPage() {
           accounts={accounts}
           currencies={currencies}
           onCommit={commit}
-          onEditingChange={setEditing}
           lastUndoOrRedo={loaded.lastUndoOrRedo}
           onUndoOrRedo={undoOrRedo}
           lastAdded={added}
@@ -317,6 +335,7 @@ function TransactionsPage() {
             deleteRows,
             mark,
             unmark,
+            exists,
             render: (actions) => <ActionBar {...actions} />,
           }}
         />

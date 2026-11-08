@@ -33,11 +33,15 @@ const CONTEXT = {
   ],
 };
 
-const describeOne = (change: Omit<TransactionChange, "rowIndex">, before = row()) =>
-  describeEdit([{ rowIndex: 0, ...change }], [before], CONTEXT);
+/** Finds `rows` by id, as describeEdit asks. */
+const byId = (rows: readonly TransactionRow[]) => (id: string) =>
+  rows.find((row) => row.id === id)!;
+
+const describeOne = (change: Omit<TransactionChange, "id">, before = row()) =>
+  describeEdit([{ id: before.id, ...change }], byId([before]), CONTEXT);
 
 describe("describeEdit", () => {
-  it.each<[string, Omit<TransactionChange, "rowIndex">, string]>([
+  it.each<[string, Omit<TransactionChange, "id">, string]>([
     [
       "a category",
       { field: "category", patch: { category: "Dining out" } },
@@ -150,11 +154,11 @@ describe("describeEdit", () => {
     expect(
       describeEdit(
         [
-          { rowIndex: 0, field: "category", patch: { category: null } },
-          { rowIndex: 1, field: "category", patch: { category: null } },
-          { rowIndex: 1, field: "remarks", patch: { remarks: null } },
+          { id: "t1", field: "category", patch: { category: null } },
+          { id: "t2", field: "category", patch: { category: null } },
+          { id: "t2", field: "remarks", patch: { remarks: null } },
         ],
-        rows,
+        byId(rows),
         CONTEXT,
       ),
     ).toBe("clearing 3 cells in 2 transactions");
@@ -165,10 +169,10 @@ describe("describeEdit", () => {
     expect(
       describeEdit(
         [
-          { rowIndex: 0, field: "category", patch: { category: null } },
-          { rowIndex: 0, field: "amount", patch: { currency: "USD", amount: 0, decimals: 2 } },
+          { id: "t1", field: "category", patch: { category: null } },
+          { id: "t1", field: "amount", patch: { currency: "USD", amount: 0, decimals: 2 } },
         ],
-        [row()],
+        byId([row()]),
         CONTEXT,
       ),
     ).toBe("clearing 2 cells in 1 transaction");
@@ -178,10 +182,10 @@ describe("describeEdit", () => {
     expect(
       describeEdit(
         [
-          { rowIndex: 0, field: "category", patch: { category: null } },
-          { rowIndex: 0, field: "counterparty", patch: { counterparty: "Corner Shop" } },
+          { id: "t1", field: "category", patch: { category: null } },
+          { id: "t1", field: "counterparty", patch: { counterparty: "Corner Shop" } },
         ],
-        [row()],
+        byId([row()]),
         CONTEXT,
       ),
     ).toBe("changes to 2 cells in 1 transaction");

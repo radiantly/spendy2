@@ -13,7 +13,7 @@ import {
 import {
   appendDatabasePart,
   downloadDatabase,
-  downloadDatabaseIfChanged,
+  downloadDatabasePart,
   replaceDatabase,
 } from "./database.ts";
 import { TOKEN } from "../test/fixtures.ts";
@@ -73,32 +73,31 @@ describe("downloadDatabase", () => {
   });
 });
 
-describe("downloadDatabaseIfChanged", () => {
-  it("reports the version it names as not modified", async () => {
-    const part = await firstStored();
-
-    expect(await downloadDatabaseIfChanged(token, await sha256Hex(part))).toEqual({
-      success: false,
-      code: "NOT_MODIFIED",
-    });
-  });
-
-  it("returns every part when one was added since", async () => {
+describe("downloadDatabasePart", () => {
+  it("returns the part at an index, counting from 0, with its sha256", async () => {
     const first = await firstStored();
     const second = databasePart(await sha256Hex(first));
     await appendDatabasePart(token, second, await sha256Hex(first));
 
-    expect(await downloadDatabaseIfChanged(token, await sha256Hex(first))).toEqual({
+    expect(await downloadDatabasePart(token, 1)).toEqual({
       success: true,
-      parts: concatBytes([first, second]),
+      parts: second,
       sha256: await sha256Hex(second),
     });
   });
 
-  it("reports a user without a database as not found", async () => {
-    expect(await downloadDatabaseIfChanged(token, "a".repeat(64))).toEqual({
+  it("reports a part past the last as not found", async () => {
+    await firstStored();
+
+    expect(await downloadDatabasePart(token, 1)).toEqual({ success: false, code: "NOT_FOUND" });
+  });
+
+  it("reports an unknown session as unauthorized", async () => {
+    await firstStored();
+
+    expect(await downloadDatabasePart(UNKNOWN_SESSION, 0)).toEqual({
       success: false,
-      code: "NOT_FOUND",
+      code: "UNAUTHORIZED",
     });
   });
 });

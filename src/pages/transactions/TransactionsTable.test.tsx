@@ -393,7 +393,7 @@ describe("TransactionsTable", () => {
       await userEvent.click(page.elementLocator(numberFor("Shop 2")));
 
       expect(onCommit).toHaveBeenCalledWith([
-        { rowIndex: 0, field: "counterparty", patch: { counterparty: "Corner Shop" } },
+        { id: "t0", field: "counterparty", patch: { counterparty: "Corner Shop" } },
       ]);
       await expect.element(input()).not.toBeInTheDocument();
       expect(selectedCells()).toEqual(cellsOf("Shop 2"));
@@ -407,8 +407,8 @@ describe("TransactionsTable", () => {
       await userEvent.keyboard("{Delete}");
 
       expect(onCommit).toHaveBeenCalledWith([
-        { rowIndex: 0, field: "category", patch: { category: null } },
-        { rowIndex: 0, field: "amount", patch: usd(0) },
+        { id: "t0", field: "category", patch: { category: null } },
+        { id: "t0", field: "amount", patch: usd(0) },
       ]);
     });
 
@@ -658,9 +658,7 @@ describe("TransactionsTable", () => {
 
       expect(amountInput().element()).toHaveProperty("value", ",234.50");
       await userEvent.keyboard("{Enter}");
-      expect(onCommit).toHaveBeenCalledWith([
-        { rowIndex: 0, field: "amount", patch: usd(-23_450) },
-      ]);
+      expect(onCommit).toHaveBeenCalledWith([{ id: "t0", field: "amount", patch: usd(-23_450) }]);
     });
 
     it("commits on Enter", async () => {
@@ -671,7 +669,7 @@ describe("TransactionsTable", () => {
       await userEvent.keyboard("{Enter}");
 
       expect(onCommit).toHaveBeenCalledWith([
-        { rowIndex: 0, field: "counterparty", patch: { counterparty: "Corner Shop" } },
+        { id: "t0", field: "counterparty", patch: { counterparty: "Corner Shop" } },
       ]);
       await expect.element(input()).not.toBeInTheDocument();
     });
@@ -683,9 +681,7 @@ describe("TransactionsTable", () => {
       await amountInput().fill("2,000.5");
       await userEvent.keyboard("{Enter}");
 
-      expect(onCommit).toHaveBeenCalledWith([
-        { rowIndex: 0, field: "amount", patch: usd(-200_050) },
-      ]);
+      expect(onCommit).toHaveBeenCalledWith([{ id: "t0", field: "amount", patch: usd(-200_050) }]);
     });
 
     it.each([
@@ -701,9 +697,7 @@ describe("TransactionsTable", () => {
         await amountInput().fill(text);
         await userEvent.keyboard("{Enter}");
 
-        expect(onCommit).toHaveBeenCalledWith([
-          { rowIndex: 0, field: "amount", patch: usd(amount) },
-        ]);
+        expect(onCommit).toHaveBeenCalledWith([{ id: "t0", field: "amount", patch: usd(amount) }]);
       },
     );
 
@@ -715,7 +709,7 @@ describe("TransactionsTable", () => {
       await expect.element(amountInput()).toHaveFocus();
       expect(amountInput().element()).toHaveProperty("value", "+");
       await userEvent.keyboard("45{Enter}");
-      expect(onCommit).toHaveBeenCalledWith([{ rowIndex: 0, field: "amount", patch: usd(4500) }]);
+      expect(onCommit).toHaveBeenCalledWith([{ id: "t0", field: "amount", patch: usd(4500) }]);
     });
 
     it("rounds what's typed to the decimals the amount is stored with", async () => {
@@ -725,9 +719,7 @@ describe("TransactionsTable", () => {
       await amountInput().fill("2,000.505");
       await userEvent.keyboard("{Enter}");
 
-      expect(onCommit).toHaveBeenCalledWith([
-        { rowIndex: 0, field: "amount", patch: usd(-200_051) },
-      ]);
+      expect(onCommit).toHaveBeenCalledWith([{ id: "t0", field: "amount", patch: usd(-200_051) }]);
     });
 
     it("commits when the input loses focus", async () => {
@@ -738,7 +730,7 @@ describe("TransactionsTable", () => {
       input().element().blur();
 
       expect(onCommit).toHaveBeenCalledWith([
-        { rowIndex: 0, field: "counterparty", patch: { counterparty: "Corner Shop" } },
+        { id: "t0", field: "counterparty", patch: { counterparty: "Corner Shop" } },
       ]);
     });
 
@@ -786,9 +778,7 @@ describe("TransactionsTable", () => {
       await amountInput().fill("+0.33");
       await userEvent.keyboard("{Enter}");
 
-      expect(onCommit).toHaveBeenCalledWith([
-        { rowIndex: 1, field: "amount", patch: usd(3300, 4) },
-      ]);
+      expect(onCommit).toHaveBeenCalledWith([{ id: "t1", field: "amount", patch: usd(3300, 4) }]);
     });
 
     it.each(["1234.5", " 1234.50 ", "1,234.50", "-1,234.50"])(
@@ -821,7 +811,7 @@ describe("TransactionsTable", () => {
       await amountInput().fill("");
       await userEvent.keyboard("{Enter}");
 
-      expect(onCommit).toHaveBeenCalledWith([{ rowIndex: 0, field: "amount", patch: usd(0) }]);
+      expect(onCommit).toHaveBeenCalledWith([{ id: "t0", field: "amount", patch: usd(0) }]);
     });
 
     it("keeps an invalid value open with the error on Enter", async () => {
@@ -875,7 +865,7 @@ describe("TransactionsTable", () => {
       await userEvent.click(cellOf("Shop 1", COUNTERPARTY));
 
       expect(onCommit).toHaveBeenCalledWith([
-        { rowIndex: 0, field: "counterparty", patch: { counterparty: "Corner Shop" } },
+        { id: "t0", field: "counterparty", patch: { counterparty: "Corner Shop" } },
       ]);
       expect(activeCell()).toBe(cellOf("Shop 1", COUNTERPARTY).element());
       await expect.element(input()).not.toBeInTheDocument();
@@ -929,7 +919,7 @@ describe("TransactionsTable", () => {
       await userEvent.keyboard("{Shift>}{Enter}{/Shift}");
 
       expect(onCommit).toHaveBeenCalledWith([
-        { rowIndex: 2, field: "counterparty", patch: { counterparty: "Shop Two" } },
+        { id: "t2", field: "counterparty", patch: { counterparty: "Shop Two" } },
       ]);
       await expect.element(input()).not.toBeInTheDocument();
       expect(activeCell()).toBe(cellOf("Shop 1", COUNTERPARTY).element());
@@ -947,7 +937,7 @@ describe("TransactionsTable", () => {
       expect(activeCell()).toBe(cellOf("Shop 1", REMARKS).element());
       await userEvent.keyboard("Rent{Enter}");
       expect(onCommit).toHaveBeenLastCalledWith([
-        { rowIndex: 1, field: "remarks", patch: { remarks: "Rent" } },
+        { id: "t1", field: "remarks", patch: { remarks: "Rent" } },
       ]);
       expect(activeCell()).toBe(cellOf("Shop 2", REMARKS).element());
     });
@@ -1000,7 +990,7 @@ describe("TransactionsTable", () => {
     const currency = () => currencyInput().element() as HTMLInputElement;
     const amount = () => amountInput().element() as HTMLInputElement;
     const committed = (patch: { currency: string; amount: number; decimals: number }) =>
-      expect(onCommit).toHaveBeenCalledWith([{ rowIndex: 0, field: "amount", patch }]);
+      expect(onCommit).toHaveBeenCalledWith([{ id: "t0", field: "amount", patch }]);
 
     it("edits the currency in an input of its own, before the number's", async () => {
       await renderTable();
@@ -1217,7 +1207,7 @@ describe("TransactionsTable", () => {
       await userEvent.keyboard("EUR{Enter}");
 
       expect(onCommit).toHaveBeenCalledWith([
-        { rowIndex: 0, field: "amount", patch: { currency: "EUR", amount: 0, decimals: 2 } },
+        { id: "t0", field: "amount", patch: { currency: "EUR", amount: 0, decimals: 2 } },
       ]);
     });
   });
@@ -1404,7 +1394,7 @@ describe("TransactionsTable", () => {
       expect((input().element() as HTMLInputElement).selectionStart).toBe(1);
       await userEvent.keyboard("oo{Enter}");
       expect(onCommit).toHaveBeenCalledWith([
-        { rowIndex: 0, field: "counterparty", patch: { counterparty: "Zoo" } },
+        { id: "t0", field: "counterparty", patch: { counterparty: "Zoo" } },
       ]);
     });
 
@@ -1467,7 +1457,7 @@ describe("TransactionsTable", () => {
       await userEvent.keyboard("{Tab}");
 
       expect(onCommit).toHaveBeenCalledWith([
-        { rowIndex: 0, field: "counterparty", patch: { counterparty: "Corner Shop" } },
+        { id: "t0", field: "counterparty", patch: { counterparty: "Corner Shop" } },
       ]);
       await expect.element(input()).not.toBeInTheDocument();
       await expect.element(grid()).toHaveFocus();
@@ -1482,7 +1472,7 @@ describe("TransactionsTable", () => {
       await userEvent.keyboard("{Shift>}{Tab}{/Shift}");
 
       expect(onCommit).toHaveBeenCalledWith([
-        { rowIndex: 0, field: "counterparty", patch: { counterparty: "Corner Shop" } },
+        { id: "t0", field: "counterparty", patch: { counterparty: "Corner Shop" } },
       ]);
       expect(activeCell()).toBe(cellOf("Corner Market", ACCOUNT).element());
     });
@@ -1527,7 +1517,7 @@ describe("TransactionsTable", () => {
       await userEvent.keyboard("{Tab}");
 
       expect(onCommit).toHaveBeenCalledWith([
-        { rowIndex: 0, field: "remarks", patch: { remarks: "Weekly shop" } },
+        { id: "t0", field: "remarks", patch: { remarks: "Weekly shop" } },
       ]);
       expect(activeCell()).toBe(cellOf("Shop 1", DATE).element());
     });
@@ -1744,7 +1734,7 @@ describe("TransactionsTable", () => {
       await userEvent.keyboard("{Delete}");
 
       expect(onCommit).toHaveBeenCalledWith([
-        { rowIndex: 0, field: "category", patch: { category: null } },
+        { id: "t0", field: "category", patch: { category: null } },
       ]);
       await expect.element(combobox()).not.toBeInTheDocument();
       await expect.element(grid()).toHaveFocus();
@@ -1756,7 +1746,7 @@ describe("TransactionsTable", () => {
 
       await userEvent.keyboard("{Delete}");
 
-      expect(onCommit).toHaveBeenCalledWith([{ rowIndex: 0, field: "amount", patch: usd(0) }]);
+      expect(onCommit).toHaveBeenCalledWith([{ id: "t0", field: "amount", patch: usd(0) }]);
       await expect.element(input()).not.toBeInTheDocument();
       expect(activeCell()).toBe(cellOf("Corner Market", AMOUNT).element());
     });
@@ -1783,11 +1773,11 @@ describe("TransactionsTable", () => {
         // emptied amount is 0; counterparties can't be empty.
         expect(onCommit).toHaveBeenCalledTimes(1);
         expect(onCommit).toHaveBeenCalledWith([
-          { rowIndex: 0, field: "category", patch: { category: null } },
-          { rowIndex: 2, field: "category", patch: { category: null } },
-          { rowIndex: 0, field: "amount", patch: usd(0) },
-          { rowIndex: 1, field: "amount", patch: usd(0, 4) },
-          { rowIndex: 2, field: "amount", patch: usd(0) },
+          { id: "t0", field: "category", patch: { category: null } },
+          { id: "t2", field: "category", patch: { category: null } },
+          { id: "t0", field: "amount", patch: usd(0) },
+          { id: "t1", field: "amount", patch: usd(0, 4) },
+          { id: "t2", field: "amount", patch: usd(0) },
         ]);
         await expect.element(input()).not.toBeInTheDocument();
         expect(selectedCells()).toHaveLength(9);
@@ -1985,6 +1975,7 @@ describe("TransactionsTable", () => {
           deleteRows: () => {},
           mark: () => null,
           unmark: () => {},
+          exists: () => true,
           render: (actions) => <ActionBar {...actions} />,
         }}
       />
@@ -2067,7 +2058,7 @@ describe("TransactionsTable", () => {
 
         expect(calls).toEqual([
           `commit ${JSON.stringify([
-            { rowIndex: 0, field: "counterparty", patch: { counterparty: "Corner Markets" } },
+            { id: "t0", field: "counterparty", patch: { counterparty: "Corner Markets" } },
           ])}`,
           "undo",
         ]);
@@ -2086,7 +2077,7 @@ describe("TransactionsTable", () => {
 
         expect(calls).toEqual([
           `commit ${JSON.stringify([
-            { rowIndex: 1, field: "counterparty", patch: { counterparty: "Shop 9" } },
+            { id: "t1", field: "counterparty", patch: { counterparty: "Shop 9" } },
           ])}`,
           "undo",
         ]);
@@ -2190,6 +2181,7 @@ describe("TransactionsTable", () => {
           deleteRows: () => {},
           mark: () => null,
           unmark: () => {},
+          exists: () => true,
           render: (actions) => <ActionBar {...actions} />,
         }}
       />
@@ -2206,7 +2198,7 @@ describe("TransactionsTable", () => {
 
         await userEvent.click(page.getByRole("button", { name }));
 
-        expect(onAdd.mock.calls).toEqual([[{ row: 2, side, column: CATEGORY }]]);
+        expect(onAdd.mock.calls).toEqual([[{ id: "t2", side, column: CATEGORY }]]);
         await expect.element(grid()).toHaveFocus();
       },
     );
@@ -2216,7 +2208,7 @@ describe("TransactionsTable", () => {
 
       await userEvent.click(addBelow());
 
-      expect(onAdd.mock.calls).toEqual([[{ row: null, side: "below", column: COUNTERPARTY }]]);
+      expect(onAdd.mock.calls).toEqual([[{ id: null, side: "below", column: COUNTERPARTY }]]);
     });
 
     it.each(["Add row above", "Add row below"])(
@@ -2246,9 +2238,9 @@ describe("TransactionsTable", () => {
 
       expect(calls).toEqual([
         JSON.stringify([
-          { rowIndex: 0, field: "counterparty", patch: { counterparty: "Corner Markets" } },
+          { id: "t0", field: "counterparty", patch: { counterparty: "Corner Markets" } },
         ]),
-        JSON.stringify({ row: 0, side: "below", column: COUNTERPARTY }),
+        JSON.stringify({ id: "t0", side: "below", column: COUNTERPARTY }),
       ]);
       await expect.element(input()).not.toBeInTheDocument();
       expect(activeCell()).toBe(cellOf("Corner Market", COUNTERPARTY).element());
@@ -2263,7 +2255,7 @@ describe("TransactionsTable", () => {
 
       await expect.element(amountInput()).not.toBeInTheDocument();
       expect(onCommit).not.toHaveBeenCalled();
-      expect(onAdd.mock.calls).toEqual([[{ row: 0, side: "below", column: AMOUNT }]]);
+      expect(onAdd.mock.calls).toEqual([[{ id: "t0", side: "below", column: AMOUNT }]]);
     });
 
     it("selects the added row's cell in its column, scrolling to it", async () => {
@@ -2308,7 +2300,7 @@ describe("TransactionsTable", () => {
 
   describe("the action bar's delete", () => {
     const deleteButton = () => page.getByRole("button", { name: "Delete selected rows" });
-    let onDelete: Mock<(rows: number[]) => void>;
+    let onDelete: Mock<(ids: string[]) => void>;
     beforeEach(() => {
       onDelete = vi.fn();
     });
@@ -2324,6 +2316,7 @@ describe("TransactionsTable", () => {
           deleteRows: onDelete,
           mark: () => null,
           unmark: () => {},
+          exists: () => true,
           render: (actions) => <ActionBar {...actions} />,
         }}
       />
@@ -2335,7 +2328,7 @@ describe("TransactionsTable", () => {
 
       await userEvent.click(deleteButton());
 
-      expect(onDelete.mock.calls).toEqual([[[2]]]);
+      expect(onDelete.mock.calls).toEqual([[["t2"]]]);
       await expect.element(grid()).toHaveFocus();
     });
 
@@ -2346,7 +2339,7 @@ describe("TransactionsTable", () => {
 
       await userEvent.click(deleteButton());
 
-      expect(onDelete.mock.calls).toEqual([[[1, 2, 3]]]);
+      expect(onDelete.mock.calls).toEqual([[["t1", "t2", "t3"]]]);
     });
 
     it("is disabled while no cell is active", async () => {
@@ -2362,7 +2355,7 @@ describe("TransactionsTable", () => {
       await render(withBar());
       const calls: string[] = [];
       onCommit.mockImplementation((changes) => void calls.push(JSON.stringify(changes)));
-      onDelete.mockImplementation((indexes) => void calls.push(JSON.stringify(indexes)));
+      onDelete.mockImplementation((ids) => void calls.push(JSON.stringify(ids)));
       await userEvent.dblClick(cellOf("Corner Market", COUNTERPARTY));
       await userEvent.keyboard("{End}s");
 
@@ -2370,9 +2363,9 @@ describe("TransactionsTable", () => {
 
       expect(calls).toEqual([
         JSON.stringify([
-          { rowIndex: 0, field: "counterparty", patch: { counterparty: "Corner Markets" } },
+          { id: "t0", field: "counterparty", patch: { counterparty: "Corner Markets" } },
         ]),
-        JSON.stringify([0]),
+        JSON.stringify(["t0"]),
       ]);
       await expect.element(input()).not.toBeInTheDocument();
     });
@@ -2438,17 +2431,24 @@ describe("TransactionsTable", () => {
       unmark = vi.fn();
     });
 
-    /** The table with its action bar, showing `shown`, and `moved` as the last undo or redo. */
-    const withBar = (shown = rows, moved: Moved<Edit> | null = null) => (
+    /**
+     * The table with its action bar, showing `shown`, and `moved` as the
+     * last undo or redo, `deleted` (by id) gone since.
+     */
+    const withBar = (shown = rows, moved: Moved<Edit> | null = null, deleted: string[] = []) => (
       <>
-        {tableWithBar(shown, moved)}
+        {tableWithBar(shown, moved, deleted)}
         {/* Where the app has it, clear of the bar. */}
         <Toaster position="top-center" />
       </>
     );
 
     /** `withBar`'s table, without its toaster. */
-    const tableWithBar = (shown = rows, moved: Moved<Edit> | null = null) => (
+    const tableWithBar = (
+      shown = rows,
+      moved: Moved<Edit> | null = null,
+      deleted: string[] = [],
+    ) => (
       <TransactionsTable
         {...tableProps(shown, { lastUndoOrRedo: moved })}
         actionBar={{
@@ -2458,6 +2458,7 @@ describe("TransactionsTable", () => {
           deleteRows: () => {},
           mark,
           unmark,
+          exists: (id) => !deleted.includes(id),
           render: (actions) => <ActionBar {...actions} />,
         }}
       />
@@ -2506,6 +2507,45 @@ describe("TransactionsTable", () => {
       await userEvent.click(duplicateButton());
 
       expect(grid().element().getAttribute("aria-activedescendant")).toBeNull();
+    });
+
+    it("drops a row deleted elsewhere from what's being marked, marking the rest", async () => {
+      const screen = await render(withBar());
+      await makeActive("Shop 2", CATEGORY);
+      await userEvent.keyboard("{Shift>}{ArrowDown}{/Shift}");
+      await userEvent.click(duplicateButton());
+      await userEvent.click(cellOf("Shop 5", CATEGORY));
+
+      await screen.rerender(
+        withBar(
+          rows.filter((row) => row.id !== "t3"),
+          null,
+          ["t3"],
+        ),
+      );
+
+      await expect.element(help("duplicate")).toBeVisible();
+      await userEvent.keyboard("{Enter}");
+      expect(marked).toEqual([{ kind: "duplicate", marked: ["t2"], picked: "t5" }]);
+    });
+
+    it("ends once every row being marked was deleted elsewhere", async () => {
+      const screen = await startMarking("transfer");
+      await userEvent.click(cellOf("Shop 5", CATEGORY));
+      const calls = mark.mock.calls.length;
+
+      await screen.rerender(
+        withBar(
+          rows.filter((row) => row.id !== "t2"),
+          null,
+          ["t2"],
+        ),
+      );
+
+      await expect.element(help("transfer")).not.toBeInTheDocument();
+      await expect.element(cancelButton("transfer")).not.toBeInTheDocument();
+      // Nothing more is marked against, least of all the row gone.
+      expect(mark.mock.calls.slice(calls)).toEqual([]);
     });
 
     it("picks nothing when the grid's tabbed back into", async () => {
@@ -2754,7 +2794,7 @@ describe("TransactionsTable", () => {
       await userEvent.click(duplicateButton());
 
       expect(onCommit.mock.calls).toEqual([
-        [[{ rowIndex: 0, field: "counterparty", patch: { counterparty: "Corner Markets" } }]],
+        [[{ id: "t0", field: "counterparty", patch: { counterparty: "Corner Markets" } }]],
       ]);
       await expect.element(input()).not.toBeInTheDocument();
       await expect.element(cancelButton("duplicate")).toBeInTheDocument();
@@ -2780,7 +2820,7 @@ describe("TransactionsTable", () => {
 
         await userEvent.click(unmarkButton("duplicate"));
 
-        expect(unmark.mock.calls).toEqual([["duplicate", [2, 3]]]);
+        expect(unmark.mock.calls).toEqual([["duplicate", ["t2", "t3"]]]);
         await expect.element(cancelButton("duplicate")).not.toBeInTheDocument();
         expect(selectedCells()).toEqual(selected);
       });
@@ -2805,7 +2845,7 @@ describe("TransactionsTable", () => {
 
         await userEvent.click(unmarkButton("transfer"));
 
-        expect(unmark.mock.calls).toEqual([["transfer", [3, 4]]]);
+        expect(unmark.mock.calls).toEqual([["transfer", ["t3", "t4"]]]);
         // Shop 2 isn't a transfer, and a transfer is marked from one row.
         await userEvent.keyboard("{Shift>}{ArrowUp}{/Shift}");
         await expect.element(transferButton()).toHaveAttribute("aria-disabled", "true");
@@ -2819,9 +2859,9 @@ describe("TransactionsTable", () => {
         await userEvent.click(unmarkButton("duplicate"));
 
         expect(onCommit.mock.calls).toEqual([
-          [[{ rowIndex: 2, field: "counterparty", patch: { counterparty: "Shop 2s" } }]],
+          [[{ id: "t2", field: "counterparty", patch: { counterparty: "Shop 2s" } }]],
         ]);
-        expect(unmark.mock.calls).toEqual([["duplicate", [2]]]);
+        expect(unmark.mock.calls).toEqual([["duplicate", ["t2"]]]);
         expect(onCommit.mock.invocationCallOrder[0]).toBeLessThan(
           unmark.mock.invocationCallOrder[0]!,
         );
@@ -2933,6 +2973,7 @@ describe("TransactionsTable", () => {
           deleteRows: () => {},
           mark: () => null,
           unmark: () => {},
+          exists: () => true,
           render: (actions) => <ActionBar {...actions} />,
         },
       });
@@ -3242,7 +3283,7 @@ describe("TransactionsTable", () => {
         await userEvent.click(nextButton());
 
         expect(onCommit.mock.calls).toEqual([
-          [[{ rowIndex: 12, field: "remarks", patch: { remarks: "note" } }]],
+          [[{ id: "t12", field: "remarks", patch: { remarks: "note" } }]],
         ]);
         expect(active()).toEqual({ row: 13, column: COUNTERPARTY });
       });
@@ -3256,7 +3297,7 @@ describe("TransactionsTable", () => {
         await userEvent.keyboard("shop 1");
 
         expect(onCommit.mock.calls).toEqual([
-          [[{ rowIndex: 3, field: "remarks", patch: { remarks: "note" } }]],
+          [[{ id: "t3", field: "remarks", patch: { remarks: "note" } }]],
         ]);
         expect(active()).toEqual({ row: 10, column: COUNTERPARTY });
       });
@@ -3496,33 +3537,6 @@ describe("TransactionsTable", () => {
     });
   });
 
-  describe("reporting edits", () => {
-    it("says when a cell starts and stops being edited", async () => {
-      const onEditingChange = vi.fn();
-      const screen = await render(
-        <TransactionsTable
-          rows={rows}
-          maxRowNumber={rows.length}
-          categories={CATEGORIES}
-          accounts={ACCOUNTS}
-          currencies={CURRENCIES}
-          onCommit={onCommit}
-          lastUndoOrRedo={null}
-          onUndoOrRedo={onUndoOrRedo}
-          onEditingChange={onEditingChange}
-        />,
-      );
-
-      await userEvent.dblClick(cellOf("Corner Market", COUNTERPARTY));
-      expect(onEditingChange.mock.calls).toEqual([[true]]);
-      await userEvent.keyboard("{Escape}");
-      expect(onEditingChange.mock.calls).toEqual([[true], [false]]);
-      await userEvent.dblClick(cellOf("Shop 1", COUNTERPARTY));
-      screen.unmount();
-      expect(onEditingChange.mock.calls).toEqual([[true], [false], [true], [false]]);
-    });
-  });
-
   describe("cursor", () => {
     it("shows the default cursor over idle and active cells", async () => {
       await activate("Corner Market", COUNTERPARTY);
@@ -3569,7 +3583,7 @@ describe("TransactionsTable", () => {
       await mouse.up(pointIn(cellOf("Shop 1", COUNTERPARTY).element()));
 
       expect(onCommit).toHaveBeenCalledWith([
-        { rowIndex: 0, field: "counterparty", patch: { counterparty: "Corner Shop" } },
+        { id: "t0", field: "counterparty", patch: { counterparty: "Corner Shop" } },
       ]);
       expect(selectedCells()).toHaveLength(2);
       await expect.element(input()).not.toBeInTheDocument();
@@ -3844,7 +3858,7 @@ describe("TransactionsTable", () => {
       await userEvent.keyboard("{Enter}");
 
       expect(onCommit).toHaveBeenCalledWith([
-        { rowIndex: 0, field: "account_name", patch: { account_name: "Savings" } },
+        { id: "t0", field: "account_name", patch: { account_name: "Savings" } },
       ]);
       await expect.element(combobox()).not.toBeInTheDocument();
       expect(activeCell()).toBe(cellOf("Shop 1", ACCOUNT).element());
@@ -3869,7 +3883,7 @@ describe("TransactionsTable", () => {
       await expect.element(highlighted()).toHaveTextContent("Rewards Credit Card");
       await userEvent.keyboard("{Enter}");
       expect(onCommit).toHaveBeenCalledWith([
-        { rowIndex: 0, field: "account_name", patch: { account_name: "Rewards Credit Card" } },
+        { id: "t0", field: "account_name", patch: { account_name: "Rewards Credit Card" } },
       ]);
     });
 
@@ -3880,7 +3894,7 @@ describe("TransactionsTable", () => {
       await userEvent.click(page.getByRole("option", { name: "Savings" }));
 
       expect(onCommit).toHaveBeenCalledWith([
-        { rowIndex: 0, field: "account_name", patch: { account_name: "Savings" } },
+        { id: "t0", field: "account_name", patch: { account_name: "Savings" } },
       ]);
       await expect.element(combobox()).not.toBeInTheDocument();
     });
@@ -3906,7 +3920,7 @@ describe("TransactionsTable", () => {
       combobox().element().blur();
 
       expect(onCommit).toHaveBeenCalledWith([
-        { rowIndex: 0, field: "account_name", patch: { account_name: "Savings" } },
+        { id: "t0", field: "account_name", patch: { account_name: "Savings" } },
       ]);
     });
 
@@ -3918,7 +3932,7 @@ describe("TransactionsTable", () => {
       combobox().element().blur();
 
       expect(onCommit).toHaveBeenCalledWith([
-        { rowIndex: 0, field: "account_name", patch: { account_name: "Savings" } },
+        { id: "t0", field: "account_name", patch: { account_name: "Savings" } },
       ]);
     });
 
@@ -3930,7 +3944,7 @@ describe("TransactionsTable", () => {
       combobox().element().blur();
 
       expect(onCommit).toHaveBeenCalledWith([
-        { rowIndex: 0, field: "account_name", patch: { account_name: "Rewards Credit Card" } },
+        { id: "t0", field: "account_name", patch: { account_name: "Rewards Credit Card" } },
       ]);
     });
 
@@ -3955,7 +3969,7 @@ describe("TransactionsTable", () => {
       combobox().element().blur();
 
       expect(onCommit).toHaveBeenCalledWith([
-        { rowIndex: 1, field: "category", patch: { category: "Groceries" } },
+        { id: "t1", field: "category", patch: { category: "Groceries" } },
       ]);
     });
 
@@ -3983,7 +3997,7 @@ describe("TransactionsTable", () => {
       expect(options()).toEqual(["Create category “Pets”"]);
       await userEvent.keyboard("{Enter}");
       expect(onCommit).toHaveBeenCalledWith([
-        { rowIndex: 0, field: "category", patch: { category: "Pets" } },
+        { id: "t0", field: "category", patch: { category: "Pets" } },
       ]);
     });
 
@@ -3996,7 +4010,7 @@ describe("TransactionsTable", () => {
       expect(options()).toEqual(["Groceries", "Create category “gro”"]);
       await userEvent.keyboard("{Enter}");
       expect(onCommit).toHaveBeenCalledWith([
-        { rowIndex: 1, field: "category", patch: { category: "Groceries" } },
+        { id: "t1", field: "category", patch: { category: "Groceries" } },
       ]);
     });
 
@@ -4008,7 +4022,7 @@ describe("TransactionsTable", () => {
       await userEvent.click(page.getByRole("option", { name: "Create category “gro”" }));
 
       expect(onCommit).toHaveBeenCalledWith([
-        { rowIndex: 1, field: "category", patch: { category: "gro" } },
+        { id: "t1", field: "category", patch: { category: "gro" } },
       ]);
     });
 
@@ -4034,7 +4048,7 @@ describe("TransactionsTable", () => {
       await userEvent.keyboard("{Enter}");
 
       expect(onCommit).toHaveBeenCalledWith([
-        { rowIndex: 0, field: "category", patch: { category: null } },
+        { id: "t0", field: "category", patch: { category: null } },
       ]);
     });
 
@@ -4180,5 +4194,109 @@ describe("TransactionsTable", () => {
       expect(option.top).toBeGreaterThanOrEqual(list.top);
       expect(option.bottom).toBeLessThanOrEqual(list.bottom);
     });
+  });
+});
+
+describe("when the rows change under it", () => {
+  const before = makeRows(20);
+  /** `rows` with a transaction from elsewhere at `index`. */
+  const arrivedAt = (index: number, rows = before) =>
+    rows.toSpliced(index, 0, { ...before[1]!, id: "arrived", counterparty: "Arrived" });
+  const without = (id: string) => before.filter((row) => row.id !== id);
+  const changed = (id: string, patch: Partial<TransactionRow>) =>
+    before.map((row) => (row.id === id ? { ...row, ...patch } : row));
+  const tableOf = (shown: TransactionRow[]) => table(CATEGORIES, shown, 30);
+
+  it("keeps the active cell on its transaction when a row arrives above it", async () => {
+    const screen = await render(tableOf(before));
+    await makeActive("Shop 5", COUNTERPARTY);
+
+    await screen.rerender(tableOf(arrivedAt(0)));
+
+    expect(activeCell()).toBe(cellOf("Shop 5", COUNTERPARTY).element());
+  });
+
+  it("keeps a range on its two rows, taking in a row that arrives between them", async () => {
+    const screen = await render(tableOf(before));
+    await makeActive("Shop 2", COUNTERPARTY);
+    await userEvent.keyboard("{Shift>}{ArrowDown}{ArrowDown}{/Shift}");
+    expect(selectedCells()).toHaveLength(3);
+
+    // Between Shop 2 and Shop 3.
+    await screen.rerender(tableOf(arrivedAt(3)));
+
+    expect(selectedCells()).toHaveLength(4);
+    expect(selectedCells()).toContain(cellOf("Arrived", COUNTERPARTY).element());
+    expect(activeCell()).toBe(cellOf("Shop 2", COUNTERPARTY).element());
+  });
+
+  it("moves the active cell onto the row that takes its place when its row goes, then follows that", async () => {
+    const screen = await render(tableOf(before));
+    await makeActive("Shop 3", COUNTERPARTY);
+
+    await screen.rerender(tableOf(without("t3")));
+    expect(activeCell()).toBe(cellOf("Shop 4", COUNTERPARTY).element());
+    await screen.rerender(tableOf(arrivedAt(0, without("t3"))));
+
+    expect(activeCell()).toBe(cellOf("Shop 4", COUNTERPARTY).element());
+  });
+
+  it("keeps an edit, as typed, on its transaction when a row arrives above it", async () => {
+    const screen = await render(tableOf(before));
+    await userEvent.dblClick(cellOf("Shop 5", COUNTERPARTY));
+    await userEvent.keyboard("{End}s");
+
+    await screen.rerender(tableOf(arrivedAt(0)));
+
+    await expect.element(input()).toHaveFocus();
+    expect(input().element()).toHaveProperty("value", "Shop 5s");
+    await userEvent.keyboard("{Enter}");
+    expect(onCommit).toHaveBeenCalledWith([
+      { id: "t5", field: "counterparty", patch: { counterparty: "Shop 5s" } },
+    ]);
+  });
+
+  it("closes an edit, storing nothing, when its row goes", async () => {
+    const screen = await render(tableOf(before));
+    await userEvent.dblClick(cellOf("Shop 5", COUNTERPARTY));
+    await userEvent.keyboard("{End}s");
+
+    await screen.rerender(tableOf(without("t5")));
+
+    await expect.element(input()).not.toBeInTheDocument();
+    expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  it("shows the text an edit started from, though its cell changed meanwhile", async () => {
+    const screen = await render(tableOf(before));
+    await userEvent.dblClick(cellOf("Shop 5", COUNTERPARTY));
+
+    await screen.rerender(tableOf(changed("t5", { counterparty: "Shop Five" })));
+
+    expect(input().element()).toHaveProperty("value", "Shop 5");
+  });
+
+  it("stores nothing from an edit left as it started, though its cell changed meanwhile", async () => {
+    const screen = await render(tableOf(before));
+    await userEvent.dblClick(cellOf("Shop 5", COUNTERPARTY));
+    await screen.rerender(tableOf(changed("t5", { counterparty: "Shop Five" })));
+
+    await userEvent.keyboard("{Enter}");
+
+    expect(onCommit).not.toHaveBeenCalled();
+    await expect.element(cellOf("Shop Five", COUNTERPARTY)).toBeVisible();
+  });
+
+  it("stores what an edit changed over a change made to its cell meanwhile", async () => {
+    const screen = await render(tableOf(before));
+    await userEvent.dblClick(cellOf("Shop 5", COUNTERPARTY));
+    await input().fill("Mine");
+    await screen.rerender(tableOf(changed("t5", { counterparty: "Theirs" })));
+
+    await userEvent.keyboard("{Enter}");
+
+    expect(onCommit).toHaveBeenCalledWith([
+      { id: "t5", field: "counterparty", patch: { counterparty: "Mine" } },
+    ]);
   });
 });

@@ -64,6 +64,12 @@ export type Transactions = {
    * (see `keepTransactionsInSync`): it can add or remove rows.
    */
   lastUndoOrRedo: Moved<Edit> | null;
+  /**
+   * The positions of the rows that came in from elsewhere since they were
+   * read (see `keepTransactionsInSync`), in the order they came, for a view
+   * to place them among its rows.
+   */
+  arrived: readonly number[];
   /** With their parents, in the order the cell menus list them (see the queries). */
   categories: readonly CategoryParent[];
   accounts: readonly AccountCurrency[];
@@ -101,6 +107,7 @@ export function transactionsQuery(database: Database) {
         removed: new Set(),
         read: Symbol("read"),
         lastUndoOrRedo: null,
+        arrived: [],
         categories: categoriesOf(categories),
         // The queries' columns match the row types, and the schema guarantees their types.
         accounts: accounts as AccountCurrency[],
@@ -286,18 +293,123 @@ export async function commitTransactions(
 }
 
 /**
- * Keeps `database`'s transactions up to date with every undo and redo in
- * `history`, whichever page it happens on, until the returned function is
- * called: it reads again what each changed (also if it failed), which may
- * add or remove transactions. Edits only ever change the transactions they
- * list, and categories, so those are all there is to read.
+ * Whether `a` and `b` hold the same: a row read again is a new object, and
+ * one that hasn't changed keeps the one there is, so nothing redraws it.
+ */
+function sameTransaction(a: ListedTransaction, b: ListedTransaction) {
+  return (Object.keys(a) as (keyof ListedTransaction)[]).every((key) =>
+    key === "conversions" ? sameConversions(a.conversions, b.conversions) : a[key] === b[key],
+  );
+}
+
+function sameConversions(a: ListedTransaction["conversions"], b: ListedTransaction["conversions"]) {
+  const currencies = Object.keys(a);
+  return (
+    currencies.length === Object.keys(b).length &&
+    currencies.every((currency) => {
+      const [x, y] = [a[currency]!, b[currency]];
+      return y !== undefined && x.amount === y.amount && x.decimals === y.decimals;
+    })
+  );
+}
+
+/**
+ * `latest` with the transactions as `stored` has them, read again since
+ * `read` (what `latest` was then): each changed one is replaced where it
+ * is, those gone are removed, and new ones are added after the rest, as
+ * arrived (see `arrived`).
+ *
+ * A row changed here since `read` (an edit, add or delete) keeps what it
+ * has: its write may have come after `stored` was read, which would undo it
+ * on screen. So does one removed here, which only an undo brings back.
+ */
+function mergedWith(
+  latest: Transactions,
+  read: Transactions,
+  stored: readonly ListedTransaction[],
+): Transactions {
+  const storedById = new Map(stored.map((row) => [row.id, row]));
+  const rows = [...latest.rows];
+  const removed = new Set(latest.removed);
+  for (let position = 0; position < read.rows.length; position++) {
+    const row = latest.rows[position]!;
+    const changedHere =
+      row !== read.rows[position] || latest.removed.has(position) !== read.removed.has(position);
+    if (changedHere || latest.removed.has(position)) continue;
+    const now = storedById.get(row.id);
+    if (now === undefined) removed.add(position);
+    else if (!sameTransaction(now, row)) rows[position] = now;
+  }
+  const added = stored.filter((row) => !latest.positions.has(row.id));
+  rows.push(...added);
+  return {
+    ...latest,
+    rows,
+    removed,
+    positions: withPositions(
+      latest.positions,
+      added.map(({ id }) => id),
+      latest.rows.length,
+    ),
+    arrived: [...latest.arrived, ...added.map((_, index) => latest.rows.length + index)],
+  };
+}
+
+/**
+ * Reads `database`'s transactions again, once a rebase has brought in
+ * changes made elsewhere, and merges them in (see `mergedWith`), along with
+ * the categories, accounts and currencies. If they're being read for the
+ * first time, they're read again: that may have started before the rebase.
+ */
+async function bringIn(queryClient: QueryClient, database: Database) {
+  const query = transactionsQuery(database);
+  const read = queryClient.getQueryData(query.queryKey);
+  if (read === undefined) return queryClient.invalidateQueries({ queryKey: query.queryKey });
+  const [transactions, categories, accounts, currencies] = await Promise.all([
+    database.query(LIST_TRANSACTIONS),
+    database.query(LIST_CATEGORIES),
+    database.query(LIST_ACCOUNTS),
+    database.query(LIST_CURRENCIES),
+  ]);
+  update(queryClient, database, (latest) => ({
+    ...mergedWith(latest, read, listedTransactions(transactions)),
+    categories: categoriesOf(categories),
+    // As in `transactionsQuery`.
+    accounts: accounts as AccountCurrency[],
+    currencies: currencies as Currency[],
+  }));
+}
+
+/**
+ * Keeps `database`'s transactions up to date until the returned function
+ * is called:
+ *
+ * - With every undo and redo in `history`, whichever page it happens on: it
+ *   reads again what each changed (also if it failed), which may add or
+ *   remove transactions. Edits only ever change the transactions they list,
+ *   and categories, so those are all there is to read.
+ * - With every rebase (see `Database.rebases`), which can change anything:
+ *   all of them are read again, and merged in where they are (see
+ *   `mergedWith`). One at a time, each from what the one before left.
  */
 export function keepTransactionsInSync(
   queryClient: QueryClient,
   database: Database,
   history: DatabaseHistory,
 ) {
-  return history.subscribe(() => {
+  let { rebases } = database;
+  let bringingIn: Promise<unknown> = Promise.resolve();
+  const stopRebases = database.subscribe(() => {
+    if (database.rebases === rebases) return;
+    rebases = database.rebases;
+    const brought = bringingIn.then(() => bringIn(queryClient, database));
+    bringingIn = brought.catch(() => {});
+    brought.catch((error: unknown) => {
+      // The database closed (e.g. on logging out).
+      if (!(error instanceof ClosedError)) throw error;
+    });
+  });
+  const stopUndoRedo = history.subscribe(() => {
     const moved = history.latest;
     if (moved === null || moved.step.about.kind !== "transaction") return;
     // There's an edit to undo or redo only once they've been read for the page.
@@ -321,6 +433,10 @@ export function keepTransactionsInSync(
       },
     );
   });
+  return () => {
+    stopRebases();
+    stopUndoRedo();
+  };
 }
 
 /** A transaction to add (see `addTransaction`). It has no category. */
