@@ -20,7 +20,8 @@ const headingUnderlineClass = "border-b-3 border-transparent";
 
 function OverviewPage() {
   const { database } = useOpenDatabase();
-  const [choice, setChoice] = useState<PeriodChoice>({ kind: "this-month" });
+  // Null: the period it starts on, until the first overview has found it.
+  const [choice, setChoice] = useState<PeriodChoice | null>(null);
   // Null: the most used.
   const [currency, setCurrency] = useState<string | null>(null);
   const query = overviewQuery(database, choice, currency, today());
@@ -53,6 +54,10 @@ function OverviewPage() {
     );
 
   if (overview === null) return <p className="m-auto text-ink-muted">No transactions yet.</p>;
+  // The period the first overview started on stays, whatever comes in after.
+  // (Its overview is there under it already: see overviewQuery.)
+  if (choice === null) setChoice(overview.choice);
+  const chosen = choice ?? overview.choice;
   // Shown as picked straight away, while its overview loads.
   const pickedCurrency = overviewCurrency(currency, overview.currencies) ?? overview.currency;
 
@@ -68,20 +73,20 @@ function OverviewPage() {
           {/* A custom range's dates are edited where they're shown. */}
           <h1
             className={
-              choice.kind === "custom" ? "sr-only" : `${headingClass} ${headingUnderlineClass}`
+              chosen.kind === "custom" ? "sr-only" : `${headingClass} ${headingUnderlineClass}`
             }
           >
             {overview.period.span}
           </h1>
-          {choice.kind === "custom" && (
+          {chosen.kind === "custom" && (
             <CustomRangeInputs
-              range={choice}
+              range={chosen}
               onChange={(range) => setChoice({ kind: "custom", ...range })}
               className={headingClass}
             />
           )}
         </div>
-        <PeriodPicker choice={choice} current={overview.period} onChange={setChoice} />
+        <PeriodPicker choice={chosen} current={overview.period} onChange={setChoice} />
       </div>
 
       {/* Two columns that stack independently, so a short card pulls the

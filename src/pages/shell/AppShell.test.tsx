@@ -1077,12 +1077,19 @@ describe("switching pages", () => {
   }
 
   /**
-   * Waits until `sql` has been asked for, and everything asked for so far is
-   * answered. For a hidden page's query, once the shown page has loaded.
+   * Waits until `sql` has been asked for, and everything asked for since is
+   * answered, as well as all that asks for once it is. For a hidden page's
+   * query, once the shown page has loaded.
    */
   async function settled(queries: ReturnType<typeof recordQueries>, sql: string) {
     await expect.poll(() => queries.some((query) => query.sql === sql)).toBe(true);
-    await Promise.all(queries.map(({ answer }) => answer));
+    let asked;
+    do {
+      asked = queries.length;
+      await Promise.all(queries.map(({ answer }) => answer));
+      // What the answers lead to is asked for in the microtasks they run in.
+      await new Promise((resolve) => setTimeout(resolve));
+    } while (queries.length > asked);
   }
 
   it("reads the transactions while the overview shows, so they're ready to switch to", async () => {
@@ -1111,6 +1118,17 @@ describe("switching pages", () => {
 
     await expect.element(page.getByRole("region", { name: "Recent" })).toBeVisible();
     expect(queries.slice(before)).toEqual([]);
+  });
+
+  it("reads the overview once, starting on it", async () => {
+    await loggedIn(await storedDatabase(TWO_TRANSACTIONS));
+    const queries = recordQueries();
+    await renderApp("/");
+    await expect.element(page.getByRole("region", { name: "Recent" })).toBeVisible();
+
+    await settled(queries, LIST_TRANSACTIONS);
+
+    expect(queries.filter(({ sql }) => sql === GET_OVERVIEW_META)).toHaveLength(1);
   });
 
   it("doesn't read the transactions again on coming back", async () => {

@@ -7,6 +7,7 @@ import { SOURCE_HASH_SQL, transactionId } from "../../test/fixtures.ts";
 import {
   GET_OVERVIEW_META,
   GET_PERIOD_SUMMARY,
+  HAS_TRANSACTIONS,
   LIST_ACCOUNT_ACTIVITY,
   LIST_CATEGORY_PARENTS,
   LIST_CATEGORY_SPENDING,
@@ -169,6 +170,41 @@ describe("GET_OVERVIEW_META", () => {
       first_date: "2025-02-03",
       last_date: "2026-10-05",
     });
+  });
+});
+
+describe("HAS_TRANSACTIONS", () => {
+  const inOctober = () => rows(HAS_TRANSACTIONS, { $from: "2026-10-01", $to: "2026-10-31" });
+
+  it("finds none when every transaction is outside the period", () => {
+    add({ amount: -1, date: "2026-09-30" });
+    add({ amount: -1, date: "2026-11-01" });
+
+    expect(inOctober()).toEqual([{ found: 0 }]);
+  });
+
+  it("finds one on the period's first day", () => {
+    add({ amount: -1, date: "2026-10-01" });
+
+    expect(inOctober()).toEqual([{ found: 1 }]);
+  });
+
+  it("finds one on the period's last day", () => {
+    add({ amount: -1, date: "2026-10-31" });
+
+    expect(inOctober()).toEqual([{ found: 1 }]);
+  });
+
+  it("finds a transfer, though it's left out of spending and income", () => {
+    add({ amount: -1, transfer: "Savings" });
+
+    expect(inOctober()).toEqual([{ found: 1 }]);
+  });
+
+  it("finds a duplicate, though it's left out of spending and income", () => {
+    add({ amount: -1, duplicateOf: add({ amount: -1, date: "2026-09-30" }) });
+
+    expect(inOctober()).toEqual([{ found: 1 }]);
   });
 });
 

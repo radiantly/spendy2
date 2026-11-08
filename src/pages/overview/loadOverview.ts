@@ -4,6 +4,7 @@ import { databaseKey } from "../../db/queryClient.ts";
 import {
   GET_OVERVIEW_META,
   GET_PERIOD_SUMMARY,
+  HAS_TRANSACTIONS,
   LIST_ACCOUNT_ACTIVITY,
   LIST_CATEGORY_PARENTS,
   LIST_CATEGORY_SPENDING,
@@ -20,6 +21,7 @@ import {
   type OverviewMeta,
   type PeriodSummary,
   type RecentTransaction,
+  type TransactionsFound,
 } from "../../db/queries/overview.ts";
 import {
   endOfMonth,
@@ -48,6 +50,8 @@ export const RECENT_COUNT = 7;
 export type MonthTotals = MonthlyTotals & { inPeriod: boolean };
 
 export type Overview = {
+  /** The period asked for, or else the one it starts on (see `loadOverview`). */
+  choice: PeriodChoice;
   period: Period;
   /** The display currency the overview is in: the one asked for, or else the most used. */
   currency: string;
@@ -80,26 +84,50 @@ export function overviewCurrency(currency: string | null, currencies: readonly s
 }
 
 /**
+ * The periods the overview starts on, the first with any transactions;
+ * without, it starts on all of them.
+ */
+const STARTING_PRESETS = ["this-month", "last-month"] as const;
+
+/** The period the overview starts on, on `today` (see STARTING_PRESETS). */
+async function startingChoice(database: Database, today: NaiveDate): Promise<PeriodChoice> {
+  const found = await Promise.all(
+    STARTING_PRESETS.map(async (kind) => {
+      // Neither depends on when the transactions start and end.
+      const { from, to } = resolvePeriod({ kind }, today, { first: null, last: null });
+      const [row] = rowsOf<TransactionsFound>(
+        await database.query(HAS_TRANSACTIONS, { $from: from, $to: to }),
+      );
+      return row!.found === 1;
+    }),
+  );
+  return { kind: STARTING_PRESETS.find((_, i) => found[i]) ?? "all" };
+}
+
+/**
  * Everything the overview shows for `choice`, on `today`, in `currency`.
- * Without one, or when it has no overview (any more), it's in the most used
- * currency. Null when there are no transactions at all.
+ * Without a choice, it's for the period it starts on: this month, or else
+ * last month, the first with any transactions, or else all time. Without a
+ * currency, or when it has no overview (any more), it's in the most used.
+ * Null when there are no transactions at all.
  */
 export async function loadOverview(
   database: Database,
-  choice: PeriodChoice,
+  choice: PeriodChoice | null,
   currency: string | null,
   today: NaiveDate,
 ): Promise<Overview | null> {
-  const [[meta], currencies] = await Promise.all([
+  const [[meta], currencies, chosen] = await Promise.all([
     database.query(GET_OVERVIEW_META).then(rowsOf<OverviewMeta>),
     database
       .query(LIST_CURRENCIES)
       .then((rows) => rowsOf<CurrencyUse>(rows).map(({ currency }) => currency)),
+    choice ?? startingChoice(database, today),
   ]);
   const display = overviewCurrency(currency, currencies);
   if (!meta || display === undefined) return null;
 
-  const period = resolvePeriod(choice, today, { first: meta.first_date, last: meta.last_date });
+  const period = resolvePeriod(chosen, today, { first: meta.first_date, last: meta.last_date });
   const binds = ({ from, to }: DateRange) => ({ $display: display, $from: from, $to: to });
   const months = monthsEnding(period.to, CHART_MONTHS);
 
@@ -132,6 +160,7 @@ export async function loadOverview(
 
   const periodMonths = { from: startOfMonth(period.from), to: period.to };
   return {
+    choice: chosen,
     period,
     currency: display,
     currencies,
@@ -154,12 +183,22 @@ export async function loadOverview(
 /** `loadOverview` as a query: read again after each change to the database. */
 export function overviewQuery(
   database: Database,
-  choice: PeriodChoice,
+  choice: PeriodChoice | null,
   currency: string | null,
   today: NaiveDate,
 ) {
   return queryOptions({
     queryKey: [...databaseKey(database), "overview", choice, currency, today],
-    queryFn: () => loadOverview(database, choice, currency, today),
+    queryFn: async ({ client }) => {
+      const overview = await loadOverview(database, choice, currency, today);
+      // The period it started on's overview too, there for the page as it
+      // keeps that period (see OverviewPage).
+      if (choice === null && overview !== null)
+        client.setQueryData(
+          overviewQuery(database, overview.choice, currency, today).queryKey,
+          overview,
+        );
+      return overview;
+    },
   });
 }

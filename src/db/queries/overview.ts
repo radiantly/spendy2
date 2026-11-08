@@ -92,6 +92,16 @@ export const GET_OVERVIEW_META = `
     (SELECT max(import_timestamp) FROM sources) AS last_import
 `;
 
+export type TransactionsFound = { found: 0 | 1 };
+
+/**
+ * Whether there are any transactions from `$from` to `$to` (inclusive), in
+ * any currency, transfers and duplicates too. One row. Bind `{ $from, $to }`.
+ */
+export const HAS_TRANSACTIONS = `
+  SELECT EXISTS (SELECT 1 FROM transactions WHERE naive_date BETWEEN $from AND $to) AS found
+`;
+
 export type PeriodSummary = {
   spent: number;
   income: number;

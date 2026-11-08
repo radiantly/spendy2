@@ -55,14 +55,19 @@ const insert = (
     .join("")}
 `;
 
-/** Today is Oct 9, 2026 (see the mock of period.ts). */
-const DATA = [
+/** The accounts, source and categories DATA's transactions are in. */
+const SETUP = [
   `INSERT INTO accounts VALUES ('Everyday Checking', 'USD', 'Bank', '••4821'),
     ('Rewards Card', 'USD', 'Card', '••3307'), ('Travel Card', 'EUR', 'Card', '••5512'),
     ('Savings', 'USD', 'Bank', '••1190'), ('India Savings', 'INR', 'Bank', NULL)`,
   `INSERT INTO sources (hash, remarks, import_timestamp) VALUES (${SOURCE_HASH_SQL}, 'statement.csv', 1791374400)`,
   `INSERT INTO categories VALUES ('Food', NULL), ('Groceries', 'Food'), ('Dining out', 'Food'),
     ('Housing', NULL), ('Rent', 'Housing'), ('Health', NULL), ('Income', NULL), ('Salary', 'Income')`,
+];
+
+/** Today is Oct 9, 2026 (see the mock of period.ts). */
+const DATA = [
+  ...SETUP,
   insert(1, "2026-08-03", "Everyday Checking", 2560, "Acme Corp Payroll", "Salary"),
   insert(14, "2026-08-20", "Rewards Card", -1240, "Corner Market", "Groceries"),
   insert(2, "2026-09-02", "Everyday Checking", -1300, "Parkside Apartments", "Rent"),
@@ -136,6 +141,88 @@ describe("OverviewPage", () => {
     await expect
       .element(page.getByRole("button", { name: "This month" }))
       .toHaveAttribute("aria-pressed", "true");
+  });
+
+  describe("the period it starts on", () => {
+    /** SETUP with these transactions. */
+    const withTransactions = (...transactions: string[]) => [...SETUP, ...transactions].join(";");
+    const heading = () => page.getByRole("heading", { level: 1 });
+    const pressed = (name: string) =>
+      expect.element(page.getByRole("button", { name })).toHaveAttribute("aria-pressed", "true");
+
+    it("is last month when this month has no transactions", async () => {
+      await opened(
+        withTransactions(
+          insert(1, "2026-09-02", "Everyday Checking", -1300, "Parkside Apartments", "Rent"),
+        ),
+      );
+
+      await expect.element(heading()).toMatchTextContent("September 2026");
+      await pressed("Last month");
+    });
+
+    it("is all time when last month has none either", async () => {
+      await opened(
+        withTransactions(
+          insert(1, "2026-08-20", "Rewards Card", -1240, "Corner Market", "Groceries"),
+        ),
+      );
+
+      await expect.element(heading()).toMatchTextContent(range("Aug – Oct 2026"));
+      await pressed("All");
+    });
+
+    it("is this month with only a transfer in it", async () => {
+      await opened(
+        withTransactions(
+          insert(1, "2026-09-02", "Everyday Checking", -1300, "Parkside Apartments", "Rent"),
+          insert(2, "2026-10-08", "Everyday Checking", -300, "Transfer to Savings", null, {
+            transfer: "Savings",
+          }),
+        ),
+      );
+
+      await expect.element(heading()).toMatchTextContent("October 2026");
+      await pressed("This month");
+    });
+
+    // Months count any transaction, so it can start on a month with nothing
+    // in the currency the overview's in.
+    it("is this month with only a transaction in another currency than the overview's", async () => {
+      await opened(
+        withTransactions(
+          insert(1, "2026-09-02", "Everyday Checking", -1300, "Parkside Apartments", "Rent"),
+          insert(2, "2026-09-05", "Rewards Card", -200, "Corner Market", "Groceries"),
+          insert(3, "2026-10-09", "India Savings", -5000, "Apollo Pharmacy", "Health", {
+            currency: "INR",
+          }),
+        ),
+      );
+
+      await expect.element(heading()).toMatchTextContent("October 2026");
+      await expect.element(region("Spent")).toMatchTextContent(/SPENT · OCTOBER\s*\$0/i);
+    });
+
+    it("stays as transactions come in for this month", async () => {
+      await opened(
+        withTransactions(
+          insert(1, "2026-09-02", "Everyday Checking", -1300, "Parkside Apartments", "Rent"),
+        ),
+      );
+      await expect.element(heading()).toMatchTextContent("September 2026");
+
+      await savedElsewhere(
+        [
+          insert(2, "2026-10-01", "Everyday Checking", -20, "Corner Market", "Groceries"),
+          `UPDATE transactions SET amount = -150000 WHERE id = '${transactionId(1)}'`,
+        ].join(";"),
+      );
+
+      // September's, changed.
+      await expect.element(region("Spent")).toMatchTextContent(/SPENT · SEPTEMBER\s*\$1,500/i);
+      await expect.element(heading()).toMatchTextContent("September 2026");
+      await pressed("Last month");
+    });
   });
 
   it("says there's nothing to show without transactions", async () => {
@@ -830,8 +917,6 @@ describe("OverviewPage", () => {
     await opened();
     await expect.element(region("Spent")).toMatchTextContent("$1,397");
     await savedElsewhere("DELETE FROM transactions WHERE category = 'Rent'");
-
-    document.dispatchEvent(new Event("visibilitychange"));
 
     await expect.element(region("Spent")).toMatchTextContent("$97");
   });
