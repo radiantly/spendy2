@@ -200,9 +200,7 @@ describe("UserStore", () => {
         const unauthorized = { success: false, code: "UNAUTHORIZED" };
         const session = crypto.randomUUID();
         expect(await instance.replaceDatabase(session, streamOf(part), null)).toEqual(unauthorized);
-        expect(
-          await instance.appendDatabasePart(session, streamOf(part), NO_PREVIOUS_PART),
-        ).toEqual(unauthorized);
+        expect(await instance.appendDatabasePart(session, streamOf(part))).toEqual(unauthorized);
         expect(await instance.downloadDatabase(session, null)).toEqual(unauthorized);
         expect(await instance.downloadDatabasePart(session, 0)).toEqual(unauthorized);
 
@@ -351,12 +349,14 @@ describe("UserStore", () => {
       await inStore(async (instance) => {
         await instance.replaceDatabase(SESSION, streamOf(first!), null);
 
-        expect(
-          await instance.appendDatabasePart(SESSION, streamOf(second!), await sha256Hex(first!)),
-        ).toEqual({ success: true, sha256: await sha256Hex(second!) });
-        expect(
-          await instance.appendDatabasePart(SESSION, streamOf(third!), await sha256Hex(second!)),
-        ).toEqual({ success: true, sha256: await sha256Hex(third!) });
+        expect(await instance.appendDatabasePart(SESSION, streamOf(second!))).toEqual({
+          success: true,
+          sha256: await sha256Hex(second!),
+        });
+        expect(await instance.appendDatabasePart(SESSION, streamOf(third!))).toEqual({
+          success: true,
+          sha256: await sha256Hex(third!),
+        });
 
         expect(await stored(instance)).toEqual(await storedAs([first!, second!, third!]));
         expect(await storedPart(instance, 2)).toEqual(await storedAs([third!]));
@@ -407,9 +407,9 @@ describe("UserStore", () => {
           const reader = result.body.getReader();
           const { value: first } = await reader.read();
 
-          expect(
-            await instance.appendDatabasePart(SESSION, streamOf(added), await sha256Hex(parts[1]!)),
-          ).toMatchObject({ success: true });
+          expect(await instance.appendDatabasePart(SESSION, streamOf(added))).toMatchObject({
+            success: true,
+          });
 
           // hashes rather than toEqual: a failing toEqual would print megabytes
           const body = await readRest(reader, [first!]);
@@ -454,36 +454,6 @@ describe("UserStore", () => {
               PRECONDITION_FAILED,
             );
           expect(await stored(instance)).toEqual(await storedAs(parts));
-        });
-      });
-
-      it("leaves the stored database as it was when an addition's fails", async () => {
-        const parts = await chainedParts({}, {});
-        // follows the first part, which is no longer the last
-        const late = databasePart(await sha256Hex(parts[0]!), { seed: 99 });
-
-        await inStore(async (instance) => {
-          await instance.replaceDatabase(SESSION, streamOf(...parts), null);
-
-          expect(
-            await instance.appendDatabasePart(SESSION, streamOf(late), await sha256Hex(parts[0]!)),
-          ).toEqual(PRECONDITION_FAILED);
-          expect(await stored(instance)).toEqual(await storedAs(parts));
-        });
-      });
-
-      it("can't create a database by adding a part", async () => {
-        await inStore(async (instance, state) => {
-          const part = databasePart(NO_PREVIOUS_PART);
-
-          expect(
-            await instance.appendDatabasePart(SESSION, streamOf(part), NO_PREVIOUS_PART),
-          ).toEqual(PRECONDITION_FAILED);
-          expect(await stored(instance)).toEqual({ success: false, code: "NOT_FOUND" });
-          const tables = state.storage.sql
-            .exec("SELECT name FROM sqlite_master WHERE name LIKE 'database%'")
-            .toArray();
-          expect(tables).toEqual([]);
         });
       });
     });
@@ -534,22 +504,34 @@ describe("UserStore", () => {
         });
       });
 
-      it("rejects an addition that doesn't point at the last part, adding nothing", async () => {
+      it("rejects an addition that doesn't follow the last part as a conflict, adding nothing", async () => {
         const parts = await chainedParts({}, {});
-        const last = await sha256Hex(parts[1]!);
 
         await inStore(async (instance) => {
           await instance.replaceDatabase(SESSION, streamOf(...parts), null);
 
-          for (const previousHash of [await sha256Hex(parts[0]!), NO_PREVIOUS_PART])
+          // the first part, which is no longer the last; none, as part 0; and one never stored
+          for (const previousHash of [await sha256Hex(parts[0]!), NO_PREVIOUS_PART, "a".repeat(64)])
             expect(
-              await instance.appendDatabasePart(
-                SESSION,
-                streamOf(databasePart(previousHash)),
-                last,
-              ),
-            ).toEqual({ success: false, code: "BROKEN_PART_CHAIN" });
+              await instance.appendDatabasePart(SESSION, streamOf(databasePart(previousHash))),
+            ).toEqual({ success: false, code: "CONFLICT" });
           expect(await stored(instance)).toEqual(await storedAs(parts));
+        });
+      });
+
+      it("can't create a database by adding a part", async () => {
+        await inStore(async (instance, state) => {
+          const part = databasePart(NO_PREVIOUS_PART);
+
+          expect(await instance.appendDatabasePart(SESSION, streamOf(part))).toEqual({
+            success: false,
+            code: "CONFLICT",
+          });
+          expect(await stored(instance)).toEqual({ success: false, code: "NOT_FOUND" });
+          const tables = state.storage.sql
+            .exec("SELECT name FROM sqlite_master WHERE name LIKE 'database%'")
+            .toArray();
+          expect(tables).toEqual([]);
         });
       });
 
@@ -561,15 +543,14 @@ describe("UserStore", () => {
 
         await inStore(async (instance) => {
           await instance.replaceDatabase(SESSION, streamOf(first!), null);
-          const append = async (part: Uint8Array, after: Uint8Array<ArrayBuffer>) =>
-            instance.appendDatabasePart(SESSION, streamOf(part), await sha256Hex(after));
+          const append = (part: Uint8Array) => instance.appendDatabasePart(SESSION, streamOf(part));
 
-          expect(await append(same, first!)).toMatchObject({ success: true });
-          expect(await append(lower, same)).toEqual({
+          expect(await append(same)).toMatchObject({ success: true });
+          expect(await append(lower)).toEqual({
             success: false,
             code: "USER_VERSION_DECREASED",
           });
-          expect(await append(higher, same)).toMatchObject({ success: true });
+          expect(await append(higher)).toMatchObject({ success: true });
           expect(await stored(instance)).toEqual(await storedAs([first!, same, higher]));
         });
       });
@@ -582,13 +563,10 @@ describe("UserStore", () => {
         await inStore(async (instance) => {
           await instance.replaceDatabase(SESSION, streamOf(first!), null);
 
-          expect(
-            await instance.appendDatabasePart(
-              SESSION,
-              streamOf(second, third),
-              await sha256Hex(first!),
-            ),
-          ).toEqual({ success: false, code: "INVALID_PART_LENGTH" });
+          expect(await instance.appendDatabasePart(SESSION, streamOf(second, third))).toEqual({
+            success: false,
+            code: "INVALID_PART_LENGTH",
+          });
           expect(await stored(instance)).toEqual(await storedAs([first!]));
         });
       });
@@ -636,8 +614,7 @@ describe("UserStore", () => {
         ],
         [
           "an addition",
-          (instance, sessionId) =>
-            instance.appendDatabasePart(sessionId, streamOf(part), NO_PREVIOUS_PART),
+          (instance, sessionId) => instance.appendDatabasePart(sessionId, streamOf(part)),
         ],
         ["a download", (instance, sessionId) => instance.downloadDatabase(sessionId, null)],
         ["a part's download", (instance, sessionId) => instance.downloadDatabasePart(sessionId, 0)],

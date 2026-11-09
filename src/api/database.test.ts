@@ -77,7 +77,7 @@ describe("downloadDatabasePart", () => {
   it("returns the part at an index, counting from 0, with its sha256", async () => {
     const first = await firstStored();
     const second = databasePart(await sha256Hex(first));
-    await appendDatabasePart(token, second, await sha256Hex(first));
+    await appendDatabasePart(token, second);
 
     expect(await downloadDatabasePart(token, 1)).toEqual({
       success: true,
@@ -176,7 +176,7 @@ describe("appendDatabasePart", () => {
     const first = await firstStored();
     const second = databasePart(await sha256Hex(first));
 
-    expect(await appendDatabasePart(token, second, await sha256Hex(first))).toEqual({
+    expect(await appendDatabasePart(token, second)).toEqual({
       success: true,
       sha256: await sha256Hex(second),
     });
@@ -185,39 +185,38 @@ describe("appendDatabasePart", () => {
 
   it("reports a part after one that's no longer the last as a conflict", async () => {
     const first = await firstStored();
-    await appendDatabasePart(token, databasePart(await sha256Hex(first)), await sha256Hex(first));
+    await appendDatabasePart(token, databasePart(await sha256Hex(first)));
     const late = databasePart(await sha256Hex(first), { seed: 9 });
 
-    expect(await appendDatabasePart(token, late, await sha256Hex(first))).toEqual({
+    expect(await appendDatabasePart(token, late)).toEqual({
       success: false,
       code: "CONFLICT",
     });
   });
 
   it("reports adding to a database that isn't there as a conflict", async () => {
-    expect(
-      await appendDatabasePart(token, databasePart(NO_PREVIOUS_PART), NO_PREVIOUS_PART),
-    ).toEqual({ success: false, code: "CONFLICT" });
+    expect(await appendDatabasePart(token, databasePart(NO_PREVIOUS_PART))).toEqual({
+      success: false,
+      code: "CONFLICT",
+    });
   });
 
   it("reports an unknown session as unauthorized", async () => {
     const first = await firstStored();
 
-    expect(
-      await appendDatabasePart(
-        UNKNOWN_SESSION,
-        databasePart(await sha256Hex(first)),
-        await sha256Hex(first),
-      ),
-    ).toEqual({ success: false, code: "UNAUTHORIZED" });
+    expect(await appendDatabasePart(UNKNOWN_SESSION, databasePart(await sha256Hex(first)))).toEqual(
+      { success: false, code: "UNAUTHORIZED" },
+    );
   });
 
   it("reports a part the server rejects as a failed upload", async () => {
     const first = await firstStored();
+    // A format version the server doesn't read.
+    const part = databasePart(await sha256Hex(first)).with(6, 0x01);
 
-    // It follows another part than the one If-Match names.
-    expect(
-      await appendDatabasePart(token, databasePart("a".repeat(64)), await sha256Hex(first)),
-    ).toEqual({ success: false, code: "UPLOAD_FAILED" });
+    expect(await appendDatabasePart(token, part)).toEqual({
+      success: false,
+      code: "UPLOAD_FAILED",
+    });
   });
 });

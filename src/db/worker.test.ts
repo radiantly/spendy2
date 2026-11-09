@@ -74,14 +74,14 @@ describe("database worker", () => {
   it("creates a migrated database when there are no parts", async () => {
     const db = startWorker();
 
-    expect(await db.open(null, await kek())).toEqual({ created: true, sha256: null, parts: 0 });
+    expect(await db.open(null, await kek())).toEqual({ created: true, hashes: [] });
 
     expect(await db.query("PRAGMA user_version")).toEqual([{ user_version: MIGRATIONS.length }]);
     expect(await db.query("PRAGMA foreign_keys")).toEqual([{ foreign_keys: 1 }]);
     expect(await db.query("PRAGMA recursive_triggers")).toEqual([{ recursive_triggers: 1 }]);
   });
 
-  it("reopens a saved database with its data, and its last part's hash", async () => {
+  it("reopens a saved database with its data, and its part's hash", async () => {
     const first = startWorker();
     await first.open(null, await kek());
     await first.query("INSERT INTO accounts VALUES (?, ?, 'Bank', NULL)", ["checking", "SGD"]);
@@ -90,7 +90,7 @@ describe("database worker", () => {
 
     const second = startWorker();
 
-    expect(await second.open(part, await kek())).toEqual({ created: false, sha256, parts: 1 });
+    expect(await second.open(part, await kek())).toEqual({ created: false, hashes: [sha256] });
     expect(await second.query("SELECT * FROM accounts")).toEqual([
       { name: "checking", display_currency: "SGD", type: "Bank", identifier: null },
     ]);
@@ -225,21 +225,19 @@ describe("database worker saves", () => {
     expect((await decryptPart(part, await kek())).length).toBeLessThan(200);
   });
 
-  it("returns the last part's hash, and how many parts there are, once a save is done", async () => {
+  it("returns the hash of the part saved, once a save is done", async () => {
     const db = await opened();
     const first = await db.prepareSave();
 
     expect(await db.finishSave(true)).toEqual({
       unsaved: false,
       sha256: await sha256Hex(first!.part),
-      parts: 1,
     });
     await db.batch([INSERT_CHECKING]);
     const second = await db.prepareSave();
     expect(await db.finishSave(true)).toEqual({
       unsaved: false,
       sha256: await sha256Hex(second!.part),
-      parts: 2,
     });
   });
 
@@ -256,8 +254,7 @@ describe("database worker saves", () => {
 
     expect(await reopened.open(concat(parts), await kek())).toEqual({
       created: false,
-      sha256: await sha256Hex(parts[2]!),
-      parts: 3,
+      hashes: await Promise.all(parts.map((part) => sha256Hex(part))),
     });
     expect(await accounts(reopened)).toEqual(["brokerage", "savings"]);
   });
@@ -334,8 +331,7 @@ describe("database worker rebases", () => {
     expect(await here.rebase(concat([part0, part1]))).toEqual({
       outcome: "moved",
       unsaved: true,
-      sha256: await sha256Hex(part1),
-      parts: 2,
+      hashes: [await sha256Hex(part0), await sha256Hex(part1)],
     });
     expect(await accounts(here)).toEqual(["brokerage", "checking", "savings"]);
 
@@ -403,11 +399,11 @@ describe("database worker catch-ups", () => {
     const part1 = await save(elsewhere);
     await here.batch([INSERT_BROKERAGE]);
 
+    // Only the hashes of the parts it read.
     expect(await here.catchUp(part1)).toEqual({
       outcome: "moved",
       unsaved: true,
-      sha256: await sha256Hex(part1),
-      parts: 2,
+      hashes: [await sha256Hex(part1)],
     });
     expect(await accounts(here)).toEqual(["brokerage", "checking", "savings"]);
 
@@ -427,10 +423,10 @@ describe("database worker catch-ups", () => {
     await elsewhere.batch([INSERT_BROKERAGE]);
     const part2 = await save(elsewhere);
 
-    expect(await here.catchUp(concat([part1, part2]))).toMatchObject({
+    expect(await here.catchUp(concat([part1, part2]))).toEqual({
       outcome: "moved",
       unsaved: false,
-      parts: 3,
+      hashes: [await sha256Hex(part1), await sha256Hex(part2)],
     });
     expect(await accounts(here)).toEqual(["brokerage", "checking", "savings"]);
   });
@@ -629,7 +625,7 @@ describe("database worker changes", () => {
     const { changes } = await db.batch([INSERT_CHECKING]);
     await db.prepareSave();
 
-    expect(await db.finishSave(false)).toEqual({ unsaved: true, sha256: null, parts: 0 });
+    expect(await db.finishSave(false)).toEqual({ unsaved: true, sha256: null });
     expect(await db.undo(changes)).toEqual({ unsaved: false });
   });
 
@@ -645,7 +641,7 @@ describe("database worker changes", () => {
     await rejection(db.prepareSave());
 
     // Had the part's version stayed, this would count it as saved.
-    expect(await db.finishSave(true)).toEqual({ unsaved: true, sha256: null, parts: 0 });
+    expect(await db.finishSave(true)).toEqual({ unsaved: true, sha256: null });
   });
 
   it("serializes the database as an SQLite file, unsaved changes too, still unsaved", async () => {

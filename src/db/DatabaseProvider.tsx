@@ -8,7 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import { QueryClientProvider } from "@tanstack/react-query";
-import { watchDatabase } from "../api/databaseUpdates.ts";
+import { watchDatabase, type LatestPart } from "../api/databaseUpdates.ts";
 import { saveRowNumberDigits, type Session } from "../lib/session.ts";
 import { DatabaseOpenError, openDatabase, type Database } from "./database.ts";
 import { DatabaseContext, type DatabaseState } from "./databaseContext.ts";
@@ -109,22 +109,22 @@ function DatabaseProvider({
     // The last part the server said, while the unsaved changes conflict with
     // what was saved up to it: tried again as they change, as undoing what
     // conflicted lets it through.
-    let behind: { sha256: string | null } | null = null;
+    let behind: { latestPart: LatestPart | null } | null = null;
     // The database itself knows of unsaved changes as soon as they're made.
     const nothingToLose = (database: Database) =>
       !cancelled && !database.unsaved && !savingRef.current;
 
-    /** Brings in what was saved elsewhere into `database`, the server saying its last part is `sha256`. */
-    async function catchUp(database: Database, sha256: string | null) {
+    /** Brings in what was saved elsewhere into `database`, the server saying its last part is `latestPart`. */
+    async function catchUp(database: Database, latestPart: LatestPart | null) {
       try {
-        const result = await database.catchUp(sha256);
+        const result = await database.catchUp(latestPart);
         if (cancelled) return;
         if (result.success) {
           behind = null;
           return;
         }
         // Only a reload brings the newer app a newer version needs.
-        if (result.code === "CONFLICT") behind = { sha256 };
+        if (result.code === "CONFLICT") behind = { latestPart };
         if (result.code === "CONFLICT" || result.code === "NEWER_VERSION") updateFailed();
         else if (result.code === "UNAUTHORIZED" && nothingToLose(database)) sessionEnded();
         // A download that failed is tried again on the next update; a save
@@ -143,7 +143,7 @@ function DatabaseProvider({
         // From when it's open: the server says the last part straight away, so
         // anything saved while it opened is brought in.
         stopWatching = watchDatabase(session.username, session.token, {
-          onHead: (sha256) => void catchUp(database, sha256),
+          onLatestPart: (latestPart) => void catchUp(database, latestPart),
           onSessionEnded: () => {
             if (nothingToLose(database)) sessionEnded();
           },
@@ -152,7 +152,7 @@ function DatabaseProvider({
         stopRetrying = database.subscribe(() => {
           if (database.version === version) return;
           version = database.version;
-          if (behind !== null) void catchUp(database, behind.sha256);
+          if (behind !== null) void catchUp(database, behind.latestPart);
         });
       },
       (error: unknown) => {

@@ -79,7 +79,12 @@ async function authenticatedSocket(token: string, username = "alice") {
   return socket;
 }
 
-function upload(method: "PUT" | "POST", token: string, body: Uint8Array, headers: HeadersInit) {
+function upload(
+  method: "PUT" | "POST",
+  token: string,
+  body: Uint8Array,
+  headers: HeadersInit = {},
+) {
   return exports.default.fetch("http://localhost/api/users/me/database/parts", {
     method,
     headers: { Authorization: `Bearer ${token}`, ...headers },
@@ -97,8 +102,7 @@ async function firstUpload(token: string, seed = 0) {
 /** Adds a part after `last`, the last part stored, and returns the part. */
 async function addPart(token: string, last: Uint8Array<ArrayBuffer>) {
   const part = databasePart(await sha256Hex(last));
-  const response = await upload("POST", token, part, { "If-Match": `"${await sha256Hex(last)}"` });
-  expect(response.status).toBe(204);
+  expect((await upload("POST", token, part)).status).toBe(204);
   return part;
 }
 
@@ -112,6 +116,11 @@ function logOut(token: string) {
 /** A token for alice's session `sessionId`, which needn't be one she has. */
 const tokenFor = (sessionId: string, username = "alice") =>
   tokenSchema.encode({ username, sessionId });
+
+/** The message telling of `part`, stored at `index`, as the last. */
+const latest = async (index: number, part: Uint8Array<ArrayBuffer>) => ({
+  latestPart: { index, hash: await sha256Hex(part) },
+});
 
 describe("GET /api/users/{username}/database/updates", () => {
   it("needs a WebSocket", async () => {
@@ -136,7 +145,7 @@ describe("GET /api/users/{username}/database/updates", () => {
 
     socket.authenticate(token);
 
-    expect(await socket.next()).toEqual({ sha256: await sha256Hex(part) });
+    expect(await socket.next()).toEqual(await latest(0, part));
   });
 
   it("sends null for the last part without a database", async () => {
@@ -145,7 +154,7 @@ describe("GET /api/users/{username}/database/updates", () => {
 
     socket.authenticate(token);
 
-    expect(await socket.next()).toEqual({ sha256: null });
+    expect(await socket.next()).toEqual({ latestPart: null });
   });
 
   it("sends nothing before the socket authenticates", async () => {
@@ -157,7 +166,7 @@ describe("GET /api/users/{username}/database/updates", () => {
     socket.authenticate(token);
 
     // Only the last part as it is now, not each upload's before it.
-    expect(await socket.next()).toEqual({ sha256: await sha256Hex(second) });
+    expect(await socket.next()).toEqual(await latest(1, second));
     expect(socket.hasUnread()).toBe(false);
   });
 
@@ -167,11 +176,9 @@ describe("GET /api/users/{username}/database/updates", () => {
     const sockets = [await authenticatedSocket(token), await authenticatedSocket(other)];
 
     const first = await firstUpload(token);
-    for (const socket of sockets)
-      expect(await socket.next()).toEqual({ sha256: await sha256Hex(first) });
+    for (const socket of sockets) expect(await socket.next()).toEqual(await latest(0, first));
     const second = await addPart(other, first);
-    for (const socket of sockets)
-      expect(await socket.next()).toEqual({ sha256: await sha256Hex(second) });
+    for (const socket of sockets) expect(await socket.next()).toEqual(await latest(1, second));
   });
 
   it("tells no one of an upload that's rejected", async () => {
@@ -182,12 +189,26 @@ describe("GET /api/users/{username}/database/updates", () => {
 
     const [other] = await chainedParts({ seed: 9 });
     expect((await upload("PUT", token, other!, { "If-None-Match": "*" })).status).toBe(412);
-    const ifMatch = { "If-Match": `"${await sha256Hex(first)}"` };
-    expect((await upload("POST", token, databasePart("a".repeat(64)), ifMatch)).status).toBe(400);
+    expect((await upload("POST", token, databasePart("a".repeat(64)))).status).toBe(409);
     const second = await addPart(token, first);
 
     // The next it's told of is the upload that worked.
-    expect(await socket.next()).toEqual({ sha256: await sha256Hex(second) });
+    expect(await socket.next()).toEqual(await latest(1, second));
+  });
+
+  it("counts the parts from the start again after a replace", async () => {
+    const token = await newUser();
+    const socket = await authenticatedSocket(token);
+    const first = await firstUpload(token);
+    const second = await addPart(token, first);
+    await socket.next();
+    await socket.next();
+
+    const [replacement] = await chainedParts({ seed: 9 });
+    const ifMatch = { "If-Match": `"${await sha256Hex(second)}"` };
+    expect((await upload("PUT", token, replacement!, ifMatch)).status).toBe(204);
+
+    expect(await socket.next()).toEqual(await latest(0, replacement!));
   });
 
   it.each([
@@ -234,7 +255,7 @@ describe("GET /api/users/{username}/database/updates", () => {
 
     const part = await firstUpload(token);
 
-    expect(await socket.next()).toEqual({ sha256: await sha256Hex(part) });
+    expect(await socket.next()).toEqual(await latest(0, part));
   });
 
   it("closes the socket once its session logs out, and only its", async () => {
@@ -247,7 +268,7 @@ describe("GET /api/users/{username}/database/updates", () => {
 
     expect(await socket.closed()).toEqual({ code: UNAUTHORIZED, reason: "UNAUTHORIZED" });
     const part = await firstUpload(other);
-    expect(await otherSocket.next()).toEqual({ sha256: await sha256Hex(part) });
+    expect(await otherSocket.next()).toEqual(await latest(0, part));
   });
 
   it("closes the socket once a new login pushes its session out", async () => {
@@ -286,7 +307,7 @@ describe("GET /api/users/{username}/database/updates", () => {
     expect(await runDurableObjectAlarm(env.USER.getByName("alice"))).toBe(true);
 
     const second = await addPart(token, first);
-    expect(await socket.next()).toEqual({ sha256: await sha256Hex(second) });
+    expect(await socket.next()).toEqual(await latest(1, second));
   });
 
   it("answers ping with pong", async () => {
@@ -306,7 +327,7 @@ describe("GET /api/users/{username}/database/updates", () => {
     socket.authenticate(tokenFor(crypto.randomUUID()));
     const part = await firstUpload(token);
 
-    expect(await socket.next()).toEqual({ sha256: await sha256Hex(part) });
+    expect(await socket.next()).toEqual(await latest(0, part));
   });
 
   it("writes no storage for a socket to a user who doesn't exist", async () => {

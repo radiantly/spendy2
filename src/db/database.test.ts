@@ -14,6 +14,7 @@ import {
 import { deriveKek } from "../lib/kek.ts";
 import type { Session } from "../lib/session.ts";
 import { EXPORT_KEY, TOKEN } from "../test/fixtures.ts";
+import { previousHashOf } from "../test/parts.ts";
 
 vi.mock("../api/database.ts", () => ({
   downloadDatabase: vi.fn(),
@@ -30,6 +31,10 @@ async function session(): Promise<Session> {
 let stored: Uint8Array<ArrayBuffer>[] = [];
 
 const storedHead = async () => (stored.length === 0 ? null : sha256Hex(stored.at(-1)!));
+
+/** The last part stored, as the server tells of it. */
+const latestStored = async () =>
+  stored.length === 0 ? null : { index: stored.length - 1, hash: (await storedHead())! };
 
 function concat(parts: Uint8Array<ArrayBuffer>[]) {
   const bytes = new Uint8Array(parts.reduce((size, part) => size + part.length, 0));
@@ -70,8 +75,8 @@ beforeEach(() => {
     });
   vi.mocked(appendDatabasePart)
     .mockReset()
-    .mockImplementation(async (_token, part, ifMatch) => {
-      if (stored.length === 0 || ifMatch !== (await storedHead()))
+    .mockImplementation(async (_token, part) => {
+      if (stored.length === 0 || (await previousHashOf(part)) !== (await storedHead()))
         return { success: false, code: "CONFLICT" };
       stored.push(part.slice());
       return { success: true, sha256: (await storedHead())! };
@@ -200,7 +205,9 @@ describe("Database.save", () => {
     await db.batch(INSERT_CHECKING);
     const second = await db.save();
 
-    expect(appendDatabasePart).toHaveBeenCalledWith(TOKEN, expect.any(Uint8Array), part0);
+    expect(appendDatabasePart).toHaveBeenCalledWith(TOKEN, expect.any(Uint8Array));
+    const [, added] = vi.mocked(appendDatabasePart).mock.lastCall!;
+    expect(await previousHashOf(added)).toBe(part0);
     expect(stored).toHaveLength(2);
     expect(second).toEqual({ success: true, sha256: await storedHead() });
     expect(db.sha256).toBe(await storedHead());
@@ -417,7 +424,37 @@ describe("Database.catchUp", () => {
     const [here, elsewhere] = await twoCopies(INSERT_CHECKING);
     vi.mocked(downloadDatabase).mockClear();
 
-    expect(await here.catchUp(here.sha256)).toEqual({ success: true, updated: false });
+    expect(await here.catchUp(await latestStored())).toEqual({ success: true, updated: false });
+
+    expect(downloadDatabasePart).not.toHaveBeenCalled();
+    expect(downloadDatabase).not.toHaveBeenCalled();
+    here.close();
+    elsewhere.close();
+  });
+
+  it("does nothing when told of a part before its last, being ahead of it", async () => {
+    const [here, elsewhere] = await twoCopies(INSERT_CHECKING);
+    const told = await latestStored();
+    await here.batch(INSERT_SAVINGS);
+    await here.save();
+    vi.mocked(downloadDatabase).mockClear();
+    vi.mocked(downloadDatabasePart).mockClear();
+
+    // As a message sent before its save, heard after.
+    expect(await here.catchUp(told)).toEqual({ success: true, updated: false });
+
+    expect(downloadDatabasePart).not.toHaveBeenCalled();
+    expect(downloadDatabase).not.toHaveBeenCalled();
+    expect(here.rebases).toBe(0);
+    here.close();
+    elsewhere.close();
+  });
+
+  it("does nothing when told there's no database", async () => {
+    const [here, elsewhere] = await twoCopies(INSERT_CHECKING);
+    vi.mocked(downloadDatabase).mockClear();
+
+    expect(await here.catchUp(null)).toEqual({ success: true, updated: false });
 
     expect(downloadDatabasePart).not.toHaveBeenCalled();
     expect(downloadDatabase).not.toHaveBeenCalled();
@@ -432,10 +469,10 @@ describe("Database.catchUp", () => {
     await here.batch(INSERT_BROKERAGE);
     vi.mocked(downloadDatabase).mockClear();
 
-    expect(await here.catchUp(await storedHead())).toEqual({ success: true, updated: true });
+    expect(await here.catchUp(await latestStored())).toEqual({ success: true, updated: true });
 
-    // The one after its part 0, then none.
-    expect(vi.mocked(downloadDatabasePart).mock.calls.map(([, index]) => index)).toEqual([1, 2]);
+    // The one after its part 0, the last.
+    expect(vi.mocked(downloadDatabasePart).mock.calls.map(([, index]) => index)).toEqual([1]);
     expect(downloadDatabase).not.toHaveBeenCalled();
     expect(here.sha256).toBe(await storedHead());
     expect(await accountsOf(here)).toEqual(["brokerage", "checking", "savings"]);
@@ -450,12 +487,13 @@ describe("Database.catchUp", () => {
     await elsewhere.batch(INSERT_SAVINGS);
     await elsewhere.save();
     await here.batch(INSERT_BROKERAGE);
-    await here.catchUp(await storedHead());
+    await here.catchUp(await latestStored());
     const brought = await storedHead();
 
     expect(await here.save()).toMatchObject({ success: true });
 
-    expect(vi.mocked(appendDatabasePart).mock.lastCall?.[2]).toBe(brought);
+    const [, added] = vi.mocked(appendDatabasePart).mock.lastCall!;
+    expect(await previousHashOf(added)).toBe(brought);
     expect(await storedAccounts()).toEqual(["brokerage", "checking", "savings"]);
     here.close();
     elsewhere.close();
@@ -470,10 +508,49 @@ describe("Database.catchUp", () => {
     await replacement.save();
     replacement.close();
 
-    expect(await here.catchUp(await storedHead())).toEqual({ success: true, updated: true });
+    expect(await here.catchUp(await latestStored())).toEqual({ success: true, updated: true });
 
     expect(downloadDatabase).toHaveBeenCalled();
     expect(await accountsOf(here)).toEqual(["savings"]);
+    here.close();
+    elsewhere.close();
+  });
+
+  it("downloads all of a longer database stored in place of the one it's based on", async () => {
+    const [here, elsewhere] = await twoCopies(INSERT_CHECKING);
+    stored = [];
+    const replacement = await openDatabase(await session());
+    await replacement.batch(INSERT_SAVINGS);
+    await replacement.save();
+    await replacement.batch(INSERT_BROKERAGE);
+    await replacement.save();
+    replacement.close();
+
+    // Its part 1 doesn't follow this copy's part 0.
+    expect(await here.catchUp(await latestStored())).toEqual({ success: true, updated: true });
+
+    expect(downloadDatabase).toHaveBeenCalled();
+    expect(await accountsOf(here)).toEqual(["brokerage", "savings"]);
+    expect(here.sha256).toBe(await storedHead());
+    here.close();
+    elsewhere.close();
+  });
+
+  it("downloads all when a part it's told of isn't there", async () => {
+    const [here, elsewhere] = await twoCopies(INSERT_CHECKING);
+    await elsewhere.batch(INSERT_SAVINGS);
+    await elsewhere.save();
+    vi.mocked(downloadDatabase).mockClear();
+
+    // As if the database was replaced by a shorter one since it was told.
+    expect(await here.catchUp({ index: 2, hash: "e".repeat(64) })).toEqual({
+      success: true,
+      updated: true,
+    });
+
+    expect(vi.mocked(downloadDatabasePart).mock.calls.map(([, index]) => index)).toEqual([1, 2]);
+    expect(downloadDatabase).toHaveBeenCalled();
+    expect(await accountsOf(here)).toEqual(["checking", "savings"]);
     here.close();
     elsewhere.close();
   });
@@ -483,7 +560,7 @@ describe("Database.catchUp", () => {
     const [elsewhere] = await twoCopies(INSERT_CHECKING);
     await here.batch(INSERT_SAVINGS);
 
-    expect(await here.catchUp(await storedHead())).toEqual({ success: true, updated: true });
+    expect(await here.catchUp(await latestStored())).toEqual({ success: true, updated: true });
 
     expect(here.sha256).toBe(await storedHead());
     expect(await accountsOf(here)).toEqual(["checking", "savings"]);
@@ -498,7 +575,7 @@ describe("Database.catchUp", () => {
     await here.batch([{ sql: "UPDATE accounts SET type = 'Cash'" }]);
     const base = here.sha256;
 
-    expect(await here.catchUp(await storedHead())).toEqual({ success: false, code: "CONFLICT" });
+    expect(await here.catchUp(await latestStored())).toEqual({ success: false, code: "CONFLICT" });
 
     expect(here.sha256).toBe(base);
     expect(here.rebases).toBe(0);
@@ -516,7 +593,7 @@ describe("Database.catchUp", () => {
       }),
     );
 
-    expect(await here.catchUp(await storedHead())).toEqual({
+    expect(await here.catchUp(await latestStored())).toEqual({
       success: false,
       code: "NEWER_VERSION",
     });
@@ -532,7 +609,7 @@ describe("Database.catchUp", () => {
       await elsewhere.save();
       vi.mocked(downloadDatabasePart).mockResolvedValueOnce({ success: false, code });
 
-      expect(await here.catchUp(await storedHead())).toEqual({ success: false, code });
+      expect(await here.catchUp(await latestStored())).toEqual({ success: false, code });
       expect(await accountsOf(here)).toEqual(["checking"]);
       here.close();
       elsewhere.close();
@@ -549,14 +626,17 @@ describe("Database.catchUp", () => {
     );
     const saved = here.save();
     await vi.waitFor(() => expect(appendDatabasePart).toHaveBeenCalled());
+    const part = vi.mocked(appendDatabasePart).mock.lastCall![1];
+    vi.mocked(downloadDatabase).mockClear();
 
     // As the server says once the save's part is stored, before the save has heard.
-    const caught = here.catchUp("e".repeat(64));
+    const caught = here.catchUp({ index: 1, hash: await sha256Hex(part) });
     finishUpload();
     await saved;
 
     expect(await caught).toEqual({ success: true, updated: false });
     expect(here.rebases).toBe(0);
+    expect(downloadDatabase).not.toHaveBeenCalled();
     here.close();
     elsewhere.close();
   });

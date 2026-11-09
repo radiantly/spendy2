@@ -64,22 +64,21 @@ export function replaceDatabase(
 }
 
 /**
- * Adds `part` after the stored database's last part, whose sha256 `ifMatch`
- * must be. Network failures throw.
+ * Adds `part` after the stored database's last part, which it must follow:
+ * its AAD names the part before it. Network failures throw.
  */
 export function appendDatabasePart(
   token: string,
   part: Uint8Array<ArrayBuffer>,
-  ifMatch: string,
 ): Promise<UploadResult> {
-  return upload("POST", token, part, { "If-Match": `"${ifMatch}"` });
+  return upload("POST", token, part);
 }
 
 async function upload(
   method: "PUT" | "POST",
   token: string,
   body: Uint8Array<ArrayBuffer>,
-  headers: Record<string, string>,
+  headers: Record<string, string> = {},
 ): Promise<UploadResult> {
   const res = await fetch(PARTS_URL, {
     method,
@@ -90,7 +89,9 @@ async function upload(
     },
     body,
   });
-  if (res.status === 412) return { success: false, code: "CONFLICT" };
+  // A replacement's precondition failed (412), or an added part doesn't
+  // follow the stored database's last part (409).
+  if (res.status === 409 || res.status === 412) return { success: false, code: "CONFLICT" };
   if (res.status === 401) return { success: false, code: "UNAUTHORIZED" };
   const sha256 = parseEtag(res.headers.get("ETag"));
   if (!res.ok || sha256 === undefined) return { success: false, code: "UPLOAD_FAILED" };

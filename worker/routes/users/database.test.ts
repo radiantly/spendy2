@@ -48,12 +48,8 @@ function putParts(
   });
 }
 
-function postPart(
-  token: string | undefined,
-  body: Uint8Array | ReadableStream<Uint8Array>,
-  headers: Record<string, string> = {},
-) {
-  return send("POST", PARTS_URL, token, { body, headers });
+function postPart(token: string | undefined, body: Uint8Array | ReadableStream<Uint8Array>) {
+  return send("POST", PARTS_URL, token, { body });
 }
 
 function getParts(token: string | undefined, headers: Record<string, string> = {}) {
@@ -381,9 +377,7 @@ describe("POST /api/users/me/database/parts", () => {
   it("requires authentication", async () => {
     const { token, first } = await userWithDatabase();
 
-    const response = await postPart(undefined, databasePart(await sha256Hex(first)), {
-      "If-Match": await etagOf(first),
-    });
+    const response = await postPart(undefined, databasePart(await sha256Hex(first)));
 
     expect(response.status).toBe(401);
     expect(await downloaded(token)).toEqual(await downloadedAs([first]));
@@ -393,22 +387,20 @@ describe("POST /api/users/me/database/parts", () => {
     const { token, first } = await userWithDatabase();
     const second = databasePart(await sha256Hex(first));
 
-    const response = await postPart(token, second, { "If-Match": await etagOf(first) });
+    const response = await postPart(token, second);
 
     expect(response.status).toBe(204);
     expect(response.headers.get("ETag")).toBe(await etagOf(second));
     expect(await downloaded(token)).toEqual(await downloadedAs([first, second]));
   });
 
-  it("adds parts one after the other, each after the ETag of the last", async () => {
+  it("adds parts one after the other, each following the last", async () => {
     const { token, first } = await userWithDatabase();
     const second = databasePart(await sha256Hex(first));
     const third = databasePart(await sha256Hex(second));
 
-    const etag = (await postPart(token, second, { "If-Match": await etagOf(first) })).headers.get(
-      "ETag",
-    )!;
-    const response = await postPart(token, third, { "If-Match": etag });
+    await postPart(token, second);
+    const response = await postPart(token, third);
 
     expect(response.status).toBe(204);
     expect(await downloaded(token)).toEqual(await downloadedAs([first, second, third]));
@@ -417,62 +409,45 @@ describe("POST /api/users/me/database/parts", () => {
   it("reports how long receiving and storing the part took", async () => {
     const { token, first } = await userWithDatabase();
 
-    const response = await postPart(token, databasePart(await sha256Hex(first)), {
-      "If-Match": await etagOf(first),
-    });
+    const response = await postPart(token, databasePart(await sha256Hex(first)));
 
     expect(timedMetrics(response)).toEqual(["store", "total"]);
   });
 
-  describe("preconditions", () => {
-    it("requires If-Match", async () => {
-      const { token, first } = await userWithDatabase();
-
-      const response = await postPart(token, databasePart(await sha256Hex(first)));
-
-      expect(response.status).toBe(400);
-      expect(await downloaded(token)).toEqual(await downloadedAs([first]));
-    });
-
-    it("rejects a stale If-Match", async () => {
+  describe("conflicts", () => {
+    it("rejects a part made from an older version of the database", async () => {
       const { token, first } = await userWithDatabase();
       const second = databasePart(await sha256Hex(first));
-      await postPart(token, second, { "If-Match": await etagOf(first) });
+      await postPart(token, second);
 
-      const response = await postPart(token, databasePart(await sha256Hex(first), { seed: 9 }), {
-        "If-Match": await etagOf(first),
-      });
+      const response = await postPart(token, databasePart(await sha256Hex(first), { seed: 9 }));
 
-      expect(response.status).toBe(412);
-      expect(await response.json()).toEqual({ error: "PRECONDITION_FAILED" });
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({ error: "CONFLICT" });
       expect(await downloaded(token)).toEqual(await downloadedAs([first, second]));
+    });
+
+    it("rejects a part after one that was never stored, the same way", async () => {
+      const { token, first } = await userWithDatabase();
+
+      const response = await postPart(token, databasePart("a".repeat(64)));
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({ error: "CONFLICT" });
+      expect(await downloaded(token)).toEqual(await downloadedAs([first]));
     });
 
     it("can't create a database, not even with part 0", async () => {
       const token = await newUser();
 
-      const response = await postPart(token, databasePart(NO_PREVIOUS_PART), {
-        "If-Match": `"${NO_PREVIOUS_PART}"`,
-      });
+      const response = await postPart(token, databasePart(NO_PREVIOUS_PART));
 
-      expect(response.status).toBe(412);
+      expect(response.status).toBe(409);
       expect(await downloaded(token)).toBe(404);
     });
   });
 
   describe("body", () => {
-    it("rejects a part that doesn't point at the last part, as If-Match does", async () => {
-      const { token, first } = await userWithDatabase();
-
-      const response = await postPart(token, databasePart("a".repeat(64)), {
-        "If-Match": await etagOf(first),
-      });
-
-      expect(response.status).toBe(400);
-      expect(await response.json()).toEqual({ error: "BROKEN_PART_CHAIN" });
-      expect(await downloaded(token)).toEqual(await downloadedAs([first]));
-    });
-
     it("rejects a part whose user version is lower than the last part's", async () => {
       const token = await newUser();
       const [first] = await chainedParts({ userVersion: 2 });
@@ -481,9 +456,6 @@ describe("POST /api/users/me/database/parts", () => {
       const response = await postPart(
         token,
         databasePart(await sha256Hex(first!), { userVersion: 1 }),
-        {
-          "If-Match": await etagOf(first!),
-        },
       );
 
       expect(response.status).toBe(400);
@@ -495,9 +467,7 @@ describe("POST /api/users/me/database/parts", () => {
       const second = databasePart(await sha256Hex(first));
       const third = databasePart(await sha256Hex(second));
 
-      const response = await postPart(token, concatBytes([second, third]), {
-        "If-Match": await etagOf(first),
-      });
+      const response = await postPart(token, concatBytes([second, third]));
 
       expect(response.status).toBe(400);
       expect(await response.json()).toEqual({ error: "INVALID_PART_LENGTH" });
@@ -509,51 +479,47 @@ describe("POST /api/users/me/database/parts", () => {
       ["version 1", databasePart(NO_PREVIOUS_PART).with(6, 0x01), "INVALID_VERSION_BYTE"],
       ["a part cut off", databasePart(NO_PREVIOUS_PART).subarray(0, -1), "INVALID_PART_LENGTH"],
     ])("rejects %s", async (_name, body, error) => {
-      const { token, first } = await userWithDatabase();
+      const { token } = await userWithDatabase();
 
-      const response = await postPart(token, body, { "If-Match": await etagOf(first) });
+      const response = await postPart(token, body);
 
       expect(response.status).toBe(400);
       expect(await response.json()).toEqual({ error });
     });
   });
 
-  it("lets only one of two concurrent additions with the same If-Match win", async () => {
+  it("lets only one of two concurrent additions after the same part win", async () => {
     const { token, first } = await userWithDatabase();
-    const etag = await etagOf(first);
     const additions = [
       databasePart(await sha256Hex(first), { seed: 10 }),
       databasePart(await sha256Hex(first), { seed: 20 }),
     ];
 
-    const responses = await Promise.all(
-      additions.map((part) => postPart(token, part, { "If-Match": etag })),
-    );
+    const responses = await Promise.all(additions.map((part) => postPart(token, part)));
 
     const statuses = responses.map(({ status }) => status);
-    expect(statuses.toSorted()).toEqual([204, 412]);
+    expect(statuses.toSorted()).toEqual([204, 409]);
     expect(await downloaded(token)).toEqual(
       await downloadedAs([first, additions[statuses.indexOf(204)]!]),
     );
   });
 
-  it("checks If-Match once a part has arrived, against any added meanwhile", async () => {
+  it("checks that a part follows the last once it has arrived, against any added meanwhile", async () => {
     const { token, first } = await userWithDatabase();
-    const etag = await etagOf(first);
     const slow = databasePart(await sha256Hex(first), { seed: 10 });
     const { readable, writer } = slowBody(slow);
 
-    const slowAddition = postPart(token, readable, { "If-Match": etag });
+    const slowAddition = postPart(token, readable);
     await writer.write(slow.subarray(0, 4));
     // give the slow addition every chance to reach the user store
     await new Promise((resolve) => setTimeout(resolve, 100));
     const fast = databasePart(await sha256Hex(first), { seed: 20 });
-    const fastAddition = await postPart(token, fast, { "If-Match": etag });
+    const fastAddition = await postPart(token, fast);
     await writer.write(slow.subarray(4));
     await writer.close();
 
     expect(fastAddition.status).toBe(204);
-    expect((await slowAddition).status).toBe(412);
+    expect((await slowAddition).status).toBe(409);
     expect(await downloaded(token)).toEqual(await downloadedAs([first, fast]));
   });
 });
@@ -643,7 +609,7 @@ describe("GET /api/users/me/database/parts", () => {
       const [first] = await chainedParts({});
       const old = await firstUpload(token, [first!]);
       const second = databasePart(await sha256Hex(first!));
-      await postPart(token, second, { "If-Match": old });
+      await postPart(token, second);
 
       const response = await getParts(token, { "If-None-Match": old });
 
@@ -679,7 +645,7 @@ describe("GET /api/users/me/database/parts", () => {
   });
 });
 
-describe("GET /api/users/me/database/parts/{part}", () => {
+describe("GET /api/users/me/database/parts/{index}", () => {
   it("requires authentication", async () => {
     const token = await newUser();
     await firstUpload(token, await chainedParts({}));

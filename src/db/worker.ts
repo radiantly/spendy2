@@ -29,8 +29,6 @@ let db: Database | undefined;
 let kek: CryptoKey | undefined;
 /** The sha256 of the stored chain's last part, which the next save follows; null if never saved. */
 let head: string | null = null;
-/** How many parts the stored chain has: where the next part goes. */
-let partCount = 0;
 /** The changes since the version last saved (or opened). */
 let baseline: Session | undefined;
 /**
@@ -41,19 +39,20 @@ let pending: { baseline: Session; head?: string } | undefined;
 
 /**
  * How moving the unsaved changes onto a newer stored version went (see
- * `rebase` and `catchUp`): `moved`, with the version the next save follows
- * now; `conflict`, nothing changed, as they change what was changed there
- * too; or `unchained`, nothing changed, as the parts don't follow this
- * copy's, so the whole chain is needed.
+ * `rebase` and `catchUp`): `moved`, with the sha256 of each part read, in
+ * order, the last now the one the next save follows; `conflict`, nothing
+ * changed, as they change what was changed there too; or `unchained`,
+ * nothing changed, as the parts don't follow this copy's, so the whole chain
+ * is needed.
  */
 type Moved =
-  | { outcome: "moved"; unsaved: boolean; sha256: string; parts: number }
+  | { outcome: "moved"; unsaved: boolean; hashes: string[] }
   | { outcome: "conflict"; unsaved: boolean }
   | { outcome: "unchained"; unsaved: boolean };
 
-/** That the unsaved changes were moved onto the version `head` and `partCount` are now. */
-function moved(): Moved {
-  return { outcome: "moved", unsaved: unsaved(), sha256: head!, parts: partCount };
+/** That the unsaved changes were moved onto the version the parts with `hashes` make. */
+function moved(hashes: string[]): Moved {
+  return { outcome: "moved", unsaved: unsaved(), hashes };
 }
 
 function openDb() {
@@ -100,7 +99,7 @@ function deserialize(sqlite3: Sqlite3Static, bytes: Uint8Array<ArrayBuffer>) {
 
 /**
  * The database a stored chain of parts makes up, brought up to date, and
- * the sha256 of its last part. Part 0's SQLite file is migrated to each
+ * the sha256 of each part, in order. Part 0's SQLite file is migrated to each
  * changeset's user version before that changeset is applied, as it was when
  * the changeset was recorded, and to the latest version after the last.
  *
@@ -125,7 +124,7 @@ async function replay(sqlite3: Sqlite3Static, bytes: Uint8Array<ArrayBuffer>, ke
     next.close();
     throw error;
   }
-  return { db: next, head: parts.at(-1)!.hash, parts: parts.length };
+  return { db: next, hashes: parts.map(({ hash }) => hash) };
 }
 
 /** A new database, migrated to the latest version. */
@@ -145,23 +144,19 @@ const api = {
   /**
    * Opens the downloaded parts, or creates a new database when there are
    * none, brought up to the latest version. Replaces any open database.
-   * Returns the sha256 of the last part, null for a new database, and how
-   * many parts there are.
+   * Returns the sha256 of each part, in order: none for a new database.
    */
   async open(parts: Uint8Array<ArrayBuffer> | null, key: CryptoKey) {
     const sqlite3 = await sqlite3Promise;
     const opened =
-      parts === null
-        ? { db: create(sqlite3), head: null, parts: 0 }
-        : await replay(sqlite3, parts, key);
+      parts === null ? { db: create(sqlite3), hashes: [] } : await replay(sqlite3, parts, key);
 
     closeDb();
     db = opened.db;
-    head = opened.head;
-    partCount = opened.parts;
+    head = opened.hashes.at(-1) ?? null;
     kek = key;
     baseline = new Session(sqlite3, opened.db);
-    return { created: parts === null, sha256: head, parts: partCount };
+    return { created: parts === null, hashes: opened.hashes };
   },
 
   /**
@@ -206,8 +201,8 @@ const api = {
   /**
    * After uploading the last part `prepareSave` made: if it was `saved`,
    * changes are counted from it from now on, and the next save follows it.
-   * Returns whether there are unsaved changes, the sha256 of the last part
-   * saved, and how many parts there are.
+   * Returns whether there are unsaved changes, and the sha256 of the last
+   * part saved.
    */
   async finishSave(saved: boolean) {
     openDb();
@@ -215,10 +210,9 @@ const api = {
       baseline!.end();
       baseline = pending.baseline;
       head = pending.head;
-      partCount++;
     } else pending?.baseline.end();
     pending = undefined;
-    return { unsaved: unsaved(), sha256: head, parts: partCount };
+    return { unsaved: unsaved(), sha256: head };
   },
 
   /**
@@ -246,10 +240,9 @@ const api = {
 
     closeDb();
     db = next.db;
-    head = next.head;
-    partCount = next.parts;
+    head = next.hashes.at(-1)!;
     baseline = nextBaseline;
-    return moved();
+    return moved(next.hashes);
   },
 
   /**
@@ -298,8 +291,7 @@ const api = {
     baseline!.end();
     baseline = nextBaseline!;
     head = read.at(-1)!.hash;
-    partCount += read.length;
-    return moved();
+    return moved(read.map(({ hash }) => hash));
   },
 
   /**
@@ -359,7 +351,6 @@ const api = {
   async close() {
     closeDb();
     head = null;
-    partCount = 0;
     kek = undefined;
   },
 };

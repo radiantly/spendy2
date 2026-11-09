@@ -44,8 +44,13 @@ export const databaseEtagSchema = z.codec(z.string().regex(/^".{64}"$/), z.hash(
  */
 export const databaseUpdatesAuthSchema = z.strictObject({ token: z.string() });
 
-/** The sha256 of the database's last part, null without a database. */
-export const databaseUpdateSchema = z.strictObject({ sha256: z.hash("sha256").nullable() });
+/**
+ * The database's last part: its index, counting from 0, and its sha256 (the
+ * database's ETag). Null without a database.
+ */
+export const databaseUpdateSchema = z.strictObject({
+  latestPart: z.strictObject({ index: z.int().nonnegative(), hash: z.hash("sha256") }).nullable(),
+});
 
 /** The codes the server closes a database updates socket with. */
 export const DATABASE_UPDATES_CLOSE = {

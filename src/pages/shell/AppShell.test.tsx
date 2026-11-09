@@ -18,6 +18,7 @@ import { itFailsInFirefox } from "../../test/browsers.ts";
 import { nextDownload } from "../../test/download.ts";
 import { SOURCE_HASH_SQL, TOKEN, transactionId } from "../../test/fixtures.ts";
 import { holdNext } from "../../test/holdNext.ts";
+import { previousHashOf } from "../../test/parts.ts";
 import { rect, renderApp } from "../../test/renderAuthPage.tsx";
 import { openSqliteFile } from "../../test/sqliteFile.ts";
 import {
@@ -334,7 +335,9 @@ describe("TransactionsPage", () => {
 
     await expect.element(saveButton()).not.toBeInTheDocument();
     // Only the changes, after the part stored.
-    expect(appendDatabasePart).toHaveBeenCalledWith(TOKEN, expect.any(Uint8Array), stored.sha256);
+    expect(appendDatabasePart).toHaveBeenCalledWith(TOKEN, expect.any(Uint8Array));
+    const [, added] = vi.mocked(appendDatabasePart).mock.lastCall!;
+    expect(await previousHashOf(added)).toBe(stored.sha256);
     expect(await querySaved(`SELECT counterparty FROM transactions WHERE id = '${NEWER}'`)).toEqual(
       [{ counterparty: "Corner Shop" }],
     );
@@ -1212,7 +1215,8 @@ describe("a version saved elsewhere", () => {
 
     await expect.element(page.getByText("Corner Shop").shown()).toBeVisible();
     expect(downloadDatabase).not.toHaveBeenCalled();
-    expect(vi.mocked(downloadDatabasePart).mock.calls.map(([, index]) => index)).toEqual([1, 2]);
+    // Up to the last, which the server says.
+    expect(vi.mocked(downloadDatabasePart).mock.calls.map(([, index]) => index)).toEqual([1]);
   });
 
   it("is remembered for how many digits its row numbers have", async () => {
@@ -1238,7 +1242,9 @@ describe("a version saved elsewhere", () => {
     await userEvent.click(saveButton());
     await expect.element(saveButton()).not.toBeInTheDocument();
     expect(appendDatabasePart).toHaveBeenCalledOnce();
-    expect(appendDatabasePart).toHaveBeenCalledWith(TOKEN, expect.any(Uint8Array), newer);
+    expect(appendDatabasePart).toHaveBeenCalledWith(TOKEN, expect.any(Uint8Array));
+    const [, added] = vi.mocked(appendDatabasePart).mock.lastCall!;
+    expect(await previousHashOf(added)).toBe(newer);
     expect(
       await querySaved("SELECT counterparty FROM transactions ORDER BY sort_key DESC"),
     ).toEqual([{ counterparty: "Corner Shop" }, { counterparty: "Café Sol" }]);

@@ -10,12 +10,15 @@ export const PING_INTERVAL = 30_000;
 /** How long to wait before connecting again (ms), after each try in a row; then the last. */
 export const RETRY_DELAYS = [1_000, 2_000, 4_000, 8_000, 16_000, 30_000];
 
+/** The stored database's last part: its index, counting from 0, and its sha256. */
+export type LatestPart = { index: number; hash: string };
+
 export type DatabaseWatcher = {
   /**
-   * The sha256 of the stored database's last part, null without a database:
-   * on each connection, and after each change.
+   * The stored database's last part, null without a database: on each
+   * connection, and after each change.
    */
-  onHead: (sha256: string | null) => void;
+  onLatestPart: (latestPart: LatestPart | null) => void;
   /** The server no longer accepts the session; nothing more is heard. */
   onSessionEnded: () => void;
 };
@@ -58,7 +61,7 @@ export function watchDatabase(username: string, token: string, watcher: Database
       // Pongs, and anything else, are only to keep it open.
       if (update === null) return;
       retries = 0;
-      watcher.onHead(update.sha256);
+      watcher.onLatestPart(update.latestPart);
     });
     ws.addEventListener("close", ({ code }) => {
       if (pingTimer !== undefined) clearInterval(pingTimer);

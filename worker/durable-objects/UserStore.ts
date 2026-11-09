@@ -174,7 +174,7 @@ export class UserStore extends DurableObject<Env> {
     sessionId: string,
     stream: ReadableStream<Uint8Array>,
     ifMatch: string | null,
-  ): Promise<UploadDatabaseResponse> {
+  ): Promise<ReplaceDatabaseResponse> {
     if (!this.isActiveSession(sessionId)) return { success: false, code: "UNAUTHORIZED" };
 
     const read = await readParts(new Uint8Array(await new Response(stream).arrayBuffer()));
@@ -195,14 +195,15 @@ export class UserStore extends DurableObject<Env> {
   }
 
   /**
-   * Adds the part `stream` holds after the last part, whose sha256
-   * `ifMatch` must be. Only replaceDatabase can create a database.
+   * Adds the part `stream` holds after the last part, which it must follow
+   * (its AAD names the part before it). CONFLICT if it doesn't, as when it
+   * was made from another version of the database, or if there's no
+   * database: only replaceDatabase can create one.
    */
   async appendDatabasePart(
     sessionId: string,
     stream: ReadableStream<Uint8Array>,
-    ifMatch: string,
-  ): Promise<UploadDatabaseResponse> {
+  ): Promise<AppendDatabasePartResponse> {
     if (!this.isActiveSession(sessionId)) return { success: false, code: "UNAUTHORIZED" };
 
     const read = await readParts(new Uint8Array(await new Response(stream).arrayBuffer()));
@@ -213,8 +214,9 @@ export class UserStore extends DurableObject<Env> {
 
     // no await from here on, so nothing is stored between the check and the write
     const last = this.database.lastPart();
-    if (last?.hash !== ifMatch) return { success: false, code: "PRECONDITION_FAILED" };
+    if (last === undefined) return { success: false, code: "CONFLICT" };
     const code = partChainError(part, last);
+    if (code === "BROKEN_PART_CHAIN") return { success: false, code: "CONFLICT" };
     if (code !== undefined) return { success: false, code };
 
     this.database.append(part);
@@ -304,8 +306,9 @@ export class UserStore extends DurableObject<Env> {
 
   /** What a socket is told of the database: its last part, as it is now. */
   private updateMessage() {
+    const last = this.database.lastPart();
     const update: z.input<typeof databaseUpdateSchema> = {
-      sha256: this.database.lastPart()?.hash ?? null,
+      latestPart: last === undefined ? null : { index: last.part, hash: last.hash },
     };
     return JSON.stringify(update);
   }
@@ -332,11 +335,22 @@ interface KvSchema {
 }
 
 /** `sha256` is the last part's, the ETag of the whole database. */
-export type UploadDatabaseResponse =
+export type ReplaceDatabaseResponse =
   | { success: true; sha256: string }
   | {
       success: false;
       code: "UNAUTHORIZED" | PartFormatError | PartChainError | "PRECONDITION_FAILED";
+    };
+
+/**
+ * `sha256` is the part's, now the last, the ETag of the whole database. A
+ * part that doesn't follow the last is a CONFLICT, not a BROKEN_PART_CHAIN.
+ */
+export type AppendDatabasePartResponse =
+  | { success: true; sha256: string }
+  | {
+      success: false;
+      code: "UNAUTHORIZED" | PartFormatError | "USER_VERSION_DECREASED" | "CONFLICT";
     };
 
 /** `sha256` is the last part's, the ETag of the whole database. */

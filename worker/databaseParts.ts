@@ -18,6 +18,17 @@
  * and the scripts.
  */
 
+export const PART_FORMAT = `
+\`\`\`
+                                                                   AES-GCM(gzip(content))
+                                                       ---------------------------------------------
+"SPENDY" | 0x02 | length (4) | wrapped data key (40) | AAD (36) | nonce (12) | ciphertext | tag (16)
+                     \\                                      \\
+                      \\                                     SHA256 of previous part (32) | DB user_version (4)                   
+                       \\
+                       Length of this part in bytes, little-endian
+\`\`\``;
+
 export const PART_MAGIC = new TextEncoder().encode("SPENDY");
 export const PART_VERSION = 0x02;
 

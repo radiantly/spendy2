@@ -8,6 +8,7 @@ import {
   type UploadErrorCode,
   type UploadResult,
 } from "../api/database.ts";
+import type { LatestPart } from "../api/databaseUpdates.ts";
 import type { Session } from "../lib/session.ts";
 import { connect, RemoteError, transfer, type Connection } from "./rpc.ts";
 import type { DatabaseApi, Statement } from "./worker.ts";
@@ -73,9 +74,11 @@ export class Database {
   readonly #worker: Worker;
   readonly #connection: Connection<DatabaseApi>;
   readonly #token: string;
-  #sha256: string | null;
-  /** How many parts are stored up to `#sha256`'s: where the next one is. */
-  #parts: number;
+  /**
+   * The sha256 of each stored part this copy is based on, in order: the
+   * next save follows the last, and goes at their count.
+   */
+  #hashes: string[];
   /** Settles when the latest save or catch-up has; they run one at a time. */
   #saving: Promise<unknown> = Promise.resolve();
   #unsaved = false;
@@ -90,13 +93,12 @@ export class Database {
     worker: Worker,
     connection: Connection<DatabaseApi>,
     token: string,
-    { sha256, parts }: { sha256: string | null; parts: number },
+    { hashes }: { hashes: string[] },
   ) {
     this.#worker = worker;
     this.#connection = connection;
     this.#token = token;
-    this.#sha256 = sha256;
-    this.#parts = parts;
+    this.#hashes = hashes;
   }
 
   /**
@@ -104,7 +106,7 @@ export class Database {
    * next save follows; null if never saved.
    */
   get sha256() {
-    return this.#sha256;
+    return this.#hashes.at(-1) ?? null;
   }
 
   /**
@@ -245,48 +247,90 @@ export class Database {
   }
 
   /**
-   * Brings in what was saved elsewhere, unless `sha256`, the stored
-   * database's last part as the server last said, is the one this copy is
-   * based on: the unsaved changes are moved onto it, as a save does when it
-   * finds another version saved since (see `save`). Only the parts saved
-   * since are downloaded, unless the stored version isn't one that follows
-   * this copy's.
+   * Brings in what was saved elsewhere, the server saying the stored
+   * database's last part is `latestPart` (null without one): the unsaved
+   * changes are moved onto it, as a save does when it finds another version
+   * saved since (see `save`). Nothing's done if this copy is based on that
+   * part, its last or one before: it's up to date already. Only the parts
+   * after this copy's are downloaded, unless the stored chain was replaced.
    *
    * It waits for any save, and saves wait for it: both move this copy's base.
    */
-  catchUp(sha256: string | null): Promise<CatchUpResult> {
-    const result = this.#saving.then(() =>
-      sha256 === this.#sha256 ? { success: true as const, updated: false } : this.#catchUp(),
-    );
+  catchUp(latestPart: LatestPart | null): Promise<CatchUpResult> {
+    const result = this.#saving.then(() => this.#catchUpTo(latestPart));
     this.#saving = result.catch(() => {});
     return result;
   }
 
-  async #catchUp(): Promise<CatchUpResult> {
-    if (this.#sha256 !== null) {
-      const added = await this.#downloadPartsAdded();
+  async #catchUpTo(latestPart: LatestPart | null): Promise<CatchUpResult> {
+    if (latestPart === null || this.#hashes[latestPart.index] === latestPart.hash)
+      return { success: true, updated: false };
+    // Parts after this copy's are downloaded on their own, unless they don't
+    // follow it. Without parts of its own, or with a different part where it
+    // has one (the stored chain was replaced), the whole chain is needed.
+    if (this.#hashes.length > 0 && latestPart.index >= this.#hashes.length) {
+      const added = await this.#downloadPartsThrough(latestPart.index);
       if (!added.success) return added;
-      if (added.parts.length > 0) {
-        const moved = await this.#move(() =>
-          this.#connection.remote.catchUp(transfer(concat(added.parts))),
-        );
-        // Otherwise they don't follow this copy's: the whole chain is needed.
+      if (added.parts !== null) {
+        const moved = await this.#moveOnto(added.parts);
         if (moved !== null) return moved;
       }
     }
+    return this.#rebase();
+  }
+
+  /** Brings in whatever was saved since this copy's version (see `save`). */
+  async #catchUp(): Promise<CatchUpResult> {
+    if (this.#hashes.length > 0) {
+      const added = await this.#downloadPartsAdded();
+      if (!added.success) return added;
+      if (added.parts.length > 0) {
+        const moved = await this.#moveOnto(added.parts);
+        if (moved !== null) return moved;
+      }
+    }
+    return this.#rebase();
+  }
+
+  /**
+   * Moves the unsaved changes onto `parts`, those stored after this copy's.
+   * Null if they don't follow its: the whole chain is needed.
+   */
+  #moveOnto(parts: readonly Uint8Array<ArrayBuffer>[]) {
+    return this.#move(() => this.#connection.remote.catchUp(transfer(concat(parts))), this.#hashes);
+  }
+
+  /** Moves the unsaved changes onto the whole stored database, unless it's this copy's version. */
+  async #rebase(): Promise<CatchUpResult> {
     const download = await downloadDatabase(this.#token);
     if (!download.success)
       return download.code === "NOT_FOUND"
         ? { success: true, updated: false }
         : { success: false, code: download.code };
-    if (download.sha256 === this.#sha256) return { success: true, updated: false };
-    return (await this.#move(() => this.#connection.remote.rebase(transfer(download.parts))))!;
+    if (download.sha256 === this.sha256) return { success: true, updated: false };
+    return (await this.#move(() => this.#connection.remote.rebase(transfer(download.parts)), []))!;
+  }
+
+  /**
+   * The parts stored after the ones this copy is based on, up to the one at
+   * index `last`, by downloading each in turn. Null if one isn't there: the
+   * stored chain was replaced since.
+   */
+  async #downloadPartsThrough(last: number) {
+    const parts: Uint8Array<ArrayBuffer>[] = [];
+    for (let index = this.#hashes.length; index <= last; index++) {
+      const download = await downloadDatabasePart(this.#token, index);
+      if (download.success) parts.push(download.parts);
+      else if (download.code === "NOT_FOUND") return { success: true as const, parts: null };
+      else return { success: false as const, code: download.code };
+    }
+    return { success: true as const, parts };
   }
 
   /** The parts stored after the ones this copy is based on, by downloading each in turn. */
   async #downloadPartsAdded() {
     const parts: Uint8Array<ArrayBuffer>[] = [];
-    for (let index = this.#parts; ; index++) {
+    for (let index = this.#hashes.length; ; index++) {
       const download = await downloadDatabasePart(this.#token, index);
       if (download.success) parts.push(download.parts);
       else if (download.code === "NOT_FOUND") return { success: true as const, parts };
@@ -296,9 +340,13 @@ export class Database {
 
   /**
    * Moves the unsaved changes onto a newer version, as `move` does in the
-   * worker, taking what it says. Null if the parts don't follow this copy's.
+   * worker, taking what it says: the parts it reads follow `base`, the
+   * hashes of the parts before them. Null if they don't follow this copy's.
    */
-  async #move(move: () => ReturnType<DatabaseApi["rebase"]>): Promise<CatchUpResult | null> {
+  async #move(
+    move: () => ReturnType<DatabaseApi["rebase"]>,
+    base: readonly string[],
+  ): Promise<CatchUpResult | null> {
     let moved;
     try {
       moved = await this.#change(move);
@@ -310,8 +358,7 @@ export class Database {
     if (moved.outcome === "unchained") return null;
     if (moved.outcome === "conflict") return { success: false, code: "CONFLICT" };
 
-    this.#sha256 = moved.sha256;
-    this.#parts = moved.parts;
+    this.#hashes = [...base, ...moved.hashes];
     this.#rebases++;
     this.#changed();
     return { success: true, updated: true };
@@ -320,25 +367,22 @@ export class Database {
   async #upload(): Promise<UploadResult> {
     const prepared = await this.#connection.remote.prepareSave();
     // Nothing changed since the version saved.
-    if (prepared === null) return { success: true, sha256: this.#sha256! };
+    if (prepared === null) return { success: true, sha256: this.sha256! };
 
     let result: UploadResult;
     try {
       result =
         prepared.previous === null
           ? await replaceDatabase(this.#token, prepared.part, { ifNoneMatch: true })
-          : await appendDatabasePart(this.#token, prepared.part, prepared.previous);
+          : await appendDatabasePart(this.#token, prepared.part);
     } catch (error) {
       // The upload's error is what went wrong, whatever finishing says.
       await this.#change(() => this.#connection.remote.finishSave(false)).catch(() => {});
       throw error;
     }
-    const { sha256, parts } = await this.#change(() =>
-      this.#connection.remote.finishSave(result.success),
-    );
+    const { sha256 } = await this.#change(() => this.#connection.remote.finishSave(result.success));
     if (!result.success) return result;
-    this.#sha256 = sha256;
-    this.#parts = parts;
+    this.#hashes.push(sha256!);
     return { success: true, sha256: sha256! };
   }
 

@@ -13,7 +13,7 @@ import {
 } from "../../worker/test/helpers.ts";
 import { logoutUser } from "./auth.ts";
 import { appendDatabasePart, replaceDatabase } from "./database.ts";
-import { PING_INTERVAL, RETRY_DELAYS, watchDatabase } from "./databaseUpdates.ts";
+import { PING_INTERVAL, RETRY_DELAYS, watchDatabase, type LatestPart } from "./databaseUpdates.ts";
 
 let stop: (() => void) | undefined;
 afterEach(() => {
@@ -24,10 +24,13 @@ afterEach(() => {
 
 /** Watches alice's database with `token`, keeping what it hears. */
 function watching(token: string) {
-  const heads: (string | null)[] = [];
+  const heard: (LatestPart | null)[] = [];
   const onSessionEnded = vi.fn();
-  stop = watchDatabase("alice", token, { onHead: (head) => heads.push(head), onSessionEnded });
-  return { heads, onSessionEnded };
+  stop = watchDatabase("alice", token, {
+    onLatestPart: (latestPart) => heard.push(latestPart),
+    onSessionEnded,
+  });
+  return { heard, onSessionEnded };
 }
 
 describe("watchDatabase, with the server", () => {
@@ -43,22 +46,26 @@ describe("watchDatabase, with the server", () => {
   afterEach(() => reset());
 
   it("is told the last part on connecting, and after each upload", async () => {
-    const { heads } = watching(token);
-    await expect.poll(() => heads).toEqual([null]);
+    const { heard } = watching(token);
+    await expect.poll(() => heard).toEqual([null]);
 
     const [first] = await chainedParts({});
     await replaceDatabase(token, first!, { ifNoneMatch: true });
     const second = databasePart(await sha256Hex(first!));
-    await appendDatabasePart(token, second, await sha256Hex(first!));
+    await appendDatabasePart(token, second);
 
     await expect
-      .poll(() => heads)
-      .toEqual([null, await sha256Hex(first!), await sha256Hex(second)]);
+      .poll(() => heard)
+      .toEqual([
+        null,
+        { index: 0, hash: await sha256Hex(first!) },
+        { index: 1, hash: await sha256Hex(second) },
+      ]);
   });
 
   it("says the session ended once it's logged out", async () => {
-    const { heads, onSessionEnded } = watching(token);
-    await expect.poll(() => heads).toHaveLength(1);
+    const { heard, onSessionEnded } = watching(token);
+    await expect.poll(() => heard).toHaveLength(1);
 
     await logoutUser(token);
 
@@ -68,22 +75,22 @@ describe("watchDatabase, with the server", () => {
   it("says the session ended for a token the server doesn't accept", async () => {
     const unknown = tokenSchema.encode({ username: "alice", sessionId: crypto.randomUUID() });
 
-    const { heads, onSessionEnded } = watching(unknown);
+    const { heard, onSessionEnded } = watching(unknown);
 
     await expect.poll(() => onSessionEnded.mock.calls).toHaveLength(1);
-    expect(heads).toEqual([]);
+    expect(heard).toEqual([]);
   });
 
   it("hears nothing more once stopped", async () => {
-    const { heads } = watching(token);
-    await expect.poll(() => heads).toHaveLength(1);
+    const { heard } = watching(token);
+    await expect.poll(() => heard).toHaveLength(1);
 
     stop!();
     const [first] = await chainedParts({});
     await replaceDatabase(token, first!, { ifNoneMatch: true });
     await new Promise((resolve) => setTimeout(resolve, 100));
 
-    expect(heads).toHaveLength(1);
+    expect(heard).toHaveLength(1);
   });
 });
 
@@ -119,7 +126,7 @@ class FakeSocket extends EventTarget {
 }
 
 describe("watchDatabase's socket", () => {
-  const HEAD = JSON.stringify({ sha256: "a".repeat(64) });
+  const UPDATE = JSON.stringify({ latestPart: { index: 0, hash: "a".repeat(64) } });
   const latest = () => FakeSocket.made.at(-1)!;
 
   beforeEach(() => {
@@ -169,7 +176,7 @@ describe("watchDatabase's socket", () => {
     latest().drop();
     vi.advanceTimersByTime(RETRY_DELAYS[1]!);
 
-    latest().receive(HEAD);
+    latest().receive(UPDATE);
     latest().drop();
     vi.advanceTimersByTime(RETRY_DELAYS[0]!);
 
@@ -187,16 +194,19 @@ describe("watchDatabase's socket", () => {
   });
 
   it("passes on updates, and nothing else it's sent", () => {
-    const { heads } = watching("the-token");
+    const { heard } = watching("the-token");
     latest().open();
 
     latest().receive("pong");
     latest().receive("{");
-    latest().receive(JSON.stringify({ sha256: "not a hash" }));
-    latest().receive(HEAD);
-    latest().receive(JSON.stringify({ sha256: null }));
+    latest().receive(JSON.stringify({ latestPart: { index: 0, hash: "not a hash" } }));
+    latest().receive(JSON.stringify({ latestPart: { index: -1, hash: "a".repeat(64) } }));
+    // As the server used to say.
+    latest().receive(JSON.stringify({ sha256: "a".repeat(64) }));
+    latest().receive(UPDATE);
+    latest().receive(JSON.stringify({ latestPart: null }));
 
-    expect(heads).toEqual(["a".repeat(64), null]);
+    expect(heard).toEqual([{ index: 0, hash: "a".repeat(64) }, null]);
   });
 
   it("doesn't connect again once stopped", () => {

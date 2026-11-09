@@ -23,6 +23,7 @@ import { openDatabase } from "../db/database.ts";
 import { deriveKek } from "../lib/kek.ts";
 import { saveSession, type Session } from "../lib/session.ts";
 import { EXPORT_KEY, TOKEN } from "./fixtures.ts";
+import { previousHashOf } from "./parts.ts";
 
 /** A stored database: its parts, in order, and the last one's sha256. */
 export type StoredDatabase = { parts: readonly Uint8Array<ArrayBuffer>[]; sha256: string };
@@ -65,11 +66,16 @@ const watchers = new Set<DatabaseWatcher>();
 /** What they'd be told while it's held back (see `savedElsewhere`). */
 let heldBack: (() => void)[] | null = null;
 
+/** The last part served, as the server tells what watches it. */
+function latestPart() {
+  return served === null ? null : { index: served.parts.length - 1, hash: served.sha256 };
+}
+
 /** Tells the watchers the last part, as it is now, as the server does after an upload. */
 function tellWatchers() {
-  const head = served?.sha256 ?? null;
+  const latest = latestPart();
   const tell = () => {
-    for (const watcher of watchers) watcher.onHead(head);
+    for (const watcher of watchers) watcher.onLatestPart(latest);
   };
   if (heldBack) heldBack.push(tell);
   // As a message arrives: after whatever's running now.
@@ -114,8 +120,8 @@ export function serve(stored: StoredDatabase | null) {
     tellWatchers();
     return { success: true, sha256: served.sha256 };
   });
-  vi.mocked(appendDatabasePart).mockImplementation(async (_token, part, ifMatch) => {
-    if (served === null || ifMatch !== served.sha256) return conflict;
+  vi.mocked(appendDatabasePart).mockImplementation(async (_token, part) => {
+    if (served === null || (await previousHashOf(part)) !== served.sha256) return conflict;
     served = { parts: [...served.parts, part.slice()], sha256: await sha256Hex(part) };
     tellWatchers();
     return { success: true, sha256: served.sha256 };
@@ -123,9 +129,9 @@ export function serve(stored: StoredDatabase | null) {
   vi.mocked(watchDatabase).mockImplementation((_username, _token, watcher) => {
     watchers.add(watcher);
     // As the server does once a socket connects.
-    const head = served?.sha256 ?? null;
+    const latest = latestPart();
     setTimeout(() => {
-      if (watchers.has(watcher)) watcher.onHead(head);
+      if (watchers.has(watcher)) watcher.onLatestPart(latest);
     });
     return () => void watchers.delete(watcher);
   });

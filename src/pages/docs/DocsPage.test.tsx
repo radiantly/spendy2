@@ -7,6 +7,7 @@ import {
   replaceDatabase,
 } from "../../api/database.ts";
 import { SOURCE_HASH_SQL, TOKEN, transactionId } from "../../test/fixtures.ts";
+import { previousHashOf } from "../../test/parts.ts";
 import { renderApp } from "../../test/renderAuthPage.tsx";
 import { loggedIn, storedDatabase, UPLOADED } from "../../test/storedDatabase.ts";
 import { DOCS_SITE } from "./docsSite.ts";
@@ -127,6 +128,8 @@ describe("DocsPage", () => {
 
     await expect.element(saveButton()).not.toBeInTheDocument();
     expect(downloadDatabase).toHaveBeenCalledOnce();
-    expect(appendDatabasePart).toHaveBeenCalledWith(TOKEN, expect.any(Uint8Array), stored.sha256);
+    expect(appendDatabasePart).toHaveBeenCalledWith(TOKEN, expect.any(Uint8Array));
+    const [, added] = vi.mocked(appendDatabasePart).mock.lastCall!;
+    expect(await previousHashOf(added)).toBe(stored.sha256);
   });
 });
