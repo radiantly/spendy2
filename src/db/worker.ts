@@ -8,17 +8,12 @@
  * it's known whether the database differs from the version last saved, and
  * so a save only uploads what changed since.
  */
-import sqlite3InitModule, {
-  type BindingSpec,
-  type Database,
-  type Sqlite3Static,
-} from "@sqlite.org/sqlite-wasm";
+import sqlite3InitModule, { type BindingSpec, type Database } from "@sqlite.org/sqlite-wasm";
 import { NO_PREVIOUS_PART, sha256Hex, type DatabasePart } from "../../worker/databaseParts.ts";
 import { applyChanges, ChangesConflictError, invert, Session } from "./changes.ts";
-import { configureConnection } from "./connection.ts";
-import { migrate } from "./migrate.ts";
 import { MIGRATIONS } from "./migrations.ts";
 import { DatabasePartError, decryptPart, encryptPart, readChain } from "./parts.ts";
+import { create, replay } from "./replay.ts";
 import { expose, transfer, type WorkerScope } from "./rpc.ts";
 
 const sqlite3Promise = sqlite3InitModule();
@@ -73,73 +68,6 @@ function closeDb() {
   pending = baseline = db = undefined;
 }
 
-/** A new database holding the SQLite file `bytes`. */
-function deserialize(sqlite3: Sqlite3Static, bytes: Uint8Array<ArrayBuffer>) {
-  const next = new sqlite3.oo1.DB(":memory:");
-  try {
-    // sqlite takes ownership of the buffer: it frees it on close and may
-    // reallocate it as the database grows.
-    const pointer = sqlite3.wasm.allocFromTypedArray(bytes);
-    next.checkRc(
-      sqlite3.capi.sqlite3_deserialize(
-        next,
-        "main",
-        pointer,
-        bytes.byteLength,
-        bytes.byteLength,
-        sqlite3.capi.SQLITE_DESERIALIZE_FREEONCLOSE | sqlite3.capi.SQLITE_DESERIALIZE_RESIZEABLE,
-      ),
-    );
-  } catch (error) {
-    next.close();
-    throw error;
-  }
-  return next;
-}
-
-/**
- * The database a stored chain of parts makes up, brought up to date, and
- * the sha256 of each part, in order. Part 0's SQLite file is migrated to each
- * changeset's user version before that changeset is applied, as it was when
- * the changeset was recorded, and to the latest version after the last.
- *
- * No integrity check: decrypting already rejects a part changed since it
- * was saved, and checking a large database takes a while.
- */
-async function replay(sqlite3: Sqlite3Static, bytes: Uint8Array<ArrayBuffer>, key: CryptoKey) {
-  const parts = await readChain(bytes);
-  const [file, ...changesets] = await Promise.all(parts.map((part) => decryptPart(part, key)));
-
-  const next = deserialize(sqlite3, file!);
-  try {
-    // Unconfigured until the end, as a new database is while it's migrated.
-    // Changesets already hold what triggers and foreign key actions did.
-    for (const [i, changeset] of changesets.entries()) {
-      migrate(next, MIGRATIONS, parts[i + 1]!.userVersion);
-      applyChanges(sqlite3, next, changeset);
-    }
-    migrate(next, MIGRATIONS);
-    configureConnection(next);
-  } catch (error) {
-    next.close();
-    throw error;
-  }
-  return { db: next, hashes: parts.map(({ hash }) => hash) };
-}
-
-/** A new database, migrated to the latest version. */
-function create(sqlite3: Sqlite3Static) {
-  const next = new sqlite3.oo1.DB(":memory:");
-  try {
-    migrate(next, MIGRATIONS);
-    configureConnection(next);
-  } catch (error) {
-    next.close();
-    throw error;
-  }
-  return next;
-}
-
 const api = {
   /**
    * Opens the downloaded parts, or creates a new database when there are
@@ -149,7 +77,9 @@ const api = {
   async open(parts: Uint8Array<ArrayBuffer> | null, key: CryptoKey) {
     const sqlite3 = await sqlite3Promise;
     const opened =
-      parts === null ? { db: create(sqlite3), hashes: [] } : await replay(sqlite3, parts, key);
+      parts === null
+        ? { db: create(sqlite3, MIGRATIONS), hashes: [] }
+        : await replay(sqlite3, parts, key, MIGRATIONS);
 
     closeDb();
     db = opened.db;
@@ -225,7 +155,7 @@ const api = {
   async rebase(parts: Uint8Array<ArrayBuffer>): Promise<Moved> {
     const sqlite3 = await sqlite3Promise;
     openDb();
-    const next = await replay(sqlite3, parts, kek!);
+    const next = await replay(sqlite3, parts, kek!, MIGRATIONS);
 
     const nextBaseline = new Session(sqlite3, next.db);
     try {

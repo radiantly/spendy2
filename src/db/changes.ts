@@ -109,8 +109,35 @@ export class Session {
     return this.changes().length > 0;
   }
 
+  /**
+   * Adds to the changes what makes `table` as schema `from` has it into
+   * the table as this database has it: the same table, in a database
+   * attached to this one.
+   */
+  addDifference(from: string, table: string) {
+    this.#db.checkRc(this.#sqlite3.capi.sqlite3session_diff(this.#pointer, from, table, 0));
+  }
+
   end() {
     this.#sqlite3.capi.sqlite3session_delete(this.#pointer);
+  }
+}
+
+/**
+ * The changes that make the database attached to `db` as schema `from` hold
+ * what `db` does: how `db` differs from it, as if recorded while it was
+ * changed. Both must have the same tables.
+ */
+export function difference(sqlite3: Sqlite3Static, db: Database, from: string) {
+  const session = new Session(sqlite3, db);
+  try {
+    const tables = db.selectValues(
+      "SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite~_%' ESCAPE '~'",
+    );
+    for (const table of tables) session.addDifference(from, String(table));
+    return session.changes();
+  } finally {
+    session.end();
   }
 }
 

@@ -1,9 +1,10 @@
 import sqlite3InitModule, { type Database } from "@sqlite.org/sqlite-wasm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { applyChanges, invert, Session } from "./changes.ts";
+import { applyChanges, difference, invert, Session } from "./changes.ts";
 import { configureConnection } from "./connection.ts";
 import { migrate } from "./migrate.ts";
 import { MIGRATIONS } from "./migrations.ts";
+import { load } from "./replay.ts";
 import { SOURCE_HASH_SQL, transactionId } from "../test/fixtures.ts";
 
 const sqlite3 = await sqlite3InitModule();
@@ -162,5 +163,73 @@ describe("Session.hasChanges", () => {
     ).toThrow("FOREIGN KEY");
 
     expect(session.hasChanges()).toBe(false);
+  });
+});
+
+describe("difference", () => {
+  /** Attaches a copy of the database as it is now, as schema `before`. */
+  function attachCopy() {
+    db.exec("ATTACH ':memory:' AS before");
+    load(sqlite3, db, "before", sqlite3.capi.sqlite3_js_db_export(db));
+  }
+
+  /** A new database holding what `db` did when `attachCopy` copied it. */
+  function copy() {
+    const other = new sqlite3.oo1.DB(":memory:");
+    load(sqlite3, other, "main", sqlite3.capi.sqlite3_js_db_export(db, "before"));
+    return other;
+  }
+
+  it("is empty for a database that's the same", () => {
+    attachCopy();
+
+    expect(difference(sqlite3, db, "before")).toHaveLength(0);
+  });
+
+  it.each([
+    ["an insert", "INSERT INTO accounts VALUES ('Cash', 'USD', 'Cash', NULL)"],
+    ["an update", `UPDATE transactions SET counterparty = 'Corner Shop' WHERE id = '${T1}'`],
+    ["a delete", `DELETE FROM transactions WHERE id = '${T2}'`],
+    // The triggers delete Groceries, then Food, and the conversion goes with its transaction.
+    ["what triggers and foreign keys did", `DELETE FROM transactions WHERE id = '${T1}'`],
+    [
+      "changes to several tables",
+      `INSERT INTO categories (name) VALUES ('Coffee');
+       UPDATE transactions SET category = 'Coffee', amount = -5 WHERE id = '${T2}';
+       UPDATE conversions SET amount = -91 WHERE transaction_id = '${T1}'`,
+    ],
+  ])("is what was changed since: %s", (_name, sql) => {
+    attachCopy();
+    db.exec(sql);
+    const after = state();
+
+    const changes = difference(sqlite3, db, "before");
+
+    // Applied to the copy, they make it what the database is now.
+    const other = copy();
+    try {
+      applyChanges(sqlite3, other, changes);
+      const now = ["accounts", "sources", "categories", "transactions", "conversions"].map(
+        (table) => other.selectArrays(`SELECT * FROM ${table} ORDER BY 1, 2`),
+      );
+      expect(now).toEqual(after);
+    } finally {
+      other.close();
+    }
+  });
+
+  it("is the same as what a session recorded of the changes", () => {
+    attachCopy();
+    const recorded = record(`UPDATE transactions SET amount = -250 WHERE id = '${T1}'`);
+
+    expect(difference(sqlite3, db, "before")).toEqual(recorded);
+  });
+
+  it("leaves out a row changed and changed back", () => {
+    attachCopy();
+    db.exec(`UPDATE transactions SET amount = -250 WHERE id = '${T1}'`);
+    db.exec(`UPDATE transactions SET amount = -100 WHERE id = '${T1}'`);
+
+    expect(difference(sqlite3, db, "before")).toHaveLength(0);
   });
 });

@@ -15,6 +15,7 @@
     "cf-typegen": "wrangler types",
     "create-dev-env": "node scripts/create-dev-env.ts",
     "init-session": "node scripts/init-session.ts",
+    "pull-database": "node scripts/pull-database.ts",
     "seed-database": "node scripts/seed-database.ts"
   },
   "dependencies": {

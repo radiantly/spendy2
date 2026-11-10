@@ -5,21 +5,16 @@
  *
  *   npm run seed-database -- [--user <name>] --transactions <count> --brokerage|--no-brokerage [--replace]
  */
-import fs from "fs";
-import path from "path";
 import { confirm, intro, outro, spinner, text } from "@clack/prompts";
-import sqlite3InitModule from "@sqlite.org/sqlite-wasm";
-import { configureConnection } from "../src/db/connection.ts";
-import { migrate, migrationsFromFiles } from "../src/db/migrate.ts";
 import { encryptPart } from "../src/db/parts.ts";
+import { create } from "../src/db/replay.ts";
 import { databaseParts } from "./api.ts";
 import { booleanFlag, parseFlags, textFlag } from "./flags.ts";
 import { fail, onCancel } from "./lib.ts";
+import { MIGRATIONS, sqlite3 } from "./sqlite.ts";
 import { generateTestData } from "./testData.ts";
 import { userData } from "./userData.ts";
 import { NO_PREVIOUS_PART } from "../worker/databaseParts.ts";
-
-const migrationsDir = path.join(import.meta.dirname, "..", "src", "db", "migrations");
 
 function positiveWholeNumber(value: string | undefined) {
   if (!/^[1-9]\d*$/.test(value ?? "")) return "Enter a positive whole number";
@@ -78,17 +73,7 @@ if (currentEtag !== null) {
 const progress = spinner();
 progress.start(`Generating ${count.toLocaleString("en-US")} transactions`);
 
-const sqlite3 = await sqlite3InitModule();
-const db = new sqlite3.oo1.DB(":memory:");
-const migrations = migrationsFromFiles(
-  Object.fromEntries(
-    fs
-      .readdirSync(migrationsDir)
-      .map((file) => [file, fs.readFileSync(path.join(migrationsDir, file), "utf8")]),
-  ),
-);
-migrate(db, migrations);
-configureConnection(db);
+const db = create(sqlite3, MIGRATIONS);
 generateTestData(db, count, { brokerage });
 const userVersion = Number(db.selectValue("PRAGMA user_version"));
 const bytes = sqlite3.capi.sqlite3_js_db_export(db);
