@@ -7,6 +7,7 @@ import babel from "@rolldown/plugin-babel";
 import tailwindcss from "@tailwindcss/vite";
 import * as opaque from "@serenity-kit/opaque";
 import type { BrowserCommand } from "vitest/node";
+import { opaqueWorkerd } from "./vite-plugins/opaqueWorkerd.ts";
 
 await opaque.ready;
 
@@ -64,6 +65,7 @@ export default defineConfig({
     projects: [
       {
         plugins: [
+          opaqueWorkerd(),
           cloudflareTest({
             wrangler: { configPath: "./wrangler.jsonc" },
             miniflare: {
