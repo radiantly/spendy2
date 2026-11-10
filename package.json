@@ -16,6 +16,7 @@
     "create-dev-env": "node scripts/create-dev-env.ts",
     "init-session": "node scripts/init-session.ts",
     "pull-database": "node scripts/pull-database.ts",
+    "push-database": "node scripts/push-database.ts",
     "seed-database": "node scripts/seed-database.ts"
   },
   "dependencies": {

@@ -8,7 +8,7 @@ import path from "path";
 import { inject } from "vitest";
 import { parseEnv } from "util";
 
-export type Script = "init-session" | "pull-database" | "seed-database";
+export type Script = "init-session" | "pull-database" | "push-database" | "seed-database";
 
 export type Run = { exitCode: number | null; output: string };
 

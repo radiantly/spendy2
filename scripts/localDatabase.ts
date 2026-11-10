@@ -67,6 +67,18 @@ export function writeLocal(directory: string, db: Database, parts: Uint8Array) {
 }
 
 /**
+ * Keeps `part` as the last of the parts `database.sqlite3` was made from,
+ * `parts` being the ones before it: once it's stored, what it holds is no
+ * longer a change only made here.
+ */
+export function appendPart(directory: string, parts: Uint8Array, part: Uint8Array) {
+  const all = new Uint8Array(parts.length + part.length);
+  all.set(parts);
+  all.set(part, parts.length);
+  writeWhole(partsPath(directory), all);
+}
+
+/**
  * Moves `database.sqlite3` out of the way, to the first `database.old.N.sqlite3`
  * there isn't yet. Returns the new name.
  */
@@ -128,7 +140,8 @@ function openDatabaseFile(directory: string): Database {
 /**
  * What the user changed in `database.sqlite3` since `parts`, the parts it
  * was made from: empty if nothing. Throws a LocalDatabaseError if the two
- * can't be compared.
+ * can't be compared. They're compared at the latest version, both brought up
+ * to it, so that's the version the changes are written at.
  */
 export async function localChanges(
   directory: string,
@@ -138,7 +151,9 @@ export async function localChanges(
   let made;
   try {
     made = await replay(sqlite3, parts, kek, MIGRATIONS);
-  } catch {
+  } catch (error) {
+    if (error instanceof DatabaseTooNewError)
+      fail(`${PARTS_FILE} is from a newer version of the app: ${error.message}`);
     throw new LocalDatabaseError(`${PARTS_FILE} can't be read`);
   }
   const before = sqlite3.capi.sqlite3_js_db_export(made.db);
