@@ -215,8 +215,10 @@ const PICKING_HELP: Record<MarkKind, { title: string; description: string }> = {
 };
 
 type TransactionsTableProps = {
-  /** In the order they're shown, and numbered in it from 1. */
+  /** In the order they're shown. */
   rows: TransactionRow[];
+  /** Each of `rows`' number, in the same order: rising, but not always by one. */
+  rowNumbers: readonly number[];
   /** The most rows there can be: the numbers' column fits theirs, however many are shown. */
   maxRowNumber: number;
   categories: readonly string[];
@@ -283,6 +285,7 @@ type TransactionsTableProps = {
  */
 function TransactionsTable({
   rows,
+  rowNumbers,
   maxRowNumber,
   categories,
   accounts,
@@ -313,8 +316,8 @@ function TransactionsTable({
   const rowNumberOf = useMemo(() => {
     let numbers: Map<string, number> | undefined;
     return (id: string) =>
-      (numbers ??= new Map(rows.map((row, index) => [row.id, index + 1]))).get(id);
-  }, [rows]);
+      (numbers ??= new Map(rows.map((row, index) => [row.id, rowNumbers[index]!]))).get(id);
+  }, [rows, rowNumbers]);
   // Where each row is, by id: worked out once one's looked for away from
   // where it was last found, and again only for other rows.
   const indexOf = useMemo(() => {
@@ -1246,7 +1249,7 @@ function TransactionsTable({
                     item.index === pickedRow ? pickedTint : rowSelected(item.index) ? tint : ""
                   }
                 >
-                  {item.index + 1}
+                  {rowNumbers[item.index]}
                 </RowNumberCell>
                 {leafColumns.map((leafColumn, column) => {
                   const meta = leafColumn.columnDef.meta!;

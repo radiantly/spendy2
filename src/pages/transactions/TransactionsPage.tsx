@@ -44,8 +44,12 @@ import TransactionsTable, {
 import {
   DEFAULT_VIEW,
   filterValues,
-  viewOrder,
+  shownRows,
+  sortOrder,
+  viewHidden,
   withArrived,
+  withHidden,
+  type Hidden,
   type TransactionsView,
 } from "./view.ts";
 
@@ -53,14 +57,16 @@ import {
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 /**
- * The transactions a view showed, as positions in the rows of the read it
- * was worked out from, with the first `arrived` of the rows that came in
- * from elsewhere since (see `Transactions`) placed among them.
+ * What a view showed of the rows of the read it was worked out from, by
+ * their positions: `order` is every row as the view sorted them, and
+ * `hidden` those of them it hid. The first `arrived` of the rows that came
+ * in from elsewhere since (see `Transactions`) are placed among them.
  */
 type Shown = {
   view: TransactionsView;
   read: Transactions["read"];
   order: number[];
+  hidden: Hidden;
   arrived: number;
 };
 
@@ -83,13 +89,15 @@ function TransactionsPage() {
   const tableFits = useBreakpoint("md");
   // How the table's header menus sort and filter the transactions.
   const [view, setView] = useState(DEFAULT_VIEW);
-  // The transactions the table shows. Worked out again when the view
-  // changes, or when the rows are read again, but not when an edit (or an
-  // undo of one) changes them: an edited row stays where it is, even if
-  // it no longer belongs there, until the view changes, rather than moving
-  // away from under the edit. An added row is put beside the one it was
-  // added next to, and stays there in the same way. Rows that come in from
-  // elsewhere are put where the view would, among the rest.
+  // The transactions the table shows. Their order is worked out again when
+  // the view's sort is set, or when the rows are read again, and which of
+  // them are hidden when the view changes at all, but neither when an edit
+  // (or an undo of one) changes them: an edited row stays where it is, even
+  // if it no longer belongs there, rather than moving away from under the
+  // edit. An added row is put beside the one it was added next to, and
+  // stays there in the same way. Rows that come in from elsewhere are put
+  // where the view would, among the rest. Filtering never moves a row, so
+  // the rows keep their numbers through it (see `shownRows`).
   const [shown, setShown] = useState<Shown | null>(null);
   // The latest row added, for the table to select.
   const [added, setAdded] = useState<Added | null>(null);
@@ -109,21 +117,32 @@ function TransactionsPage() {
   const { currencies } = loaded;
   // Edits, adds and their undos keep the rows' positions: only reading them
   // again makes new ones.
-  const current =
-    shown !== null && shown.view === view && shown.read === loaded.read ? shown : null;
-  let order: number[];
-  if (current === null) {
-    order = viewOrder(loaded.rows, view, names, today());
-    setShown({ view, read: loaded.read, order, arrived: loaded.arrived.length });
-  } else if (current.arrived < loaded.arrived.length) {
+  let current = shown;
+  // Setting the sort makes a new one, even the one it was: that sorts again.
+  if (current === null || current.read !== loaded.read || current.view.sort !== view.sort) {
+    current = {
+      view,
+      read: loaded.read,
+      order: sortOrder(loaded.rows, view.sort, names),
+      hidden: viewHidden(loaded.rows, view, names, today()),
+      arrived: loaded.arrived.length,
+    };
+  } else if (current.view !== view || current.arrived < loaded.arrived.length) {
     const arrived = loaded.arrived.slice(current.arrived).filter((at) => !loaded.removed.has(at));
-    order = withArrived(current.order, arrived, loaded.rows, view, names, today());
-    setShown({ ...current, order, arrived: loaded.arrived.length });
-  } else order = current.order;
+    current = {
+      ...current,
+      view,
+      order: withArrived(current.order, arrived, loaded.rows, view.sort, names),
+      hidden:
+        current.view === view
+          ? withHidden(current.hidden, arrived, loaded.rows, view, names, today())
+          : viewHidden(loaded.rows, view, names, today()),
+      arrived: loaded.arrived.length,
+    };
+  }
+  if (current !== shown) setShown(current);
   // One removed since (an add undone) keeps its place, for if it comes back.
-  const rows = order.flatMap((position) =>
-    loaded.removed.has(position) ? [] : [loaded.rows[position]!],
-  );
+  const { rows, numbers } = shownRows(loaded.rows, current.order, current.hidden, loaded.removed);
   const transactions = existing(loaded);
   const values = filterValues(transactions, names);
 
@@ -296,6 +315,7 @@ function TransactionsPage() {
       ) : (
         <TransactionsTable
           rows={rows}
+          rowNumbers={numbers}
           // Every transaction, so filtering doesn't move the columns.
           maxRowNumber={transactions.length}
           categories={categories}

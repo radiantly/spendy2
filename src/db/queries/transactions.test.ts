@@ -4,7 +4,7 @@ import { configureConnection } from "../connection.ts";
 import { migrate } from "../migrate.ts";
 import { MIGRATIONS } from "../migrations.ts";
 import { SOURCE_HASH_SQL, transactionId } from "../../test/fixtures.ts";
-import { DEFAULT_VIEW, viewOrder } from "../../pages/transactions/view.ts";
+import { DEFAULT_VIEW, sortOrder } from "../../pages/transactions/view.ts";
 import { GET_TRANSACTIONS, LIST_TRANSACTIONS, listedTransactions } from "./transactions.ts";
 
 const sqlite3 = await sqlite3InitModule();
@@ -118,12 +118,10 @@ describe("LIST_TRANSACTIONS", () => {
     // Reversed, so the page's sort has to put each in its place.
     const reversed = rows.toReversed();
 
-    const sorted = viewOrder(
-      reversed,
-      DEFAULT_VIEW,
-      { accounts: ["Travel"], categories: ["Groceries"] },
-      "2026-10-28",
-    ).map((position) => reversed[position]!.id);
+    const sorted = sortOrder(reversed, DEFAULT_VIEW.sort, {
+      accounts: ["Travel"],
+      categories: ["Groceries"],
+    }).map((position) => reversed[position]!.id);
 
     expect(sorted).toEqual(rows.map(({ id }) => id));
   });

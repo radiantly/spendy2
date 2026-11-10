@@ -3,8 +3,11 @@ import type { ListedTransaction } from "../../db/queries/transactions.ts";
 import {
   DEFAULT_VIEW,
   filterValues,
-  viewOrder,
+  shownRows,
+  sortOrder,
+  viewHidden,
   withArrived,
+  withHidden,
   type SortColumn,
   type SortDirection,
   type TransactionsView,
@@ -43,11 +46,25 @@ const NAMES = {
 };
 const TODAY = "2026-10-18";
 
+/** What the view with `changes` shows of `rows`, none of them removed (see `shownRows`). */
+function showing(rows: ListedTransaction[], changes: Partial<TransactionsView> = {}) {
+  const view = { ...DEFAULT_VIEW, ...changes };
+  return shownRows(
+    rows,
+    sortOrder(rows, view.sort, NAMES),
+    viewHidden(rows, view, NAMES, TODAY),
+    new Set(),
+  );
+}
+
 /** The ids of `rows` the view with `changes` shows, in order. */
 function shown(rows: ListedTransaction[], changes: Partial<TransactionsView> = {}) {
-  return viewOrder(rows, { ...DEFAULT_VIEW, ...changes }, NAMES, TODAY).map(
-    (position) => rows[position]!.id,
-  );
+  return showing(rows, changes).rows.map(({ id }) => id);
+}
+
+/** The numbers of the rows the view with `changes` shows of `rows`, in order. */
+function numbers(rows: ListedTransaction[], changes: Partial<TransactionsView> = {}) {
+  return showing(rows, changes).numbers;
 }
 
 const ids = (rows: ListedTransaction[]) => rows.map(({ id }) => id);
@@ -55,7 +72,7 @@ const ids = (rows: ListedTransaction[]) => rows.map(({ id }) => id);
 const at = (time: string) => Date.parse(`2026-10-10T${time}Z`) / 1000;
 const OLDEST_FIRST = { sort: { column: "date", direction: "ascending" } } as const;
 
-describe("viewOrder", () => {
+describe("the rows a view shows", () => {
   describe("sorting by date", () => {
     it("shows the newest first, and on a day, the last imported first", () => {
       const older = row({ naive_date: "2026-10-01" });
@@ -192,6 +209,64 @@ describe("viewOrder", () => {
     });
   });
 
+  describe("numbering", () => {
+    const days = () =>
+      ["2026-10-04", "2026-10-03", "2026-10-02", "2026-10-01"].map((naive_date, index) =>
+        row({ naive_date, category: index % 2 === 0 ? "Rent" : "Food" }),
+      );
+
+    it("numbers the rows from 1, in the order they're sorted", () => {
+      expect(numbers(days())).toEqual([1, 2, 3, 4]);
+      expect(numbers(days(), OLDEST_FIRST)).toEqual([1, 2, 3, 4]);
+    });
+
+    it("keeps the rows' numbers when some are filtered out, skipping theirs", () => {
+      const rows = days();
+      const hidingRent = { hiddenCategories: new Set(["Rent"]) };
+
+      expect(shown(rows, hidingRent)).toEqual(ids([rows[1]!, rows[3]!]));
+      expect(numbers(rows, hidingRent)).toEqual([2, 4]);
+    });
+
+    it("numbers the rows again when they're sorted, filtered or not", () => {
+      const rows = days();
+      const hidingRent = { hiddenCategories: new Set(["Rent"]), ...OLDEST_FIRST };
+
+      expect(shown(rows, hidingRent)).toEqual(ids([rows[3]!, rows[1]!]));
+      expect(numbers(rows, hidingRent)).toEqual([1, 3]);
+    });
+
+    it("gives hidden duplicates no number, so the rest have no gaps", () => {
+      const [first, second, third] = days();
+      const duplicate = { ...second!, duplicate_of: first!.id };
+      const rows = [first!, duplicate, third!];
+
+      expect(numbers(rows)).toEqual([1, 2]);
+      expect(numbers(rows, { showDuplicates: true })).toEqual([1, 2, 3]);
+    });
+
+    it("gives a hidden duplicate no number when a filter would hide it too", () => {
+      const [first, second, third] = days();
+      const duplicate = { ...second!, duplicate_of: first!.id };
+
+      // Hiding Food hides only the duplicate, which the two Rent rows don't count.
+      expect(numbers([first!, duplicate, third!], { hiddenCategories: new Set(["Food"]) })).toEqual(
+        [1, 2],
+      );
+    });
+
+    it("gives a removed row no number, and the rows after it the ones before theirs", () => {
+      const rows = days();
+      const order = sortOrder(rows, DEFAULT_VIEW.sort, NAMES);
+      const hidden = viewHidden(rows, DEFAULT_VIEW, NAMES, TODAY);
+
+      expect(shownRows(rows, order, hidden, new Set([1]))).toEqual({
+        rows: [rows[0], rows[2], rows[3]],
+        numbers: [1, 2, 3],
+      });
+    });
+  });
+
   describe("filtering by date", () => {
     const days = () =>
       [
@@ -309,15 +384,9 @@ describe("viewOrder", () => {
 });
 
 describe("withArrived", () => {
-  /** The ids of `rows` with those at `arrived` placed into `order` as the view with `changes` would. */
-  function placed(
-    rows: ListedTransaction[],
-    order: number[],
-    arrived: number[],
-    changes: Partial<TransactionsView> = {},
-  ) {
-    const view = { ...DEFAULT_VIEW, ...changes };
-    return withArrived(order, arrived, rows, view, NAMES, TODAY).map((at) => rows[at]!.id);
+  /** The ids of `rows` with those at `arrived` placed into `order` as the default sort would. */
+  function placed(rows: ListedTransaction[], order: number[], arrived: number[]) {
+    return withArrived(order, arrived, rows, DEFAULT_VIEW.sort, NAMES).map((at) => rows[at]!.id);
   }
 
   it("puts an arrived row where the sort would, keeping the rest in order", () => {
@@ -342,14 +411,6 @@ describe("withArrived", () => {
     expect(placed(rows, [0, 1, 2], [3])).toEqual(ids([rows[0]!, rows[1]!, rows[3]!, rows[2]!]));
   });
 
-  it("leaves out an arrived row the filters hide", () => {
-    const rows = [row(), row({ category: "Rent" })];
-
-    expect(placed(rows, [0], [1], { hiddenCategories: new Set(["Rent"]) })).toEqual(
-      ids([rows[0]!]),
-    );
-  });
-
   it("places several that arrived together, in order among themselves", () => {
     const rows = [
       row({ naive_date: "2026-10-05" }),
@@ -369,7 +430,7 @@ describe("withArrived", () => {
     (["date", "account", "counterparty", "category", "remarks"] as SortColumn[]).flatMap((column) =>
       (["ascending", "descending"] as SortDirection[]).map((direction) => ({ column, direction })),
     ),
-  )("places rows as viewOrder would, sorting by $column, $direction", (sort) => {
+  )("places rows as sortOrder would, sorting by $column, $direction", (sort) => {
     const values = ["b", "a", null, "c", "a", null, "b"];
     const rows = values.map((text, i) =>
       row({
@@ -380,8 +441,7 @@ describe("withArrived", () => {
         remarks: text,
       }),
     );
-    const view = { ...DEFAULT_VIEW, sort };
-    const all = viewOrder(rows, view, NAMES, TODAY);
+    const all = sortOrder(rows, sort, NAMES);
     const arrived = [1, 4, 6];
 
     expect(
@@ -389,11 +449,30 @@ describe("withArrived", () => {
         all.filter((at) => !arrived.includes(at)),
         arrived,
         rows,
-        view,
+        sort,
         NAMES,
-        TODAY,
       ),
     ).toEqual(all);
+  });
+});
+
+describe("withHidden", () => {
+  it("hides those of the rows it's given that the view hides, with those hidden before", () => {
+    const rows = [
+      row({ category: "Rent" }),
+      row(),
+      row({ category: "Rent" }),
+      row({ duplicate_of: "t1" }),
+      row({ category: "Rent" }),
+    ];
+    const view = { ...DEFAULT_VIEW, hiddenCategories: new Set(["Rent"]) };
+    const before = viewHidden(rows.slice(0, 2), view, NAMES, TODAY);
+
+    // The row at 4 isn't among those given.
+    expect(withHidden(before, [2, 3], rows, view, NAMES, TODAY)).toEqual({
+      filtered: new Set([0, 2]),
+      uncounted: new Set([3]),
+    });
   });
 });
 

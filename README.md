@@ -1,2 +1,3 @@
 # Spendy
+
 Spending tracker!

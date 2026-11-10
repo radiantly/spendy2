@@ -79,8 +79,18 @@ function listedNames(names: ViewNames) {
   };
 }
 
-/** Whether a transaction is shown, by each filter that hides any. */
-function filterFor(view: TransactionsView, names: ViewNames, today: NaiveDate) {
+/**
+ * The transactions a view hides, as positions in its rows. Those `filtered`
+ * out by the columns' filters keep their numbers, so the numbers shown skip
+ * theirs. The `uncounted`, duplicates while those aren't shown, take none.
+ */
+export type Hidden = {
+  filtered: ReadonlySet<number>;
+  uncounted: ReadonlySet<number>;
+};
+
+/** How `view` hides a transaction (see `Hidden`), or null if it shows it. */
+function hiderFor(view: TransactionsView, names: ViewNames, today: NaiveDate) {
   const listed = listedNames(names);
   const checks: ((row: ListedTransaction) => boolean)[] = [];
   if (view.dates.kind !== "all") {
@@ -96,11 +106,77 @@ function filterFor(view: TransactionsView, names: ViewNames, today: NaiveDate) {
   if (view.flow === "out") checks.push((row) => row.amount < 0);
   if (view.hiddenCurrencies.size > 0)
     checks.push((row) => !view.hiddenCurrencies.has(row.currency));
-  if (!view.showDuplicates) checks.push((row) => row.duplicate_of === null);
-  return (row: ListedTransaction) => checks.every((check) => check(row));
+  return (row: ListedTransaction): keyof Hidden | null => {
+    if (!view.showDuplicates && row.duplicate_of !== null) return "uncounted";
+    return checks.every((check) => check(row)) ? null : "filtered";
+  };
 }
 
 type Rows = readonly ListedTransaction[];
+
+/**
+ * `hidden` with those of the rows at `among` (positions in `rows`) that
+ * `view` hides. The dates of a period are as of `today`.
+ */
+export function withHidden(
+  hidden: Hidden,
+  among: Iterable<number>,
+  rows: Rows,
+  view: TransactionsView,
+  names: ViewNames,
+  today: NaiveDate,
+): Hidden {
+  const hiding = hiderFor(view, names, today);
+  const filtered = new Set(hidden.filtered);
+  const uncounted = new Set(hidden.uncounted);
+  for (const position of among) {
+    const how = hiding(rows[position]!);
+    if (how === "filtered") filtered.add(position);
+    if (how === "uncounted") uncounted.add(position);
+  }
+  return { filtered, uncounted };
+}
+
+/** The transactions `view` hides. The dates of a period are as of `today`. */
+export function viewHidden(
+  rows: Rows,
+  view: TransactionsView,
+  names: ViewNames,
+  today: NaiveDate,
+): Hidden {
+  return withHidden(
+    { filtered: new Set(), uncounted: new Set() },
+    rows.keys(),
+    rows,
+    view,
+    names,
+    today,
+  );
+}
+
+/**
+ * The rows shown, in `order` (positions in `rows`), each with its number:
+ * its place in the order, from 1, among the rows that are there (not
+ * `removed`) and counted (see `Hidden`). So filtering leaves the numbers as
+ * they are, skipping the hidden rows', and only sorting gives new ones.
+ */
+export function shownRows<Row>(
+  rows: readonly Row[],
+  order: readonly number[],
+  hidden: Hidden,
+  removed: ReadonlySet<number>,
+): { rows: Row[]; numbers: number[] } {
+  const shown: { rows: Row[]; numbers: number[] } = { rows: [], numbers: [] };
+  let number = 0;
+  for (const position of order) {
+    if (removed.has(position) || hidden.uncounted.has(position)) continue;
+    number++;
+    if (hidden.filtered.has(position)) continue;
+    shown.rows.push(rows[position]!);
+    shown.numbers.push(number);
+  }
+  return shown;
+}
 
 /** Positions in `rows` newest first, as the transactions are listed. */
 function byRecent(rows: Rows) {
@@ -147,22 +223,14 @@ function sortByText(
 }
 
 /**
- * The transactions `view` shows, in order, as positions in `rows`. The dates
- * of a period are as of `today`.
+ * Every transaction, those a view hides too, in the order `sort` puts them,
+ * as positions in `rows`.
  */
-export function viewOrder(
-  rows: Rows,
-  view: TransactionsView,
-  names: ViewNames,
-  today: NaiveDate,
-): number[] {
-  const shown = filterFor(view, names, today);
-  const order: number[] = [];
-  for (let position = 0; position < rows.length; position++)
-    if (shown(rows[position]!)) order.push(position);
+export function sortOrder(rows: Rows, sort: Sort, names: ViewNames): number[] {
+  const order = Array.from(rows.keys());
   order.sort(byRecent(rows));
 
-  const { column, direction } = view.sort;
+  const { column, direction } = sort;
   const textOf = sortTextOf(column, names);
   // Oldest first is newest first the other way round, the same day's too.
   if (textOf === null) return direction === "descending" ? order : order.reverse();
@@ -182,9 +250,9 @@ function sortTextOf(column: SortColumn, names: ViewNames) {
   return texts[column];
 }
 
-/** Which of two transactions `view` puts first, as `viewOrder` does: negative if `a`. */
-function compareInView(view: TransactionsView, names: ViewNames) {
-  const { column, direction } = view.sort;
+/** Which of two transactions `sort` puts first, as `sortOrder` does: negative if `a`. */
+function compareBy(sort: Sort, names: ViewNames) {
+  const { column, direction } = sort;
   const textOf = sortTextOf(column, names);
   if (textOf === null)
     return direction === "descending"
@@ -200,26 +268,21 @@ function compareInView(view: TransactionsView, names: ViewNames) {
 }
 
 /**
- * `order` with the rows at `arrived` (positions in `rows`) that `view`
- * shows placed among its rows, where the view's sort would put them. The
- * rows already in it keep their order, even where it's no longer the
- * view's: an edited row stays where it was. The dates of a period are as of
- * `today`.
+ * `order` with the rows at `arrived` (positions in `rows`) placed among its
+ * rows, where `sort` would put them. The rows already in it keep their
+ * order, even where it's no longer the sort's: an edited row stays where it
+ * was.
  */
 export function withArrived(
   order: readonly number[],
   arrived: readonly number[],
   rows: Rows,
-  view: TransactionsView,
+  sort: Sort,
   names: ViewNames,
-  today: NaiveDate,
 ): number[] {
-  const shown = filterFor(view, names, today);
-  const compare = compareInView(view, names);
+  const compare = compareBy(sort, names);
   const before = (a: number, b: number) => compare(rows[a]!, rows[b]!) < 0;
-  const placing = arrived
-    .filter((position) => shown(rows[position]!))
-    .sort((a, b) => compare(rows[a]!, rows[b]!));
+  const placing = arrived.toSorted((a, b) => compare(rows[a]!, rows[b]!));
   const placed: number[] = [];
   let next = 0;
   for (const position of order) {

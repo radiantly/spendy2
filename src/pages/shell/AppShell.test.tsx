@@ -721,7 +721,7 @@ describe("TransactionsPage", () => {
       await expect.poll(counterparties).toEqual(["Café Lumen"]);
     });
 
-    it("numbers the rows again as they're sorted and filtered", async () => {
+    it("numbers the rows again as they're sorted, but not as they're filtered", async () => {
       await opened();
       expect(numbers()).toEqual(["1", "2"]);
 
@@ -729,9 +729,13 @@ describe("TransactionsPage", () => {
       await expect.poll(counterparties).toEqual(["Café Lumen", "Corner Market"]);
       expect(numbers()).toEqual(["1", "2"]);
 
+      // Café Lumen's 1 is skipped while it's hidden.
       await pick("Category", "checkbox", "(no category)");
       await expect.poll(counterparties).toEqual(["Corner Market"]);
-      expect(numbers()).toEqual(["1"]);
+      expect(numbers()).toEqual(["2"]);
+
+      await pick("Counterparty", "radio", "Z to A");
+      await expect.poll(numbers).toEqual(["1"]);
     });
 
     it("keeps the headers when every transaction is filtered out", async () => {
@@ -755,6 +759,35 @@ describe("TransactionsPage", () => {
       await pick("Counterparty", "radio", "Z to A");
       await pick("Counterparty", "radio", "A to Z");
       await expect.poll(counterparties).toEqual(["Corner Market", "Zest Café"]);
+    });
+
+    it("keeps an edited row where it is, and every row's number, as the filters change", async () => {
+      await opened();
+      await pick("Counterparty", "radio", "A to Z");
+      await editCounterparty("Café Lumen", "Zest Café");
+      await expect.poll(counterparties).toEqual(["Zest Café", "Corner Market"]);
+
+      await pick("Category", "checkbox", "Groceries");
+      await expect.poll(counterparties).toEqual(["Zest Café"]);
+      expect(numbers()).toEqual(["1"]);
+
+      await pick("Category", "checkbox", "Groceries");
+      await expect.poll(counterparties).toEqual(["Zest Café", "Corner Market"]);
+      expect(numbers()).toEqual(["1", "2"]);
+    });
+
+    it("gives the hidden duplicates no numbers, numbering again once they're shown", async () => {
+      await loggedIn(await storedDatabase(WITH_DUPLICATE));
+      await renderApp("/transactions");
+      await pick("Date", "radio", "Oldest transactions first");
+      // Café Lumen, a duplicate, would be first.
+      await expect.poll(counterparties).toEqual(["Corner Market"]);
+      expect(numbers()).toEqual(["1"]);
+
+      await showDuplicates();
+
+      await expect.poll(counterparties).toEqual(["Café Lumen", "Corner Market"]);
+      expect(numbers()).toEqual(["1", "2"]);
     });
 
     /** Exports CSV from the table's menu, giving the file's name and text, byte order mark and all. */

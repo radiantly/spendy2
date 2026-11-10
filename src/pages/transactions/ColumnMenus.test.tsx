@@ -76,6 +76,7 @@ function Table({
   return (
     <TransactionsTable
       rows={rows}
+      rowNumbers={rows.map((_, index) => index + 1)}
       maxRowNumber={rows.length}
       categories={names.categories}
       accounts={ACCOUNTS}

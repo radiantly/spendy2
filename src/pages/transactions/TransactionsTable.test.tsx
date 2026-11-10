@@ -67,11 +67,20 @@ beforeEach(async () => {
   window.scrollTo(0, 0);
 });
 
-function table(categories = CATEGORIES, shown = rows, maxRowNumber = shown.length) {
+/** Numbers for `count` rows from 1, as when none are filtered out. */
+const numbersTo = (count: number) => Array.from({ length: count }, (_, index) => index + 1);
+
+function table(
+  categories = CATEGORIES,
+  shown = rows,
+  maxRowNumber = shown.length,
+  rowNumbers = numbersTo(shown.length),
+) {
   return (
     <>
       <TransactionsTable
         rows={shown}
+        rowNumbers={rowNumbers}
         maxRowNumber={maxRowNumber}
         categories={categories}
         accounts={ACCOUNTS}
@@ -195,6 +204,7 @@ type TableProps = ComponentProps<typeof TransactionsTable>;
 /** The table's props, showing `shown`, with `more`. */
 const tableProps = (shown: TransactionRow[], more: Partial<TableProps> = {}): TableProps => ({
   rows: shown,
+  rowNumbers: numbersTo(shown.length),
   maxRowNumber: shown.length,
   categories: CATEGORIES,
   accounts: ACCOUNTS,
@@ -300,6 +310,19 @@ describe("TransactionsTable", () => {
       expect(cellIn(row, COUNTERPARTY).textContent).toBe("Shop 2");
       expect(row.querySelectorAll('[role="gridcell"]').length).toBe(REMARKS + 1);
       expect(numberOf(row).getAttribute("role")).toBe("rowheader");
+    });
+
+    it("shows the numbers it's given, which can skip some", async () => {
+      await render(table(CATEGORIES, rows.slice(0, 3), 9, [2, 5, 9]));
+
+      await expect.poll(numbers).toEqual(["2", "5", "9"]);
+    });
+
+    it("says which row a duplicate's original is by the number it's given", async () => {
+      const shown = [rows[1]!, { ...rows[3]!, duplicate_of: "t1" }];
+      const screen = await render(table(CATEGORIES, shown, 9, [4, 7]));
+
+      await expect.element(screen.getByText("Duplicate of transaction 4.")).toBeInTheDocument();
     });
 
     // Screen readers line the cells up with the headers by their place in the row.
@@ -1301,6 +1324,7 @@ describe("TransactionsTable", () => {
       await render(
         <TransactionsTable
           rows={[]}
+          rowNumbers={[]}
           maxRowNumber={0}
           categories={CATEGORIES}
           accounts={ACCOUNTS}
@@ -1813,6 +1837,7 @@ describe("TransactionsTable", () => {
     const tableShowing = (moved: Moved<Edit> | null) => (
       <TransactionsTable
         rows={rows}
+        rowNumbers={numbersTo(rows.length)}
         maxRowNumber={rows.length}
         categories={CATEGORIES}
         accounts={ACCOUNTS}
@@ -1961,6 +1986,7 @@ describe("TransactionsTable", () => {
     const withBar = ({ canUndo = true, canRedo = true } = {}) => (
       <TransactionsTable
         rows={rows}
+        rowNumbers={numbersTo(rows.length)}
         maxRowNumber={rows.length}
         categories={CATEGORIES}
         accounts={ACCOUNTS}
@@ -2166,6 +2192,7 @@ describe("TransactionsTable", () => {
     } = {}) => (
       <TransactionsTable
         rows={shown}
+        rowNumbers={numbersTo(shown.length)}
         maxRowNumber={rows.length}
         categories={CATEGORIES}
         accounts={ACCOUNTS}
@@ -3521,6 +3548,7 @@ describe("TransactionsTable", () => {
       await screen.rerender(
         <TransactionsTable
           rows={rows.slice(0, 2)}
+          rowNumbers={numbersTo(2)}
           maxRowNumber={2}
           categories={CATEGORIES}
           accounts={ACCOUNTS}
@@ -4176,6 +4204,7 @@ describe("TransactionsTable", () => {
       await render(
         <TransactionsTable
           rows={rows.slice(0, 5)}
+          rowNumbers={numbersTo(5)}
           maxRowNumber={5}
           categories={many}
           accounts={ACCOUNTS}
