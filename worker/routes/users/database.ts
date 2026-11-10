@@ -96,7 +96,7 @@ const appendDatabasePart = createAuthenticatedRoute({
   tags: [DATABASE_TAG],
   summary: "Add database part",
   description:
-    "Use this to add a database part. When the database is edited, this API can be used to upload the changeset. The part must follow the database's last part: its AAD holds that part's sha256 (the database's ETag), and its user version is no lower. A part that doesn't follow it, as when the database has changed since the part was made, gets a 409 CONFLICT. If a database does not exist (part 0) use the [PUT API](#tag/database/GET/api/users/me/database/parts/{part}/tag/database/PUT/api/users/me/database/parts) instead.",
+    "Use this to add a database part. When the database is edited, this API can be used to upload the changeset. If a database does not exist (part 0) use the [PUT API](#tag/database/GET/api/users/me/database/parts/{part}/tag/database/PUT/api/users/me/database/parts) instead.",
   middleware: [timing()],
   request: {
     body: {
@@ -151,10 +151,10 @@ const downloadDatabasePart = createAuthenticatedRoute({
   path: "/parts/{index}",
   tags: [DATABASE_TAG],
   summary: "Get database part",
-  description: "Downloads one part, counting from 0. The ETag is its sha256.",
+  description: "Download a single database part.",
   request: {
     params: z.object({
-      index: partIndexSchema.meta({ description: "The part's position, from 0" }),
+      index: partIndexSchema.meta({ description: "The part index." }),
     }),
   },
   errors: ["NOT_FOUND"],
@@ -182,11 +182,10 @@ const replaceHeadersSchema = z
   .object({
     "if-match": databaseEtagSchema.optional().meta({
       description:
-        "If the user has an existing database, this header is required. Pass the ETag from the corresponding GET call for the value of this header.",
+        "This header is required if there are existing database parts (pass the ETag from the corresponding GET request). All existing database parts will be deleted.",
     }),
     "if-none-match": z.literal("*").optional().meta({
-      description:
-        "If the user does NOT have an existing database, this header is required. Pass `*` for the value of this header.",
+      description: "If uploading for the first time, this header is required.",
     }),
   })
   .refine(
@@ -200,9 +199,7 @@ const replaceDatabase = createAuthenticatedRoute({
   tags: [DATABASE_TAG],
   summary: "Put database",
   description:
-    "Replaces all of the database's parts with the ones uploaded, or creates the database. " +
-    "Each part must follow the one before it: its AAD holds that part's sha256, and its user " +
-    "version is no lower.",
+    "Upload the database. Multiple parts can be supplied, and these will be stored as part 0, 1, 2, etc.",
   middleware: [timing()],
   request: {
     headers: replaceHeadersSchema,
@@ -210,7 +207,7 @@ const replaceDatabase = createAuthenticatedRoute({
       required: true,
       content: {
         "application/octet-stream": {
-          schema: partsBody(`One or more parts, one after the other. ${PART_FORMAT}`),
+          schema: partsBody(`One or more parts, concatenated.`),
         },
       },
     },
