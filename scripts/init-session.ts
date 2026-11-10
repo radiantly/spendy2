@@ -8,7 +8,6 @@ import * as opaque from "@serenity-kit/opaque";
 import { confirm, intro, outro, password, text } from "@clack/prompts";
 import path from "path";
 import { setTimeout } from "timers/promises";
-import { unstable_readConfig } from "wrangler";
 import { deriveKekBytes } from "../src/lib/kek.ts";
 import { usernameSchema } from "../worker/schemas.ts";
 import { send } from "./api.ts";
@@ -22,8 +21,12 @@ const wranglerConfigPath = path.join(import.meta.dirname, "..", "wrangler.jsonc"
 /**
  * The URL of the deployed worker. Only a custom domain route maps to a URL,
  * other route patterns can contain wildcards and paths.
+ *
+ * Wrangler takes most of the script's start to load, so it's only loaded
+ * here, for the prompt that asks for the endpoint.
  */
-function deployedEndpoint() {
+async function deployedEndpoint() {
+  const { unstable_readConfig } = await import("wrangler");
   const { route } = unstable_readConfig({ config: wranglerConfigPath }, { hideWarnings: true });
   let result = z
     .strictObject({
@@ -146,11 +149,11 @@ intro(`Init session`);
 await opaque.ready;
 
 const input = {
-  endpoint: await textFlag("endpoint", flags.endpoint, url, () =>
+  endpoint: await textFlag("endpoint", flags.endpoint, url, async () =>
     text({
       message: "Spendy2 endpoint?",
       placeholder: "http://localhost:5173",
-      initialValue: deployedEndpoint(),
+      initialValue: await deployedEndpoint(),
       validate: url,
     }),
   ),

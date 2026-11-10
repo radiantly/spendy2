@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { availableParallelism } from "node:os";
 import { defineConfig } from "vitest/config";
 import { cloudflareTest } from "@cloudflare/vitest-plugin";
 import { playwright } from "@vitest/browser-playwright";
@@ -107,11 +108,13 @@ export default defineConfig({
           name: "scripts",
           include: ["scripts/**/*.test.ts"],
           globalSetup: ["scripts/test/globalSetup.ts"],
-          // Each test starts Node a few times over, and mostly waits on it:
-          // they have a user and a directory each, so can run side by side.
+          // Each test has a user and a directory of its own, so they can run
+          // side by side. They start Node a few times over, though, which
+          // is work for a core: more at once than there are cores only
+          // makes each slower, until they time out.
           testTimeout: 30_000,
           sequence: { concurrent: true },
-          maxConcurrency: 8,
+          maxConcurrency: Math.min(8, availableParallelism()),
         },
       },
     ],
