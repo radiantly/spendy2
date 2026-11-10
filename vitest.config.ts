@@ -99,6 +99,19 @@ export default defineConfig({
           },
         },
       },
+      {
+        // The scripts, run as processes of their own against the real worker.
+        test: {
+          name: "scripts",
+          include: ["scripts/**/*.test.ts"],
+          globalSetup: ["scripts/test/globalSetup.ts"],
+          // Each test starts Node a few times over, and mostly waits on it:
+          // they have a user and a directory each, so can run side by side.
+          testTimeout: 30_000,
+          sequence: { concurrent: true },
+          maxConcurrency: 8,
+        },
+      },
     ],
   },
 });

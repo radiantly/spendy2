@@ -30,5 +30,8 @@ dist-ssr
 # Configuration
 .env
 
+# User data
+/User Data (*)/
+
 # Vitest browser mode failure screenshots
 .vitest

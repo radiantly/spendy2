@@ -1,12 +1,22 @@
+/**
+ * Logs in, registering the user first if asked to, and keeps the session in
+ * the user's `User Data (username)` directory for the other scripts.
+ *
+ *   npm run init-session -- --endpoint <url> --username <name> --password <password> [--register]
+ */
 import * as opaque from "@serenity-kit/opaque";
-import { confirm, group, intro, isCancel, outro, password, text } from "@clack/prompts";
+import { confirm, intro, outro, password, text } from "@clack/prompts";
 import path from "path";
+import { setTimeout } from "timers/promises";
 import { unstable_readConfig } from "wrangler";
+import { deriveKekBytes } from "../src/lib/kek.ts";
 import { usernameSchema } from "../worker/schemas.ts";
-import { fail, onCancel, readEnv, required, url, writeEnv } from "./lib.ts";
+import { send } from "./api.ts";
+import { booleanFlag, parseFlags, textFlag } from "./flags.ts";
+import { fail, required, url } from "./lib.ts";
+import { saveSession } from "./userData.ts";
 import { z } from "zod";
 
-const scriptsEnvPath = path.join(import.meta.dirname, ".env");
 const wranglerConfigPath = path.join(import.meta.dirname, "..", "wrangler.jsonc");
 
 /**
@@ -26,39 +36,49 @@ function deployedEndpoint() {
 
 type Session = { token: string; exportKey: string };
 
-async function post(endpoint: string, route: string, body: unknown) {
-  const target = new URL(`/api${route}`, endpoint);
-  try {
-    return await fetch(target, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-  } catch {
-    fail(`Could not reach ${target}`);
-  }
+function post(endpoint: string, route: string, body: unknown) {
+  return send(new URL(`/api${route}`, endpoint), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
 }
 
 async function describe(response: Response) {
   return `${response.status} ${await response.text()}`;
 }
 
+/** How long a login waits for the server to take another attempt, when asked to. */
+const BACKOFF_WAIT_MS = 5000;
+const BACKOFF_POLL_MS = 250;
+
 /**
  * Returns undefined when the login is rejected. OPAQUE does not reveal whether
  * the user doesn't exist or the password is wrong.
+ *
+ * After an attempt that didn't log in, the server refuses the user's next
+ * one for a moment. `waitOutBackoff` waits for it to pass, for when the
+ * attempt before was this script's own.
  */
 async function login(
   endpoint: string,
   username: string,
   password: string,
+  { waitOutBackoff = false } = {},
 ): Promise<Session | undefined> {
   const { clientLoginState, startLoginRequest } = opaque.client.startLogin({
     password,
   });
-  const startResponse = await post(endpoint, "/auth/login/start", {
-    username,
-    startLoginRequest,
-  });
+  const start = () => post(endpoint, "/auth/login/start", { username, startLoginRequest });
+  let startResponse = await start();
+  for (
+    let waited = 0;
+    startResponse.status === 429 && waitOutBackoff && waited < BACKOFF_WAIT_MS;
+    waited += BACKOFF_POLL_MS
+  ) {
+    await setTimeout(BACKOFF_POLL_MS);
+    startResponse = await start();
+  }
   if (startResponse.status === 429)
     fail("Too many login attempts, wait a few seconds and run this again");
   if (!startResponse.ok) fail(`Login failed: ${await describe(startResponse)}`);
@@ -83,11 +103,11 @@ async function login(
   return { token, exportKey: result.exportKey };
 }
 
-async function register(endpoint: string, username: string, password: string) {
+async function registerUser(endpoint: string, username: string, password: string) {
   const { clientRegistrationState, registrationRequest } = opaque.client.startRegistration({
     password,
   });
-  const startResponse = await post(endpoint, "/users", {
+  const startResponse = await post(endpoint, "/auth/register/start", {
     username,
     registrationRequest,
   });
@@ -101,7 +121,7 @@ async function register(endpoint: string, username: string, password: string) {
     registrationResponse,
     password,
   });
-  const finishResponse = await post(endpoint, "/users", {
+  const finishResponse = await post(endpoint, "/auth/register/finish", {
     username,
     registrationRecord,
   });
@@ -109,59 +129,60 @@ async function register(endpoint: string, username: string, password: string) {
   if (!finishResponse.ok) fail(`Registration failed: ${await describe(finishResponse)}`);
 }
 
-/** Returns undefined when the login failed and the user declined to register. */
-async function loginOrRegister(endpoint: string, username: string, password: string) {
-  const session = await login(endpoint, username, password);
-  if (session !== undefined) return session;
-
-  const shouldRegister = await confirm({
-    message: `Login failed, the password is wrong or ${username} doesn't exist. Register ${username}?`,
-    initialValue: false,
-  });
-  if (isCancel(shouldRegister)) onCancel();
-  if (!shouldRegister) return;
-
-  await register(endpoint, username, password);
-  return (await login(endpoint, username, password)) ?? fail("Login failed after registering");
+function username(value: string | undefined) {
+  if (!usernameSchema.safeParse(value).success) return "3 to 32 lowercase letters and digits";
 }
+
+const flags = parseFlags({
+  endpoint: { type: "string" },
+  username: { type: "string" },
+  password: { type: "string" },
+  /** Registers the user if the login fails; `--no-register` never does. */
+  register: { type: "boolean" },
+});
 
 intro(`Init session`);
 
 await opaque.ready;
 
-const env = readEnv(scriptsEnvPath);
+const input = {
+  endpoint: await textFlag("endpoint", flags.endpoint, url, () =>
+    text({
+      message: "Spendy2 endpoint?",
+      placeholder: "http://localhost:5173",
+      initialValue: deployedEndpoint(),
+      validate: url,
+    }),
+  ),
+  username: await textFlag("username", flags.username, username, () =>
+    text({ message: "Username?", validate: username }),
+  ),
+  password: await textFlag("password", flags.password, required, () =>
+    password({ message: "Password?", validate: required }),
+  ),
+};
 
-const input = await group(
-  {
-    endpoint: () =>
-      text({
-        message: "Spendy2 endpoint?",
-        placeholder: "http://localhost:5173",
-        initialValue: env.SPENDY2_ENDPOINT ?? deployedEndpoint(),
-        validate: url,
-      }),
-    username: () =>
-      text({
-        message: "Username?",
-        initialValue: env.SPENDY2_USERNAME,
-        validate: usernameSchema,
-      }),
-    password: () => password({ message: "Password?", validate: required }),
-  },
-  { onCancel },
-);
-
-const session = await loginOrRegister(input.endpoint, input.username, input.password);
-
+let session = await login(input.endpoint, input.username, input.password);
 if (session === undefined) {
-  writeEnv(scriptsEnvPath, { SPENDY2_ENDPOINT: input.endpoint });
-  outro(`Saved the endpoint without a session`);
-} else {
-  writeEnv(scriptsEnvPath, {
-    SPENDY2_ENDPOINT: input.endpoint,
-    SPENDY2_USERNAME: input.username,
-    SPENDY2_TOKEN: session.token,
-    SPENDY2_EXPORT_KEY: session.exportKey,
-  });
-  outro(`Logged in as ${input.username}`);
+  const rejected = `Login failed, the password is wrong or ${input.username} doesn't exist`;
+  const register = await booleanFlag(
+    flags.register,
+    () => confirm({ message: `${rejected}. Register ${input.username}?`, initialValue: false }),
+    `${rejected}. Pass --register to register ${input.username}`,
+  );
+  if (!register) fail(rejected);
+
+  await registerUser(input.endpoint, input.username, input.password);
+  // The login above, of a user there wasn't, counts as an attempt that failed.
+  session =
+    (await login(input.endpoint, input.username, input.password, { waitOutBackoff: true })) ??
+    fail("Login failed after registering");
 }
+
+saveSession(flags.root, {
+  endpoint: input.endpoint,
+  username: input.username,
+  token: session.token,
+  kek: await deriveKekBytes(session.exportKey),
+});
+outro(`Logged in as ${input.username}, you can now pull the database.`);

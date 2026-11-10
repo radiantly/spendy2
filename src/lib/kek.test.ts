@@ -1,6 +1,6 @@
 import * as opaque from "@serenity-kit/opaque";
 import { describe, expect, it } from "vitest";
-import { deriveKek } from "./kek.ts";
+import { deriveKek, deriveKekBytes, importKek } from "./kek.ts";
 
 /**
  * Independent test vector, computed with Node's crypto (HKDF-SHA256 with an
@@ -87,5 +87,18 @@ describe("deriveKek", () => {
     });
 
     await expect(deriveKek(exportKey)).resolves.toBeInstanceOf(CryptoKey);
+  });
+});
+
+describe("importKek", () => {
+  it("gives the key deriveKek does, from the bytes deriveKekBytes gave", async () => {
+    const kek = await importKek(await deriveKekBytes(VECTOR.exportKey));
+
+    expect(await wrapHex(kek, await importDataKey(VECTOR.dataKey))).toBe(VECTOR.wrapped);
+    expect(kek.extractable).toBe(false);
+  });
+
+  it("rejects bytes that aren't a KEK's length", async () => {
+    await expect(importKek(new Uint8Array(16))).rejects.toThrow();
   });
 });

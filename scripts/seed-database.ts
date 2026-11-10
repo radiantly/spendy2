@@ -1,73 +1,78 @@
 /**
- * Replaces the logged-in user's database with generated test data, for
- * trying out the app with a realistic amount of it. Uses the session from
+ * Replaces a user's database with generated test data, for trying out the
+ * app with a realistic amount of it. Uses the session from
  * `npm run init-session`.
+ *
+ *   npm run seed-database -- [--user <name>] --transactions <count> --brokerage|--no-brokerage [--replace]
  */
 import fs from "fs";
 import path from "path";
-import { confirm, intro, isCancel, outro, spinner, text } from "@clack/prompts";
+import { confirm, intro, outro, spinner, text } from "@clack/prompts";
 import sqlite3InitModule from "@sqlite.org/sqlite-wasm";
 import { configureConnection } from "../src/db/connection.ts";
 import { migrate, migrationsFromFiles } from "../src/db/migrate.ts";
 import { encryptPart } from "../src/db/parts.ts";
-import { deriveKek } from "../src/lib/kek.ts";
-import { fail, onCancel, readEnv } from "./lib.ts";
+import { databaseParts } from "./api.ts";
+import { booleanFlag, parseFlags, textFlag } from "./flags.ts";
+import { fail, onCancel } from "./lib.ts";
 import { generateTestData } from "./testData.ts";
+import { userData } from "./userData.ts";
 import { NO_PREVIOUS_PART } from "../worker/databaseParts.ts";
 
-const scriptsEnvPath = path.join(import.meta.dirname, ".env");
 const migrationsDir = path.join(import.meta.dirname, "..", "src", "db", "migrations");
 
-async function request(endpoint: string, token: string, init: RequestInit = {}) {
-  const target = new URL("/api/users/me/database/parts", endpoint);
-  try {
-    return await fetch(target, {
-      ...init,
-      headers: { Authorization: `Bearer ${token}`, ...init.headers },
-    });
-  } catch {
-    fail(`Could not reach ${target}`);
-  }
+function positiveWholeNumber(value: string | undefined) {
+  if (!/^[1-9]\d*$/.test(value ?? "")) return "Enter a positive whole number";
 }
+
+const flags = parseFlags({
+  user: { type: "string" },
+  transactions: { type: "string" },
+  brokerage: { type: "boolean" },
+  /** Replaces the database the user already has; `--no-replace` never does. */
+  replace: { type: "boolean" },
+});
 
 intro("Seed database");
 
-const env = readEnv(scriptsEnvPath);
-const {
-  SPENDY2_ENDPOINT: endpoint,
-  SPENDY2_USERNAME: username,
-  SPENDY2_TOKEN: token,
-  SPENDY2_EXPORT_KEY: exportKey,
-} = env;
-if (!endpoint || !username || !token || !exportKey)
-  fail("No session, run npm run init-session first");
+const { session } = await userData(flags.root, flags.user);
+const { username } = session;
 
-const countText = await text({
-  message: "How many transactions?",
-  initialValue: "100000",
-  validate: (value) =>
-    /^[1-9]\d*$/.test(value ?? "") ? undefined : "Enter a positive whole number",
-});
-if (isCancel(countText)) onCancel();
-const count = Number(countText);
+const count = Number(
+  await textFlag("transactions", flags.transactions, positiveWholeNumber, () =>
+    text({
+      message: "How many transactions?",
+      initialValue: "100000",
+      validate: positiveWholeNumber,
+    }),
+  ),
+);
 
-const brokerage = await confirm({
-  message: "Add a brokerage account trading in USD, EUR, GBP and JPY?",
-  initialValue: true,
-});
-if (isCancel(brokerage)) onCancel();
+const brokerage = await booleanFlag(
+  flags.brokerage,
+  () =>
+    confirm({
+      message: "Add a brokerage account trading in USD, EUR, GBP and JPY?",
+      initialValue: true,
+    }),
+  "Not run in a terminal, so --brokerage or --no-brokerage is required",
+);
 
-const existing = await request(endpoint, token);
-if (existing.status === 401) fail("The session has ended, run npm run init-session again");
+const existing = await databaseParts(session);
 if (existing.status !== 404 && !existing.ok)
   fail(`Couldn't check for an existing database: ${existing.status}`);
 const currentEtag = existing.ok ? existing.headers.get("ETag") : null;
 if (currentEtag !== null) {
-  const overwrite = await confirm({
-    message: `${username} already has a database. Replace it with generated data?`,
-    initialValue: true,
-  });
-  if (isCancel(overwrite) || !overwrite) onCancel();
+  const replace = await booleanFlag(
+    flags.replace,
+    () =>
+      confirm({
+        message: `${username} already has a database. Replace it with generated data?`,
+        initialValue: true,
+      }),
+    `${username} already has a database. Pass --replace to replace it with generated data`,
+  );
+  if (!replace) onCancel();
 }
 
 const progress = spinner();
@@ -91,13 +96,13 @@ db.close();
 
 progress.message("Encrypting");
 // Uploaded as the only part, replacing every part there is.
-const part = await encryptPart(bytes, await deriveKek(exportKey), {
+const part = await encryptPart(bytes, session.kek, {
   previousHash: NO_PREVIOUS_PART,
   userVersion,
 });
 
 progress.message(`Uploading ${(part.length / 1e6).toFixed(1)} MB`);
-const upload = await request(endpoint, token, {
+const upload = await databaseParts(session, {
   method: "PUT",
   headers: currentEtag === null ? { "If-None-Match": "*" } : { "If-Match": currentEtag },
   body: part,
