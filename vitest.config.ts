@@ -85,6 +85,22 @@ export default defineConfig({
         },
       },
       {
+        // The currency rates' cron worker, with made-up secrets: its tests
+        // stub every request it makes.
+        plugins: [
+          cloudflareTest({
+            wrangler: { configPath: "./currency/cron/wrangler.jsonc" },
+            miniflare: {
+              bindings: { CLOUDFLARE_ACCOUNT_ID: "account", CLOUDFLARE_API_TOKEN: "token" },
+            },
+          }),
+        ],
+        test: {
+          name: "currency",
+          include: ["currency/**/*.test.ts"],
+        },
+      },
+      {
         // Same as vite.config.ts, minus the Cloudflare plugin.
         plugins: [react(), tailwindcss(), babel({ presets: [reactCompilerPreset()] })],
         worker: { format: "es" },

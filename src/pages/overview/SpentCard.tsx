@@ -1,5 +1,6 @@
 import { formatMoney } from "../../lib/money.ts";
 import { Eyebrow } from "./Card.tsx";
+import ConversionNote from "./ConversionNote.tsx";
 import CumulativeChart from "./CumulativeChart.tsx";
 import CurrencyPicker from "./CurrencyPicker.tsx";
 import type { Overview } from "./loadOverview.ts";
@@ -37,6 +38,8 @@ function SpentCard({ overview, pickedCurrency, onCurrencyChange, className = "" 
           <Eyebrow>Spent · {period.name}</Eyebrow>
           <p className="font-display text-[clamp(3.5rem,8vw,5.5rem)] leading-[0.95] font-extrabold tracking-[-0.04em]">
             {formatMoney(summary.spent, currency, { whole: true })}
+            {/* When it isn't only what's stored: some of it is by the exchange rates, or missing. */}
+            <ConversionNote estimated={summary.estimated} skipped={summary.skipped} />
           </p>
           <div className="flex flex-wrap items-center gap-2">
             {period.previous && previousSpent !== null && previousSpent > 0 && (

@@ -467,7 +467,11 @@ function AmountMenu({
   onViewChange,
   currencies,
 }: MenuProps & { currencies: readonly string[] }) {
+  const sortName = useId();
   const flowName = useId();
+  const sorted = sortedBy(view.sort, "amount");
+  const sortBy = (direction: SortDirection) =>
+    onViewChange({ ...view, sort: { column: "amount", direction } });
   const hidden = view.hiddenCurrencies;
   const hide = (hiddenCurrencies: ReadonlySet<string>) =>
     onViewChange({ ...view, hiddenCurrencies });
@@ -476,8 +480,24 @@ function AmountMenu({
     <HeaderMenu
       {...header}
       column="amount"
+      sorted={sorted}
       filtered={view.flow !== "all" || hidesAny(currencies, hidden)}
     >
+      {/* By how large they are, whichever way the money went: the amounts show no minus. */}
+      <MenuGroup title="Sort">
+        <RadioItem
+          name={sortName}
+          label="Smallest first"
+          checked={sorted === "ascending"}
+          onPick={() => sortBy("ascending")}
+        />
+        <RadioItem
+          name={sortName}
+          label="Largest first"
+          checked={sorted === "descending"}
+          onPick={() => sortBy("descending")}
+        />
+      </MenuGroup>
       <MenuGroup title="Filter">
         {FLOWS.map(({ id, label }) => (
           <RadioItem

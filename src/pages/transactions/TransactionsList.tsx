@@ -1,13 +1,8 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useWindowVirtualizer } from "@tanstack/react-virtual";
-import {
-  compareNewestFirst,
-  conversionTo,
-  type AccountCurrency,
-  type ListedTransaction,
-} from "../../db/queries/transactions.ts";
+import { compareNewestFirst, type ListedTransaction } from "../../db/queries/transactions.ts";
 import { formatMoney } from "../../lib/money.ts";
-import { findName } from "./fields.ts";
+import type { DisplayAmount } from "./displayAmount.ts";
 
 /** Fixed, so the virtualizer knows where everything is without measuring. */
 export const DAY_HEIGHT = 40;
@@ -47,26 +42,21 @@ function formatDay(date: string, thisYear: string) {
 type TransactionsListProps = {
   /** In any order: edits and adds leave them out of order. */
   transactions: readonly ListedTransaction[];
-  accounts: readonly AccountCurrency[];
+  /** A transaction's amount in the currency its account displays in (see `displayAmounts`). */
+  displayAmountOf: (transaction: ListedTransaction) => DisplayAmount | null;
 };
 
 /**
  * The transactions as a list grouped by day, for screens too narrow for the
  * table. Read-only.
  */
-function TransactionsList({ transactions, accounts }: TransactionsListProps) {
+function TransactionsList({ transactions, displayAmountOf }: TransactionsListProps) {
   // The virtualizer is a mutable object that returns new results from the
   // same instance, so the React Compiler would memoize reads of it and render
   // stale rows (as in TransactionsTable).
   "use no memo";
 
   const items = useMemo(() => byDay(transactions), [transactions]);
-  const displayCurrencyOf = useMemo(() => {
-    const names = accounts.map(({ name }) => name);
-    const currencies = new Map(accounts.map((account) => [account.name, account.display_currency]));
-    // A transaction's account name matches the account's ignoring case.
-    return (account: string) => currencies.get(findName(names, account) ?? "") ?? null;
-  }, [accounts]);
 
   // The virtualizer measures scroll positions from the top of the page; it
   // needs to know where the list starts.
@@ -119,7 +109,7 @@ function TransactionsList({ transactions, accounts }: TransactionsListProps) {
             ) : (
               <TransactionItem
                 transaction={item.transaction}
-                displayCurrency={displayCurrencyOf(item.transaction.account_name)}
+                display={displayAmountOf(item.transaction)}
               />
             )}
           </li>
@@ -153,11 +143,11 @@ function label(transaction: ListedTransaction) {
 
 function TransactionItem({
   transaction,
-  displayCurrency,
+  display,
 }: {
   transaction: ListedTransaction;
-  /** Its account's. */
-  displayCurrency: string | null;
+  /** Its amount in the currency its account displays in, if that's another. */
+  display: DisplayAmount | null;
 }) {
   const { text, className } = label(transaction);
 
@@ -179,28 +169,23 @@ function TransactionItem({
         <span className={transaction.amount > 0 ? "text-gain" : ""}>
           {formatMoney(transaction, transaction.currency, { sign: "in" })}
         </span>
-        {displayCurrency !== null && transaction.currency !== displayCurrency && (
-          <Conversion transaction={transaction} currency={displayCurrency} />
-        )}
+        {display !== null && <Conversion display={display} />}
       </div>
     </div>
   );
 }
 
-/** The amount in its account's display currency, or that it has none. */
-function Conversion({
-  transaction,
-  currency,
-}: {
-  transaction: ListedTransaction;
-  currency: string;
-}) {
-  const converted = conversionTo(transaction, currency);
-  return converted === undefined ? (
+/**
+ * The amount in its account's display currency: the conversion stored, or
+ * about what the exchange rates make it (≈), or that it has neither.
+ */
+function Conversion({ display: { currency, amount, estimated } }: { display: DisplayAmount }) {
+  return amount === null ? (
     <span className="font-sans text-xs text-warning">Not converted</span>
   ) : (
     <span className="text-xs text-ink-muted">
-      {formatMoney(converted, currency, { sign: "in" })}
+      {estimated && "≈ "}
+      {formatMoney(amount, currency, { sign: "in" })}
     </span>
   );
 }

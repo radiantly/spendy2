@@ -2,6 +2,9 @@
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "spendy2",
   "compatibility_date": "2026-10-07",
+  "observability": {
+    "enabled": true
+  },
   "main": "./worker/index.ts",
   "assets": {
     "not_found_handling": "single-page-application",

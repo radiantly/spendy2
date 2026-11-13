@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { keepPreviousData, usePrefetchQuery, useQuery } from "@tanstack/react-query";
 import { useOpenDatabase } from "../../db/useDatabase.ts";
+import { useRatesProgress } from "../../lib/rates/load.ts";
 import AccountsCard from "./AccountsCard.tsx";
 import { Eyebrow } from "./Card.tsx";
 import CustomRangeInputs from "./CustomRangeInputs.tsx";
@@ -24,7 +25,9 @@ function OverviewPage() {
   const [choice, setChoice] = useState<PeriodChoice | null>(null);
   // Null: the most used.
   const [currency, setCurrency] = useState<string | null>(null);
-  const query = overviewQuery(database, choice, currency, today());
+  // Which exchange rates the overview shown was read with: none, to start with.
+  const [ratesLoaded, setRatesLoaded] = useState("");
+  const query = overviewQuery(database, choice, currency, today(), ratesLoaded);
   // Started while rendering, so it loads while the page is hidden too: its
   // effects, where useQuery would start it, only run once it's shown.
   usePrefetchQuery(query);
@@ -38,6 +41,11 @@ function OverviewPage() {
     ...query,
     placeholderData: keepPreviousData,
   });
+  // The rates it could count transactions through are loaded once it's
+  // shown, and it's read again with them once they all are, or as many as
+  // will be: it never waits for them, and stays as it is if none come.
+  const ratesNow = useRatesProgress(overview?.rateChunks ?? []);
+  if (ratesNow !== null && ratesNow !== ratesLoaded) setRatesLoaded(ratesNow);
 
   if (isError)
     return (

@@ -5,7 +5,10 @@
  * The overview is in one display currency, and covers the transactions in
  * accounts shown in it, as well as those in it in accounts without a display
  * currency (see overviewCurrency). A transaction in another currency counts
- * through its conversion to it, and without one is left out of the totals.
+ * through its conversion to it. Without one it counts through the amount the
+ * exchange rates give it, which isn't in the database: whoever asks works
+ * those out (see LIST_UNCONVERTED) and binds them as `$fallbacks`, and a
+ * transaction without one of those either is left out of the totals.
  * Transfers between the user's own accounts and transactions marked as
  * duplicates are left out of spending and income. Totals are summed exactly,
  * as stored, and given as floats in whole units of the currency (12.5 for
@@ -25,29 +28,100 @@ const overviewCurrency = (transactions: string) =>
 /**
  * The transactions from `$from` to `$to` (inclusive) that also meet
  * `condition`, with
- * - `display_amount`: the amount in the display currency whose overview it's
+ * - `stored_amount`: the amount in the display currency whose overview it's
  *   in (see overviewCurrency), as stored in that currency's stored_decimals:
  *   its own, or its conversion to it. Null if there's none. Only one in
  *   another currency looks for a conversion.
+ * - `display_amount`: the stored amount, or without one, the transaction's
+ *   among `$fallbacks`. Null if it has neither.
+ * - `estimated`: whether the display amount is from `$fallbacks`
  * - `counted`: whether it counts towards spending and income: it's neither a
  *   transfer between the user's own accounts nor marked as a duplicate
+ *
+ * `$fallbacks` is a JSON array of `[id, amount]`: amounts worked out from
+ * exchange rates for transactions without a stored one (see
+ * LIST_UNCONVERTED), in the stored_decimals of their overview's currency.
+ * Not bound, there are none. One for a transaction with a stored amount is
+ * never used.
  */
 const inPeriod = (condition: string) => `
-  WITH t AS (
-    SELECT transactions.*,
-      CASE
-        WHEN transactions.currency = ${overviewCurrency("transactions")} THEN transactions.amount
-        ELSE (
-          SELECT conversions.amount FROM conversions
-          WHERE conversions.transaction_id = transactions.id
-            AND conversions.currency = ${overviewCurrency("transactions")}
-        )
-      END AS display_amount,
-      transfer_account IS NULL AND duplicate_of IS NULL AS counted
-    FROM transactions
-    JOIN accounts AS account ON account.name = transactions.account_name
-    WHERE naive_date BETWEEN $from AND $to AND ${condition}
+  WITH fallback AS MATERIALIZED (
+    SELECT value ->> 0 AS id, value ->> 1 AS amount FROM json_each($fallbacks)
+  ),
+  t AS (
+    SELECT stored.*,
+      coalesce(stored.stored_amount, fallback.amount) AS display_amount,
+      stored.stored_amount IS NULL AND fallback.amount IS NOT NULL AS estimated
+    FROM (
+      SELECT transactions.*,
+        CASE
+          WHEN transactions.currency = ${overviewCurrency("transactions")} THEN transactions.amount
+          ELSE (
+            SELECT conversions.amount FROM conversions
+            WHERE conversions.transaction_id = transactions.id
+              AND conversions.currency = ${overviewCurrency("transactions")}
+          )
+        END AS stored_amount,
+        transfer_account IS NULL AND duplicate_of IS NULL AS counted
+      FROM transactions
+      JOIN accounts AS account ON account.name = transactions.account_name
+      WHERE naive_date BETWEEN $from AND $to AND ${condition}
+    ) AS stored
+    -- Only looked up for the few without a stored amount.
+    LEFT JOIN fallback ON stored.stored_amount IS NULL AND fallback.id = stored.id
   )
+`;
+
+/** A transaction with no amount stored in the currency its account displays in. */
+export type UnconvertedTransaction = {
+  id: string;
+  naive_date: string;
+  currency: string;
+  amount: number;
+  /** Its currency's stored_decimals. */
+  decimals: number;
+  /** The currency its account displays in, and that one's stored_decimals. */
+  display: string;
+  display_decimals: number;
+  /**
+   * Its conversions to other currencies, as JSON:
+   * `{"JPY":{"amount":-2400,"decimals":0}}`.
+   */
+  conversions: string;
+};
+
+/**
+ * The transactions from `$from` to `$to` (inclusive) with no amount stored
+ * in their overview's currency: those in another currency than their account
+ * displays in, without a conversion to it. They are the ones `$fallbacks`
+ * can give an amount (see inPeriod), from what's listed of each. Transfers
+ * and duplicates too. Bind `{ $from, $to }`.
+ */
+export const LIST_UNCONVERTED = `
+  SELECT transactions.id, transactions.naive_date, transactions.currency, transactions.amount,
+    currency.stored_decimals AS decimals,
+    account.display_currency AS display,
+    display.stored_decimals AS display_decimals,
+    (
+      SELECT json_group_object(
+        conversions.currency,
+        json_object('amount', conversions.amount, 'decimals', converted.stored_decimals)
+      )
+      FROM conversions
+      JOIN currencies AS converted ON converted.code = conversions.currency
+      WHERE conversions.transaction_id = transactions.id
+    ) AS conversions
+  FROM transactions
+  JOIN accounts AS account ON account.name = transactions.account_name
+  JOIN currencies AS currency ON currency.code = transactions.currency
+  JOIN currencies AS display ON display.code = account.display_currency
+  WHERE naive_date BETWEEN $from AND $to
+    AND transactions.currency <> account.display_currency
+    AND NOT EXISTS (
+      SELECT 1 FROM conversions
+      WHERE conversions.transaction_id = transactions.id
+        AND conversions.currency = account.display_currency
+    )
 `;
 
 /** The period's transactions in the overview in `$display` (see inPeriod). */
@@ -110,10 +184,14 @@ export type PeriodSummary = {
   /** Counted transactions without a category. */
   uncategorized: number;
   /**
-   * Counted transactions with no amount in the display currency, so left
-   * out of the totals. Only an account shown in it has any.
+   * Counted transactions with no amount stored in the display currency:
+   * `estimated` and `skipped` together. Only an account shown in it has any.
    */
   unconverted: number;
+  /** Those of them in the totals through an amount from `$fallbacks`. */
+  estimated: number;
+  /** Those of them without one of those either, so left out of the totals. */
+  skipped: number;
   /**
    * Counted transactions spending money in other currencies than the display
    * currency (so in accounts shown in it).
@@ -121,7 +199,7 @@ export type PeriodSummary = {
   foreign_currency_spends: number;
 };
 
-/** One row. Bind `{ $display, $from, $to }`. */
+/** One row. Bind `{ $display, $from, $to, $fallbacks }`. */
 export const GET_PERIOD_SUMMARY = `${IN_PERIOD}
   SELECT
     ${inWholeUnits("coalesce(sum(CASE WHEN counted AND display_amount < 0 THEN -display_amount END), 0)")}
@@ -130,7 +208,9 @@ export const GET_PERIOD_SUMMARY = `${IN_PERIOD}
       AS income,
     count(*) AS transactions,
     count(CASE WHEN counted AND category IS NULL THEN 1 END) AS uncategorized,
-    count(CASE WHEN counted AND display_amount IS NULL THEN 1 END) AS unconverted,
+    count(CASE WHEN counted AND stored_amount IS NULL THEN 1 END) AS unconverted,
+    count(CASE WHEN counted AND estimated THEN 1 END) AS estimated,
+    count(CASE WHEN counted AND display_amount IS NULL THEN 1 END) AS skipped,
     count(CASE WHEN counted AND currency <> $display AND amount < 0 THEN 1 END)
       AS foreign_currency_spends
   FROM t
@@ -138,7 +218,7 @@ export const GET_PERIOD_SUMMARY = `${IN_PERIOD}
 
 export type DailySpending = { date: string; spent: number };
 
-/** Only days with spending, oldest first. Bind `{ $display, $from, $to }`. */
+/** Only days with spending, oldest first. Bind `{ $display, $from, $to, $fallbacks }`. */
 export const LIST_DAILY_SPENDING = `${IN_PERIOD}
   SELECT naive_date AS date, ${inWholeUnits("sum(-display_amount)")} AS spent
   FROM t
@@ -151,7 +231,7 @@ export type CategorySpending = { category: string | null; spent: number };
 
 /**
  * Spending per category (null: none), as the categories table spells the
- * name. Bind `{ $display, $from, $to }`.
+ * name. Bind `{ $display, $from, $to, $fallbacks }`.
  */
 export const LIST_CATEGORY_SPENDING = `${IN_PERIOD}
   SELECT
@@ -172,7 +252,10 @@ export const LIST_CATEGORY_PARENTS = `
 
 export type MonthlyTotals = { month: string; income: number; spent: number };
 
-/** Only months with counted transactions, as `YYYY-MM`. Bind `{ $display, $from, $to }`. */
+/**
+ * Only months with counted transactions, as `YYYY-MM`. Bind
+ * `{ $display, $from, $to, $fallbacks }`.
+ */
 export const LIST_MONTHLY_TOTALS = `${IN_PERIOD}
   SELECT
     substr(naive_date, 1, 7) AS month,
@@ -211,10 +294,11 @@ export type AccountActivity = {
  * Every account, the one with the most transactions in the period first.
  * Money in and out leave out transfers to and from the user's other
  * accounts and duplicates. They're in the account's display currency: a
- * transaction in another currency counts through its conversion to it, and
- * one without a conversion only counts towards the account's place in the
- * order. An account without a display currency has them only when its
- * transactions are all in one currency. Bind `{ $from, $to }`.
+ * transaction in another currency counts through its conversion to it, or
+ * else its amount among `$fallbacks`, and one without either only counts
+ * towards the account's place in the order. An account without a display
+ * currency has them only when its transactions are all in one currency. Bind
+ * `{ $from, $to, $fallbacks }`.
  *
  * The transactions are grouped by account before the accounts are joined, so
  * there's no join to look up rows for each account in.
@@ -268,16 +352,19 @@ export type RecentTransaction = {
   decimals: number;
   currency: string;
   /**
-   * The amount's conversion to `$display`, if it has one (never when it's in
-   * `$display`), in `conversion_decimals`.
+   * The amount in `$display`, if it has one (never when it's in `$display`),
+   * in `conversion_decimals`: its conversion to it, or else its amount among
+   * `$fallbacks`.
    */
   conversion_amount: number | null;
   conversion_decimals: number | null;
+  /** 1 if that amount is from `$fallbacks` rather than stored, else 0. */
+  conversion_estimated: number;
 };
 
 /**
  * The latest transactions in the period, newest first (see `newestFirst`).
- * Bind `{ $display, $from, $to, $limit }`.
+ * Bind `{ $display, $from, $to, $limit, $fallbacks }`.
  */
 export const LIST_RECENT_TRANSACTIONS = `${IN_PERIOD}
   SELECT
@@ -290,7 +377,8 @@ export const LIST_RECENT_TRANSACTIONS = `${IN_PERIOD}
     -- Its display amount, unless that's its own amount.
     CASE WHEN t.currency <> $display THEN t.display_amount END AS conversion_amount,
     CASE WHEN t.currency <> $display AND t.display_amount IS NOT NULL
-      THEN display_currency.stored_decimals END AS conversion_decimals
+      THEN display_currency.stored_decimals END AS conversion_decimals,
+    t.estimated AS conversion_estimated
   FROM t
   JOIN currencies AS currency ON currency.code = t.currency
   JOIN currencies AS display_currency ON display_currency.code = $display

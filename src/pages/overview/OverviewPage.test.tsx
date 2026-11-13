@@ -11,6 +11,7 @@ import { pageWidth, rect } from "../../test/renderAuthPage.tsx";
 import { itFailsInFirefox } from "../../test/browsers.ts";
 import { SOURCE_HASH_SQL, transactionId } from "../../test/fixtures.ts";
 import { holdNext } from "../../test/holdNext.ts";
+import { chunkOf, serveRates } from "../../test/rates.ts";
 import { loggedIn, savedElsewhere, storedDatabase } from "../../test/storedDatabase.ts";
 
 vi.mock("../../api/database.ts", () => ({
@@ -319,7 +320,7 @@ describe("OverviewPage", () => {
       await opened(
         [
           DATA,
-          insert(15, "2026-10-02", "Rewards Card", -10, "London Cab", "Dining out", {
+          insert(15, "2026-10-08", "Rewards Card", -10, "London Cab", "Dining out", {
             currency: "GBP",
           }),
           insert(16, "2026-10-02", "Travel Card", -20, "London Pub", "Dining out", {
@@ -339,6 +340,233 @@ describe("OverviewPage", () => {
       await expect.element(region("Spent")).toMatchTextContent("€59");
       expect(count("transactions")).toBe("3");
       expect(count("not converted")).toBe("1");
+    });
+  });
+
+  describe("transactions without a conversion stored", () => {
+    /**
+     * This month's, with three more on the Rewards Card (shown in dollars) in
+     * other currencies. Two aren't converted: London Cab's 10 pounds, and
+     * Zurich Tram's 20 francs. Paris Cab's 24 euros are, to 26.40 dollars.
+     */
+    const UNCONVERTED = [
+      DATA,
+      insert(15, "2026-10-08", "Rewards Card", -10, "London Cab", "Dining out", {
+        currency: "GBP",
+      }),
+      insert(16, "2026-10-08", "Rewards Card", -20, "Zurich Tram", "Dining out", {
+        currency: "CHF",
+      }),
+      insert(17, "2026-10-08", "Rewards Card", -24, "Paris Cab", "Dining out", {
+        currency: "EUR",
+        conversions: { USD: -26.4 },
+      }),
+    ].join(";");
+    /**
+     * A euro bought 1.25 dollars and 0.8 pounds: 10 pounds is 15.625 dollars.
+     * The franc has no rates.
+     */
+    const rates = (path: string) =>
+      path === "/USD-5" ? chunkOf(1.25) : path === "/GBP-5" ? chunkOf(0.8) : undefined;
+    const spent = () => region("Spent");
+    const asterisk = () => spent().getByRole("button", { name: "About this amount" });
+    // By its text: hidden, it has no role to be found by.
+    const note = () => spent().getByText(/foreign currency transactions? /);
+    const card = () => region("Transactions overview");
+    const count = (label: string) =>
+      card().getByText(label, { exact: true }).element().nextElementSibling!.textContent;
+
+    it("counts them through the exchange rates of their days, and says so by the amount", async () => {
+      serveRates(rates);
+
+      await opened(UNCONVERTED);
+
+      // 1,423 stored, and London Cab's 15.63.
+      await expect.element(spent()).toMatchTextContent("$1,439*");
+      await expect
+        .element(note())
+        .toHaveTextContent(
+          "1 foreign currency transaction automatically converted, 1 left out (missing conversions)",
+        );
+    });
+
+    it("leaves them out without the rates, and says so by the amount", async () => {
+      await opened(UNCONVERTED);
+
+      await expect.element(asterisk()).toBeVisible();
+      await expect.element(spent()).toMatchTextContent("$1,423*");
+      await expect
+        .element(note())
+        .toHaveTextContent("2 foreign currency transactions left out (missing conversions)");
+    });
+
+    it("has no asterisk when every transaction has an amount stored", async () => {
+      const asked = serveRates(rates);
+
+      await opened();
+
+      await expect.element(spent()).toMatchTextContent("$1,397");
+      expect(asterisk().query()).toBeNull();
+      expect(spent().element().textContent).not.toContain("*");
+      // Nothing to convert: no rates are asked for.
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(asked).toEqual([]);
+    });
+
+    it("shows as it is without them first, then with them once the rates arrive", async () => {
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => (release = resolve));
+      serveRates(async (path) => {
+        await held;
+        return rates(path);
+      });
+
+      await opened(UNCONVERTED);
+
+      await expect.element(spent()).toMatchTextContent("$1,423*");
+      await expect
+        .element(note())
+        .toHaveTextContent("2 foreign currency transactions left out (missing conversions)");
+      release();
+      await expect.element(spent()).toMatchTextContent("$1,439*");
+    });
+
+    it("stays as it is when the rates fail", async () => {
+      const asked = serveRates(() => 500);
+
+      await opened(UNCONVERTED);
+
+      await expect.poll(() => asked.length).toBeGreaterThan(0);
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      await expect.element(spent()).toMatchTextContent("$1,423*");
+      expect(page.getByRole("alert").query()).toBeNull();
+    });
+
+    it("asks only for the rates those transactions need", async () => {
+      const asked = serveRates(rates);
+
+      await opened(UNCONVERTED);
+
+      await expect.element(spent()).toMatchTextContent("$1,439*");
+      // The franc's chunks are looked for back to the first there could be.
+      expect(asked.toSorted()).toEqual([
+        "/CHF-2",
+        "/CHF-3",
+        "/CHF-4",
+        "/CHF-5",
+        "/GBP-5",
+        "/USD-5",
+      ]);
+    });
+
+    it("shows the note while the asterisk is hovered", async () => {
+      serveRates(rates);
+      await opened(UNCONVERTED);
+      await expect.element(spent()).toMatchTextContent("$1,439*");
+      await expect.element(note()).not.toBeVisible();
+
+      await userEvent.hover(asterisk());
+      await expect.element(note()).toBeVisible();
+
+      await userEvent.unhover(asterisk());
+      await expect.element(note()).not.toBeVisible();
+    });
+
+    it("shows the note when the asterisk is pressed, until it's pressed again", async () => {
+      serveRates(rates);
+      await opened(UNCONVERTED);
+      await expect.element(spent()).toMatchTextContent("$1,439*");
+
+      await userEvent.click(asterisk());
+      await userEvent.unhover(asterisk());
+      await expect.element(note()).toBeVisible();
+      await expect.element(asterisk()).toHaveAttribute("aria-expanded", "true");
+
+      await userEvent.click(asterisk());
+      await userEvent.unhover(asterisk());
+      await expect.element(note()).not.toBeVisible();
+    });
+
+    it("shows the note while the keyboard has the asterisk, and hides it with Escape", async () => {
+      serveRates(rates);
+      await opened(UNCONVERTED);
+      await expect.element(spent()).toMatchTextContent("$1,439*");
+      // The currency picker comes after it.
+      const picker = page.getByRole("combobox", { name: "Currency" });
+      picker.element().focus();
+
+      await userEvent.keyboard("{Shift>}{Tab}{/Shift}");
+
+      await expect.element(asterisk()).toHaveFocus();
+      await expect.element(note()).toBeVisible();
+      await userEvent.keyboard("{Escape}");
+      await expect.element(note()).not.toBeVisible();
+    });
+
+    it("describes the asterisk by its note", async () => {
+      serveRates(rates);
+      await opened(UNCONVERTED);
+      await expect.element(spent()).toMatchTextContent("$1,439*");
+
+      await expect
+        .element(asterisk())
+        .toHaveAccessibleDescription(
+          "1 foreign currency transaction automatically converted, 1 left out (missing conversions)",
+        );
+    });
+
+    it("counts them all as not converted, with the rates or without", async () => {
+      await opened(UNCONVERTED);
+      await expect.element(spent()).toMatchTextContent("$1,423*");
+      expect(count("not converted")).toBe("2");
+    });
+
+    it("still counts as not converted the ones the rates converted", async () => {
+      serveRates(rates);
+      await opened(UNCONVERTED);
+      await expect.element(spent()).toMatchTextContent("$1,439*");
+
+      expect(count("not converted")).toBe("2");
+    });
+
+    it("marks an amount the rates gave in Recent, and not one stored", async () => {
+      serveRates(rates);
+      await opened(UNCONVERTED);
+      await expect.element(spent()).toMatchTextContent("$1,439*");
+
+      const row = (name: string) =>
+        region("Recent").getByText(name, { exact: true }).element().closest("li")!.textContent;
+      // London Cab's is by the rates; Paris Cab's conversion is stored, and exact.
+      await expect.poll(() => row("London Cab")).toMatch(/-£10\.00≈ -\$15\.63$/);
+      expect(row("Paris Cab")).toMatch(/-€24\.00-\$26\.40$/);
+      expect(row("Paris Cab")).not.toContain("≈");
+      // Zurich Tram has neither.
+      expect(row("Zurich Tram")).not.toContain("≈");
+    });
+
+    it("counts them where the money went, and in their account's", async () => {
+      serveRates(rates);
+      await opened(UNCONVERTED);
+      await expect.element(spent()).toMatchTextContent("$1,439*");
+
+      // Food: 46.20 of groceries, and dining out at Café Lumen (18.40), Paris
+      // Cab (26.40) and London Cab (15.63).
+      await expect.element(region("Where it went")).toMatchTextContent("$107");
+    });
+
+    it("counts them for the period before, which the change compares with", async () => {
+      // Last month's only spending by Oct 9 is in pounds: without rates there is nothing to compare with.
+      const sql = [
+        ...SETUP,
+        insert(1, "2026-09-05", "Rewards Card", -10, "London Cab", null, { currency: "GBP" }),
+        insert(2, "2026-10-05", "Rewards Card", -31.25, "Corner Market", null),
+      ].join(";");
+      serveRates(rates);
+
+      await opened(sql);
+
+      // 31.25 against 15.63: up 100%.
+      await expect.element(spent()).toMatchTextContent(/100%/);
     });
   });
 
@@ -564,7 +792,7 @@ describe("OverviewPage", () => {
 
       await expect
         .element(region("Recent").getByRole("listitem").nth(0))
-        .toMatchTextContent(/Bistro Paris.*-€20\.00≈ -\$21\.80/);
+        .toMatchTextContent(/Bistro Paris.*-€20\.00-\$21\.80/);
     });
 
     it("links to all transactions", async () => {
@@ -632,7 +860,7 @@ describe("OverviewPage", () => {
       await expect.element(region("Spent")).toMatchTextContent(/SPENT · OCTOBER\s*€33/i);
       const recent = region("Recent").getByRole("listitem");
       await expect.element(recent.nth(0)).toMatchTextContent(/Café Sol.*-€24\.00$/);
-      await expect.element(recent.nth(1)).toMatchTextContent(/Airport Taxi.*-\$10\.00≈ -€9\.20$/);
+      await expect.element(recent.nth(1)).toMatchTextContent(/Airport Taxi.*-\$10\.00-€9\.20$/);
       expect(recent.elements()).toHaveLength(2);
       await expect
         .element(page.getByText(/^Decrypted locally/))

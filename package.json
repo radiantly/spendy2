@@ -13,11 +13,13 @@
     "preview": "vite preview",
     "deploy": "wrangler deploy",
     "cf-typegen": "wrangler types",
+    "cf-typegen:currency": "wrangler types currency/cron/worker-configuration.d.ts -c currency/cron/wrangler.jsonc",
     "create-dev-env": "node scripts/create-dev-env.ts",
     "init-session": "node scripts/init-session.ts",
     "pull-database": "node scripts/pull-database.ts",
     "push-database": "node scripts/push-database.ts",
-    "seed-database": "node scripts/seed-database.ts"
+    "seed-database": "node scripts/seed-database.ts",
+    "deploy:currency": "node scripts/backfill-currency.ts && wrangler deploy -c currency/cron/wrangler.jsonc"
   },
   "dependencies": {
     "@dicebear/core": "^10.7.0",

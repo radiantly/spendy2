@@ -20,10 +20,13 @@ import { useOpenDatabase } from "../../db/useDatabase.ts";
 import { useBreakpoint } from "../../hooks/useBreakpoint.ts";
 import { download } from "../../lib/download.ts";
 import { today } from "../../lib/period.ts";
+import { useRates } from "../../lib/rates/load.ts";
+import { chunksFor } from "../../lib/rates/rates.ts";
 import { useUndoRedo } from "../shell/historyKeys.ts";
 import ActionBar from "./ActionBar.tsx";
 import { ColumnMenu, TableMenu } from "./ColumnMenus.tsx";
 import { transactionsCsv } from "./csv.ts";
+import { displayAmounts, displayCurrencies } from "./displayAmount.ts";
 import {
   ADD_DESCRIPTION,
   describeDelete,
@@ -82,6 +85,13 @@ function TransactionsPage() {
     ...query,
     placeholderData: keepPreviousData,
   });
+  // The exchange rates the transactions could need, to sort amounts in
+  // different currencies by. Nothing waits for them, or minds if they never
+  // come: a sort makes do with the ones there are when it's set, and stays
+  // as it is when more arrive, as it does when a row is edited.
+  const rates = useRates(
+    loaded ? chunksFor(loaded.rows, displayCurrencies(loaded.accounts)) : [],
+  );
   const canUndo = useSyncExternalStore(history.subscribeToStacks, () => history.canUndo);
   const canRedo = useSyncExternalStore(history.subscribeToStacks, () => history.canRedo);
   const undoOrRedo = useUndoRedo(history);
@@ -115,6 +125,9 @@ function TransactionsPage() {
   const categories = loaded.categories.map(({ name }) => name);
   const names = { accounts, categories };
   const { currencies } = loaded;
+  // Each transaction's amount in the currency its account displays in: by
+  // the exchange rates where no conversion is stored, once they've arrived.
+  const displayAmountOf = displayAmounts(loaded.accounts, currencies, rates);
   // Edits, adds and their undos keep the rows' positions: only reading them
   // again makes new ones.
   let current = shown;
@@ -123,7 +136,7 @@ function TransactionsPage() {
     current = {
       view,
       read: loaded.read,
-      order: sortOrder(loaded.rows, view.sort, names),
+      order: sortOrder(loaded.rows, view.sort, names, rates),
       hidden: viewHidden(loaded.rows, view, names, today()),
       arrived: loaded.arrived.length,
     };
@@ -132,7 +145,7 @@ function TransactionsPage() {
     current = {
       ...current,
       view,
-      order: withArrived(current.order, arrived, loaded.rows, view.sort, names),
+      order: withArrived(current.order, arrived, loaded.rows, view.sort, names, rates),
       hidden:
         current.view === view
           ? withHidden(current.hidden, arrived, loaded.rows, view, names, today())
@@ -310,7 +323,7 @@ function TransactionsPage() {
         transactions.length === 0 ? (
           <p className="px-4 text-ink-muted lg:px-8">No transactions yet.</p>
         ) : (
-          <TransactionsList transactions={transactions} accounts={loaded.accounts} />
+          <TransactionsList transactions={transactions} displayAmountOf={displayAmountOf} />
         )
       ) : (
         <TransactionsTable
@@ -321,6 +334,8 @@ function TransactionsPage() {
           categories={categories}
           accounts={accounts}
           currencies={currencies}
+          // The table's rows are the transactions read, which have their conversions.
+          displayAmountOf={(row) => displayAmountOf(loaded.rows[loaded.positions.get(row.id)!]!)}
           onCommit={commit}
           lastUndoOrRedo={loaded.lastUndoOrRedo}
           onUndoOrRedo={undoOrRedo}

@@ -310,6 +310,22 @@ export function RadioItem({
           name={name}
           checked={checked}
           onChange={onPick}
+          // A radio button only changes when another was checked. Picking the
+          // one that is counts too: a sort picked again sorts again.
+          onClick={() => {
+            if (checked) onPick();
+          }}
+          // Space on the checked one clicks it in some browsers and does
+          // nothing in others: it picks here, and is kept from them, so that
+          // it picks once in each.
+          onKeyDown={(event) => {
+            if (checked && event.key === " ") event.preventDefault();
+          }}
+          onKeyUp={(event) => {
+            if (!checked || event.key !== " ") return;
+            event.preventDefault();
+            onPick();
+          }}
           className="peer size-4 cursor-pointer appearance-none rounded-full border border-line bg-field transition-[background-color,border-color,filter] checked:border-lime checked:bg-lime focus-visible:outline-3 focus-visible:outline-offset-3 focus-visible:outline-focus enabled:hover:brightness-95"
         />
         {/* A dot over the input, as an inset shadow drawing it leaves a grainy seam in the ring. */}

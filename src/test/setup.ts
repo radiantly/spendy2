@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, vi } from "vitest";
 import { locators, type Locator } from "vitest/browser";
 import { clear, createStore } from "idb-keyval";
 import { toast } from "sonner";
@@ -7,6 +7,7 @@ import "@fontsource-variable/bricolage-grotesque";
 import "@fontsource-variable/geist";
 import "@fontsource-variable/geist-mono";
 import "../index.css";
+import { withoutRates } from "./rates.ts";
 
 declare module "vitest/browser" {
   interface LocatorSelectors {
@@ -41,6 +42,13 @@ beforeAll(async () => {
       if (faces.length === 0) throw new Error(`No font face for ${family}`);
     }),
   );
+});
+
+// The exchange rates are another origin's, which no test may reach: without
+// `serveRates`, a test has none, as the app has offline. (Restored with the
+// other mocks, below.)
+beforeEach(() => {
+  withoutRates();
 });
 
 // The store session.ts uses. Cleared directly rather than through

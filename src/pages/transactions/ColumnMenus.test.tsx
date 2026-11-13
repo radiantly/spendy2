@@ -473,6 +473,83 @@ describe("the account menu", () => {
   });
 });
 
+describe("picking the choice that's already picked", () => {
+  it("sets the sort again, for the page to sort again by", async () => {
+    await renderTable();
+    await open("Account");
+    await userEvent.click(radio("A to Z"));
+    const first = view.sort;
+
+    await userEvent.click(radio("A to Z"));
+
+    expect(view.sort).toEqual({ column: "account", direction: "ascending" });
+    expect(view.sort).not.toBe(first);
+    await expect.element(radio("A to Z")).toBeChecked();
+  });
+
+  it("sets the date's sort again, which is the one it starts with", async () => {
+    await renderTable();
+    await open("Date");
+
+    await userEvent.click(radio("Recent transactions first"));
+
+    expect(view).not.toBe(DEFAULT_VIEW);
+    expect(view.sort).toEqual(DEFAULT_VIEW.sort);
+    expect(view.sort).not.toBe(DEFAULT_VIEW.sort);
+  });
+
+  it("sets it again with Space", async () => {
+    await renderTable();
+    await open("Account");
+    await userEvent.click(radio("A to Z"));
+    const first = view.sort;
+
+    await userEvent.keyboard(" ");
+
+    expect(view.sort).toEqual(first);
+    expect(view.sort).not.toBe(first);
+  });
+
+  it("sets it again when its label is pressed", async () => {
+    await renderTable();
+    await open("Account");
+    await userEvent.click(menu("Account").getByText("A to Z", { exact: true }));
+    const first = view.sort;
+
+    await userEvent.click(menu("Account").getByText("A to Z", { exact: true }));
+
+    expect(view.sort).toEqual({ column: "account", direction: "ascending" });
+    expect(view.sort).not.toBe(first);
+  });
+
+  it("sets it once for a choice that wasn't picked", async () => {
+    await renderTable();
+    await open("Account");
+    const changes: TransactionsView[] = [];
+    const before = view;
+
+    await userEvent.click(radio("Z to A"));
+    if (view !== before) changes.push(view);
+    const after = view;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    // Neither the click nor the change after it set it a second time.
+    expect(view).toBe(after);
+    expect(changes).toHaveLength(1);
+  });
+
+  it("keeps a filter as it is", async () => {
+    await renderTable();
+    await open("Amount");
+    await userEvent.click(radio("Money out"));
+
+    await userEvent.click(radio("Money out"));
+
+    expect(view.flow).toBe("out");
+    await expect.element(radio("Money out")).toBeChecked();
+  });
+});
+
 describe("the counterparty menu", () => {
   it("only sorts", async () => {
     await renderTable();
@@ -651,12 +728,48 @@ describe("the amount menu", () => {
     expect(view.hiddenCurrencies).toEqual(new Set(["EUR"]));
   });
 
-  it("doesn't sort", async () => {
+  it("sorts the smallest first, or the largest", async () => {
+    await renderTable();
+    await open("Amount");
+    await expect.element(radio("Smallest first")).not.toBeChecked();
+    await expect.element(radio("Largest first")).not.toBeChecked();
+
+    await userEvent.click(radio("Largest first"));
+
+    expect(view.sort).toEqual({ column: "amount", direction: "descending" });
+    await expect.element(radio("Largest first")).toBeChecked();
+    await expect.element(header("Amount")).toHaveAttribute("aria-sort", "descending");
+    await expect.element(header("Date")).not.toHaveAttribute("aria-sort");
+
+    await userEvent.click(radio("Smallest first"));
+
+    expect(view.sort).toEqual({ column: "amount", direction: "ascending" });
+    await expect.element(header("Amount")).toHaveAttribute("aria-sort", "ascending");
+  });
+
+  it("lists the sort before its filters", async () => {
     await renderTable();
 
     await open("Amount");
 
-    expect(page.getByRole("group", { name: "Sort" }).query()).toBeNull();
+    const names = page
+      .getByRole("radio")
+      .elements()
+      .map((item) => item.closest("label")!.textContent);
+    expect(names).toEqual(["Smallest first", "Largest first", "Show all", "Money in", "Money out"]);
+  });
+
+  it("keeps its filters when it sorts, and its sort when it filters", async () => {
+    await renderTable();
+    await open("Amount");
+
+    await userEvent.click(radio("Money out"));
+    await userEvent.click(radio("Largest first"));
+
+    expect(view.flow).toBe("out");
+    expect(view.sort).toEqual({ column: "amount", direction: "descending" });
+    await expect.element(radio("Money out")).toBeChecked();
+    await expect.element(radio("Largest first")).toBeChecked();
   });
 });
 

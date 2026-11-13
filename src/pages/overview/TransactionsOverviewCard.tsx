@@ -4,8 +4,9 @@ import type { Overview } from "./loadOverview.ts";
 
 /**
  * What needs attention in the period's transactions: how many have no
- * category, or no amount in the overview's currency. When none do, how many
- * there are, and how many spend money in other currencies.
+ * category, or no amount stored in the overview's currency, those the
+ * exchange rates gave one too. When none do, how many there are, and how
+ * many spend money in other currencies.
  */
 function TransactionsOverviewCard({
   overview,

@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { ListedTransaction } from "../../db/queries/transactions.ts";
+import type { Rates } from "../../lib/rates/rates.ts";
+import { fill } from "../../lib/rates/reader.ts";
+import { chunkOf } from "../../test/rates.ts";
 import {
   DEFAULT_VIEW,
   filterValues,
@@ -45,21 +48,31 @@ const NAMES = {
   categories: ["Food", "Groceries", "Rent"],
 };
 const TODAY = "2026-10-18";
+/** No exchange rates: only sorting by amount reads them. */
+const NO_RATES: Rates = new Map();
 
 /** What the view with `changes` shows of `rows`, none of them removed (see `shownRows`). */
-function showing(rows: ListedTransaction[], changes: Partial<TransactionsView> = {}) {
+function showing(
+  rows: ListedTransaction[],
+  changes: Partial<TransactionsView> = {},
+  rates = NO_RATES,
+) {
   const view = { ...DEFAULT_VIEW, ...changes };
   return shownRows(
     rows,
-    sortOrder(rows, view.sort, NAMES),
+    sortOrder(rows, view.sort, NAMES, rates),
     viewHidden(rows, view, NAMES, TODAY),
     new Set(),
   );
 }
 
 /** The ids of `rows` the view with `changes` shows, in order. */
-function shown(rows: ListedTransaction[], changes: Partial<TransactionsView> = {}) {
-  return showing(rows, changes).rows.map(({ id }) => id);
+function shown(
+  rows: ListedTransaction[],
+  changes: Partial<TransactionsView> = {},
+  rates = NO_RATES,
+) {
+  return showing(rows, changes, rates).rows.map(({ id }) => id);
 }
 
 /** The numbers of the rows the view with `changes` shows of `rows`, in order. */
@@ -68,6 +81,22 @@ function numbers(rows: ListedTransaction[], changes: Partial<TransactionsView> =
 }
 
 const ids = (rows: ListedTransaction[]) => rows.map(({ id }) => id);
+
+/** The first day of key 5, 2026-01-27, whose chunks the rows' days (October 2026) are in. */
+const KEY_5_DATE = "2026-01-27";
+
+/** Rates of key 5 from its first day, by currency: the same every day after the last given. */
+function ratesOf(byCurrency: Record<string, number[]>): Rates {
+  return new Map(
+    Object.entries(byCurrency).map(([currency, rates]) => [
+      currency,
+      new Map([[5, fill(chunkOf(...rates), NaN)]]),
+    ]),
+  );
+}
+
+/** A euro bought 1.25 dollars, 1.6 Singapore dollars and 200 yen, every day. */
+const RATES = ratesOf({ USD: [1.25], SGD: [1.6], JPY: [200] });
 /** A time on 2026-10-10 (`HH:MM`, UTC), as a timestamp. */
 const at = (time: string) => Date.parse(`2026-10-10T${time}Z`) / 1000;
 const OLDEST_FIRST = { sort: { column: "date", direction: "ascending" } } as const;
@@ -209,6 +238,212 @@ describe("the rows a view shows", () => {
     });
   });
 
+  describe("sorting by amount", () => {
+    const smallestFirst = { sort: { column: "amount", direction: "ascending" } } as const;
+    const largestFirst = { sort: { column: "amount", direction: "descending" } } as const;
+
+    it("puts the amounts of one currency in order of size, either way", () => {
+      const rows = [row({ amount: -500 }), row({ amount: -100 }), row({ amount: -4620 })];
+
+      expect(shown(rows, smallestFirst, RATES)).toEqual(ids([rows[1]!, rows[0]!, rows[2]!]));
+      expect(shown(rows, largestFirst, RATES)).toEqual(ids([rows[2]!, rows[0]!, rows[1]!]));
+    });
+
+    it("sorts by size, whichever way the money went", () => {
+      const rows = [row({ amount: 300 }), row({ amount: -500 }), row({ amount: -100 })];
+
+      expect(shown(rows, smallestFirst, RATES)).toEqual(ids([rows[2]!, rows[0]!, rows[1]!]));
+      expect(shown(rows, largestFirst, RATES)).toEqual(ids([rows[1]!, rows[0]!, rows[2]!]));
+    });
+
+    it("compares amounts in different currencies by what they're worth", () => {
+      const rows = [
+        // 10 euros, 8 euros, 12 euros and 9 euros.
+        row({ currency: "SGD", amount: -1600 }),
+        row({ currency: "USD", amount: -1000 }),
+        row({ currency: "JPY", amount: -2400, decimals: 0 }),
+        row({ currency: "EUR", amount: -900 }),
+      ];
+
+      expect(shown(rows, smallestFirst, RATES)).toEqual(
+        ids([rows[1]!, rows[3]!, rows[0]!, rows[2]!]),
+      );
+      expect(shown(rows, largestFirst, RATES)).toEqual(
+        ids([rows[2]!, rows[0]!, rows[3]!, rows[1]!]),
+      );
+    });
+
+    it("reads an amount in its currency's stored decimals", () => {
+      const rows = [
+        row({ currency: "USD", amount: -12_500, decimals: 3 }),
+        row({ currency: "USD", amount: -1300, decimals: 2 }),
+      ];
+
+      expect(shown(rows, largestFirst, RATES)).toEqual(ids([rows[1]!, rows[0]!]));
+    });
+
+    it("uses the rate of each transaction's own day", () => {
+      // A euro bought 1.25 dollars on the first day, and 2.5 from the second.
+      const rates = ratesOf({ USD: [1.25, 2.5] });
+      const rows = [
+        // 8 euros then, and 6 euros later, though more dollars.
+        row({ currency: "USD", amount: -1000, naive_date: KEY_5_DATE }),
+        row({ currency: "USD", amount: -1500, naive_date: "2026-10-10" }),
+        row({ currency: "EUR", amount: -700, naive_date: "2026-10-10" }),
+      ];
+
+      expect(shown(rows, largestFirst, rates)).toEqual(ids([rows[0]!, rows[2]!, rows[1]!]));
+    });
+
+    it("goes by a stored conversion rather than the transaction's own amount", () => {
+      const rows = [
+        // SGD 16.00 is 10 euros by the rates, but it came to JPY 3,000: 15 euros.
+        row({
+          currency: "SGD",
+          amount: -1600,
+          conversions: { JPY: { amount: -3000, decimals: 0 } },
+        }),
+        row({ currency: "EUR", amount: -1200 }),
+      ];
+
+      expect(shown(rows, largestFirst, RATES)).toEqual(ids([rows[0]!, rows[1]!]));
+    });
+
+    it("goes by the largest of a transaction's conversions", () => {
+      const rows = [
+        row({
+          currency: "SGD",
+          amount: -1600,
+          // 9 euros, and 15 euros.
+          conversions: {
+            USD: { amount: -1125, decimals: 2 },
+            JPY: { amount: -3000, decimals: 0 },
+          },
+        }),
+        row({ currency: "EUR", amount: -1200 }),
+      ];
+
+      expect(shown(rows, largestFirst, RATES)).toEqual(ids([rows[0]!, rows[1]!]));
+    });
+
+    it("goes by the transaction's own amount when its conversions have no rates", () => {
+      const rows = [
+        row({
+          currency: "SGD",
+          amount: -1600,
+          conversions: { XTS: { amount: -99_999_900, decimals: 2 } },
+        }),
+        row({ currency: "EUR", amount: -1200 }),
+      ];
+
+      expect(shown(rows, largestFirst, RATES)).toEqual(ids([rows[1]!, rows[0]!]));
+    });
+
+    it("keeps transactions of the same size newest first, either way", () => {
+      const rows = [
+        row({ amount: -500, naive_date: "2026-10-01" }),
+        row({ amount: 500, naive_date: "2026-10-03" }),
+        row({ amount: -500, naive_date: "2026-10-02" }),
+        // 4 euros, as USD 5.00 is.
+        row({ currency: "EUR", amount: -400, naive_date: "2026-10-04" }),
+      ];
+
+      const newestFirst = ids([rows[3]!, rows[1]!, rows[2]!, rows[0]!]);
+      expect(shown(rows, smallestFirst, RATES)).toEqual(newestFirst);
+      expect(shown(rows, largestFirst, RATES)).toEqual(newestFirst);
+    });
+
+    describe("transactions without a rate", () => {
+      it("go last either way", () => {
+        const rows = [
+          row({ currency: "XTS", amount: -1 }),
+          row({ currency: "USD", amount: -500 }),
+          row({ currency: "XTS", amount: -99_999_900 }),
+          row({ currency: "USD", amount: -100 }),
+        ];
+
+        expect(shown(rows, smallestFirst, RATES).slice(0, 2)).toEqual(ids([rows[3]!, rows[1]!]));
+        expect(shown(rows, largestFirst, RATES).slice(0, 2)).toEqual(ids([rows[1]!, rows[3]!]));
+      });
+
+      it("are in order of their amounts as numbers among themselves, whatever their currencies", () => {
+        const rows = [
+          row({ currency: "XTS", amount: -500 }),
+          row({ currency: "USD", amount: -100 }),
+          row({ currency: "XXX", amount: 300 }),
+          row({ currency: "XTS", amount: -4620 }),
+          // 20.00 in three decimals.
+          row({ currency: "XBT", amount: -20_000, decimals: 3 }),
+        ];
+
+        expect(shown(rows, smallestFirst, RATES)).toEqual(
+          ids([rows[1]!, rows[2]!, rows[0]!, rows[4]!, rows[3]!]),
+        );
+        expect(shown(rows, largestFirst, RATES)).toEqual(
+          ids([rows[1]!, rows[3]!, rows[4]!, rows[0]!, rows[2]!]),
+        );
+      });
+
+      it("are those on a day before their currency's first rate", () => {
+        // The dollar's rates start on the second day of the chunk.
+        const rates = ratesOf({ USD: [NaN, 1.25] });
+        const rows = [
+          row({ currency: "USD", amount: -99_900, naive_date: KEY_5_DATE }),
+          row({ currency: "USD", amount: -100, naive_date: "2026-01-28" }),
+        ];
+
+        expect(shown(rows, largestFirst, rates)).toEqual(ids([rows[1]!, rows[0]!]));
+      });
+
+      it("are those on a day whose rates aren't loaded", () => {
+        const rows = [
+          // Key 4's last day.
+          row({ currency: "USD", amount: -99_900, naive_date: "2026-01-26" }),
+          row({ currency: "USD", amount: -100 }),
+        ];
+
+        expect(shown(rows, largestFirst, RATES)).toEqual(ids([rows[1]!, rows[0]!]));
+      });
+
+      it("are those whose date isn't one, euros too", () => {
+        const rows = [
+          row({ currency: "EUR", amount: -99_900, naive_date: "" }),
+          row({ currency: "EUR", amount: -100 }),
+        ];
+
+        expect(shown(rows, largestFirst, RATES)).toEqual(ids([rows[1]!, rows[0]!]));
+      });
+    });
+
+    it("sorts every transaction by its amount as a number without any rates, euros first", () => {
+      const rows = [
+        row({ currency: "USD", amount: -500 }),
+        row({ currency: "EUR", amount: -4620 }),
+        row({ currency: "SGD", amount: -100 }),
+        row({ currency: "EUR", amount: -200 }),
+      ];
+
+      // The euro needs no rate, so it is the only one with a size.
+      expect(shown(rows, smallestFirst)).toEqual(ids([rows[3]!, rows[1]!, rows[2]!, rows[0]!]));
+      expect(shown(rows, largestFirst)).toEqual(ids([rows[1]!, rows[3]!, rows[0]!, rows[2]!]));
+    });
+
+    it("leaves the rows it was given as they were", () => {
+      const rows = [row({ amount: -500 }), row({ amount: -100 })];
+      const before = [...rows];
+
+      shown(rows, smallestFirst, RATES);
+
+      expect(rows).toEqual(before);
+    });
+
+    it("numbers the rows in the sort's order", () => {
+      const rows = [row({ amount: -500 }), row({ amount: -100 }), row({ amount: -300 })];
+
+      expect(showing(rows, smallestFirst, RATES).numbers).toEqual([1, 2, 3]);
+    });
+  });
+
   describe("numbering", () => {
     const days = () =>
       ["2026-10-04", "2026-10-03", "2026-10-02", "2026-10-01"].map((naive_date, index) =>
@@ -257,7 +492,7 @@ describe("the rows a view shows", () => {
 
     it("gives a removed row no number, and the rows after it the ones before theirs", () => {
       const rows = days();
-      const order = sortOrder(rows, DEFAULT_VIEW.sort, NAMES);
+      const order = sortOrder(rows, DEFAULT_VIEW.sort, NAMES, NO_RATES);
       const hidden = viewHidden(rows, DEFAULT_VIEW, NAMES, TODAY);
 
       expect(shownRows(rows, order, hidden, new Set([1]))).toEqual({
@@ -386,7 +621,9 @@ describe("the rows a view shows", () => {
 describe("withArrived", () => {
   /** The ids of `rows` with those at `arrived` placed into `order` as the default sort would. */
   function placed(rows: ListedTransaction[], order: number[], arrived: number[]) {
-    return withArrived(order, arrived, rows, DEFAULT_VIEW.sort, NAMES).map((at) => rows[at]!.id);
+    return withArrived(order, arrived, rows, DEFAULT_VIEW.sort, NAMES, NO_RATES).map(
+      (at) => rows[at]!.id,
+    );
   }
 
   it("puts an arrived row where the sort would, keeping the rest in order", () => {
@@ -441,7 +678,7 @@ describe("withArrived", () => {
         remarks: text,
       }),
     );
-    const all = sortOrder(rows, sort, NAMES);
+    const all = sortOrder(rows, sort, NAMES, NO_RATES);
     const arrived = [1, 4, 6];
 
     expect(
@@ -451,9 +688,47 @@ describe("withArrived", () => {
         rows,
         sort,
         NAMES,
+        NO_RATES,
       ),
     ).toEqual(all);
   });
+
+  it.each(["ascending", "descending"] as SortDirection[])(
+    "places rows as sortOrder would, sorting by amount, %s",
+    (direction) => {
+      const sort = { column: "amount", direction } as const;
+      // Some with a rate, some without, some of the same size, on three days.
+      const rows = [
+        ["USD", -500],
+        ["SGD", -800],
+        ["XTS", -300],
+        ["USD", 500],
+        ["XTS", -900],
+        ["SGD", -100],
+        ["XTS", 300],
+        ["EUR", -400],
+      ].map(([currency, amount], i) =>
+        row({
+          currency: currency as string,
+          amount: amount as number,
+          naive_date: `2026-10-0${(i % 3) + 1}`,
+        }),
+      );
+      const all = sortOrder(rows, sort, NAMES, RATES);
+      const arrived = [1, 2, 4, 7];
+
+      expect(
+        withArrived(
+          all.filter((at) => !arrived.includes(at)),
+          arrived,
+          rows,
+          sort,
+          NAMES,
+          RATES,
+        ),
+      ).toEqual(all);
+    },
+  );
 });
 
 describe("withHidden", () => {

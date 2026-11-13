@@ -2,6 +2,10 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { page } from "vitest/browser";
 import { render } from "vitest-browser-react";
 import type { AccountCurrency, ListedTransaction } from "../../db/queries/transactions.ts";
+import type { Rates } from "../../lib/rates/rates.ts";
+import { fill } from "../../lib/rates/reader.ts";
+import { chunkOf } from "../../test/rates.ts";
+import { displayAmounts } from "./displayAmount.ts";
 import TransactionsList, { DAY_HEIGHT, ROW_HEIGHT } from "./TransactionsList.tsx";
 
 const ACCOUNTS: AccountCurrency[] = [
@@ -32,8 +36,26 @@ function transaction(overrides: Partial<ListedTransaction> = {}): ListedTransact
   };
 }
 
-const show = (transactions: ListedTransaction[], accounts = ACCOUNTS) =>
-  render(<TransactionsList transactions={transactions} accounts={accounts} />);
+/** Every currency here stores two decimals. */
+const CURRENCIES = ["EUR", "GBP", "INR", "USD"].map((code) => ({ code, stored_decimals: 2 }));
+
+/** Rates of key 4 (the transactions are of October 2020), by currency: the same every day. */
+function ratesOf(byCurrency: Record<string, number>): Rates {
+  return new Map(
+    Object.entries(byCurrency).map(([currency, rate]) => [
+      currency,
+      new Map([[4, fill(chunkOf(rate), NaN)]]),
+    ]),
+  );
+}
+
+const show = (transactions: ListedTransaction[], accounts = ACCOUNTS, rates: Rates = new Map()) =>
+  render(
+    <TransactionsList
+      transactions={transactions}
+      displayAmountOf={displayAmounts(accounts, CURRENCIES, rates)}
+    />,
+  );
 
 const items = () => page.getByRole("list", { name: "Transactions" }).getByRole("listitem");
 const texts = () =>
@@ -162,6 +184,71 @@ describe("TransactionsList", () => {
 
     await expect.element(only()).toMatchTextContent(/\$94\.74\s*Not converted$/);
     expect(colorOf("Not converted")).toBe(colorOfClass("text-warning"));
+  });
+
+  describe("with exchange rates", () => {
+    /** A euro bought 1.25 dollars and 100 rupees. */
+    const RATES = ratesOf({ USD: 1.25, INR: 100 });
+
+    it("shows about what the rates make of one without a conversion stored, muted", async () => {
+      // USD 94.74 is 75.792 euros.
+      await show([transaction({ account_name: "Travel Card" })], ACCOUNTS, RATES);
+
+      await expect.element(only()).toMatchTextContent(/\$94\.74\s*≈ €75\.79$/);
+      expect(colorOf("≈ €75.79")).toBe(colorOfClass("text-ink-muted"));
+      expect(only().element().textContent).not.toContain("Not converted");
+    });
+
+    it("goes by a conversion stored to another currency rather than its own amount", async () => {
+      // It came to INR 8,300.00: 83 euros.
+      await show(
+        [
+          transaction({
+            account_name: "Travel Card",
+            conversions: { INR: { amount: -830_000, decimals: 2 } },
+          }),
+        ],
+        ACCOUNTS,
+        RATES,
+      );
+
+      await expect.element(only()).toMatchTextContent(/\$94\.74\s*≈ €83\.00$/);
+    });
+
+    it("shows a conversion stored as it is, without the sign for about", async () => {
+      await show(
+        [
+          transaction({
+            account_name: "Travel Card",
+            conversions: { EUR: { amount: -8700, decimals: 2 } },
+          }),
+        ],
+        ACCOUNTS,
+        RATES,
+      );
+
+      await expect.element(only()).toMatchTextContent(/\$94\.74\s*€87\.00$/);
+      expect(only().element().textContent).not.toContain("≈");
+    });
+
+    it("says it's not converted when the rates have none for its currency", async () => {
+      await show([transaction({ account_name: "Travel Card", currency: "GBP" })], ACCOUNTS, RATES);
+
+      await expect.element(only()).toMatchTextContent(/£94\.74\s*Not converted$/);
+      expect(colorOf("Not converted")).toBe(colorOfClass("text-warning"));
+    });
+
+    it("marks money in with its plus, after the sign for about", async () => {
+      await show([transaction({ account_name: "Travel Card", amount: 9474 })], ACCOUNTS, RATES);
+
+      await expect.element(only()).toMatchTextContent(/\+\$94\.74\s*≈ \+€75\.79$/);
+    });
+
+    it("shows nothing more for one in its account's currency", async () => {
+      await show([transaction()], ACCOUNTS, RATES);
+
+      await expect.element(only()).toMatchTextContent(/\$94\.74$/);
+    });
   });
 
   it.each([

@@ -15,6 +15,7 @@ import type { Moved } from "../../db/editHistory.ts";
 import type { Currency, EditedCell, TransactionRow } from "../../db/queries/transactions.ts";
 import { mouse, pointIn } from "../../test/mouse.ts";
 import ActionBar from "./ActionBar.tsx";
+import type { DisplayAmount } from "./displayAmount.ts";
 import type { MarkKind } from "./marks.ts";
 import { ROW_HEIGHT } from "./tableLayout.ts";
 import TransactionsTable, { type AddAt, type Added } from "./TransactionsTable.tsx";
@@ -536,6 +537,113 @@ describe("TransactionsTable", () => {
       await activate("Corner Market", AMOUNT);
 
       expect(amountShown("Corner Market")).toBe("$1,234.50");
+    });
+  });
+
+  describe("the amount in the account's currency, after the remarks", () => {
+    /** The first rows' amounts in their accounts' currencies, by id. */
+    const DISPLAY: Record<string, DisplayAmount | null> = {
+      // Corner Market's $1,234.50: a conversion stored.
+      t0: { currency: "EUR", amount: { amount: -98_760, decimals: 2 }, estimated: false },
+      // Shop 1's money in: by the exchange rates.
+      t1: { currency: "EUR", amount: { amount: 27, decimals: 2 }, estimated: true },
+      // Shop 2 needs one, and has none.
+      t2: { currency: "EUR", amount: null, estimated: false },
+      // Shop 3 needs none.
+      t3: null,
+      t4: { currency: "JPY", amount: { amount: -6, decimals: 0 }, estimated: true },
+    };
+    /** Shop 1 has remarks, and Shop 4 is a transfer with remarks. */
+    const SHOWN = rows.slice(0, 20).map((row, index) => ({
+      ...row,
+      ...(index === 1 ? { remarks: "Refund" } : {}),
+      ...(index === 4 ? { remarks: "Rent share", transfer_account: "Savings" } : {}),
+    }));
+    const withDisplayAmounts = () => (
+      <TransactionsTable
+        rows={SHOWN}
+        rowNumbers={numbersTo(SHOWN.length)}
+        maxRowNumber={SHOWN.length}
+        categories={CATEGORIES}
+        accounts={ACCOUNTS}
+        currencies={CURRENCIES}
+        displayAmountOf={(row) => DISPLAY[row.id] ?? null}
+        onCommit={onCommit}
+        lastUndoOrRedo={null}
+        onUndoOrRedo={onUndoOrRedo}
+      />
+    );
+    const shownIn = (counterparty: string, column: number) =>
+      cellOf(counterparty, column).element().textContent;
+    const text = (value: string) => page.getByText(value, { exact: true });
+
+    it("says a stored conversion in brackets, and one by the exchange rates as about that", async () => {
+      await render(withDisplayAmounts());
+
+      expect(shownIn("Corner Market", REMARKS)).toBe("(€987.60)");
+      expect(shownIn("Shop 1", REMARKS)).toBe("Refund (≈ +€0.27)");
+    });
+
+    it("says it after what the row is marked as", async () => {
+      await render(withDisplayAmounts());
+
+      expect(shownIn("Shop 4", REMARKS)).toBe("Rent share Transfer to Savings. (≈ ¥6)");
+    });
+
+    it("leaves the amount's own cell as it is", async () => {
+      await render(withDisplayAmounts());
+
+      expect(shownIn("Corner Market", AMOUNT)).toBe("$1,234.50");
+      expect(shownIn("Shop 1", AMOUNT)).toBe("+$0.33");
+    });
+
+    it("says nothing for a row without an amount in its account's currency, or that needs none", async () => {
+      await render(withDisplayAmounts());
+
+      expect(shownIn("Shop 2", REMARKS)).toBe("");
+      expect(shownIn("Shop 3", REMARKS)).toBe("");
+      expect(shownIn("Shop 5", REMARKS)).toBe("");
+    });
+
+    it("says nothing in a table that isn't told the amounts", async () => {
+      await renderTable();
+
+      expect(shownIn("Corner Market", REMARKS)).toBe("");
+    });
+
+    it("shows it greyed and in italics, as what a row is marked as", async () => {
+      await render(withDisplayAmounts());
+
+      const styleOf = (value: string) => {
+        const { color, fontStyle } = getComputedStyle(text(value).element());
+        return { color, fontStyle };
+      };
+      const muted = colorOfClass("text-ink-muted");
+      expect(styleOf("(€987.60)")).toEqual({ color: muted, fontStyle: "italic" });
+      expect(styleOf("Refund").color).not.toBe(muted);
+      expect(styleOf("Refund").fontStyle).toBe("normal");
+    });
+
+    it("hides it while the remarks are edited, and leaves it out of what's edited", async () => {
+      await render(withDisplayAmounts());
+
+      await userEvent.dblClick(text("Refund"));
+
+      const input = page.getByRole("textbox", { name: "Remarks" });
+      await expect.element(input).toHaveValue("Refund");
+      expect(page.getByText("(≈ +€0.27)").query()).toBeNull();
+      await userEvent.keyboard("{Escape}");
+      await expect.element(page.getByText("(≈ +€0.27)")).toBeVisible();
+      expect(onCommit).not.toHaveBeenCalled();
+    });
+
+    it("edits remarks that are only the amount from nothing", async () => {
+      await render(withDisplayAmounts());
+
+      await userEvent.click(text("(€987.60)"));
+
+      const input = page.getByRole("textbox", { name: "Remarks" });
+      await expect.element(input).toHaveValue("");
     });
   });
 

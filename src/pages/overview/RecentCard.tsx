@@ -65,7 +65,8 @@ function RecentCard({ overview, className = "" }: { overview: Overview; classNam
                 {transaction.conversion_amount !== null &&
                   transaction.conversion_decimals !== null && (
                     <span className="text-[11px] text-ink-muted">
-                      ≈{" "}
+                      {/* Only an amount by the exchange rates is about: a stored one is exact. */}
+                      {transaction.conversion_estimated === 1 && "≈ "}
                       {formatMoney(
                         {
                           amount: transaction.conversion_amount,

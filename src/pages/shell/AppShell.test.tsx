@@ -19,6 +19,7 @@ import { nextDownload } from "../../test/download.ts";
 import { SOURCE_HASH_SQL, TOKEN, transactionId } from "../../test/fixtures.ts";
 import { holdNext } from "../../test/holdNext.ts";
 import { previousHashOf } from "../../test/parts.ts";
+import { chunkOf, serveRates } from "../../test/rates.ts";
 import { rect, renderApp } from "../../test/renderAuthPage.tsx";
 import { openSqliteFile } from "../../test/sqliteFile.ts";
 import {
@@ -713,6 +714,113 @@ describe("TransactionsPage", () => {
       await expect.poll(counterparties).toEqual(["Café Lumen", "Corner Market"]);
     });
 
+    it("leaves an edited row where it is, until the same sort is picked again", async () => {
+      await opened();
+      await pick("Counterparty", "radio", "A to Z");
+      await expect.poll(counterparties).toEqual(["Café Lumen", "Corner Market"]);
+
+      await editCounterparty("Café Lumen", "Zebra Crossing");
+
+      await expect.poll(counterparties).toEqual(["Zebra Crossing", "Corner Market"]);
+      await pick("Counterparty", "radio", "A to Z");
+      await expect.poll(counterparties).toEqual(["Corner Market", "Zebra Crossing"]);
+    });
+
+    describe("by amount", () => {
+      /** Café Lumen's is JPY 600: more than Corner Market's 46.20 as a number, and worth less. */
+      const TWO_CURRENCIES = `${TWO_TRANSACTIONS};
+        UPDATE transactions SET currency = 'JPY', amount = -600 WHERE id = '${OLDER}'`;
+      /** A euro bought 1.25 dollars and 200 yen: USD 46.20 is 36.96 euros, and JPY 600 is 3. */
+      const rates = (path: string) =>
+        path === "/USD-5" ? chunkOf(1.25) : path === "/JPY-5" ? chunkOf(200) : undefined;
+
+      it("sorts amounts in different currencies by what they're worth", async () => {
+        serveRates(rates);
+        await loggedIn(await storedDatabase(TWO_CURRENCIES));
+        await renderApp("/transactions");
+        await expect.element(page.getByRole("grid")).toBeVisible();
+
+        // Picked again until the rates are there: a sort uses the ones it finds.
+        await expect
+          .poll(async () => {
+            await pick("Amount", "radio", "Largest first");
+            return counterparties();
+          })
+          .toEqual(["Corner Market", "Café Lumen"]);
+        await pick("Amount", "radio", "Smallest first");
+        await expect.poll(counterparties).toEqual(["Café Lumen", "Corner Market"]);
+        expect(numbers()).toEqual(["1", "2"]);
+      });
+
+      it("sorts them as numbers without the rates", async () => {
+        await loggedIn(await storedDatabase(TWO_CURRENCIES));
+        await renderApp("/transactions");
+        await expect.element(page.getByRole("grid")).toBeVisible();
+
+        await pick("Amount", "radio", "Largest first");
+
+        await expect.poll(counterparties).toEqual(["Café Lumen", "Corner Market"]);
+        await pick("Amount", "radio", "Smallest first");
+        await expect.poll(counterparties).toEqual(["Corner Market", "Café Lumen"]);
+      });
+
+      /** The page sorted largest first before any rate arrived, and then the rates arrived. */
+      async function sortedBeforeTheRates() {
+        let release!: () => void;
+        const held = new Promise<void>((resolve) => (release = resolve));
+        const asked = serveRates(async (path) => {
+          await held;
+          return rates(path);
+        });
+        await loggedIn(await storedDatabase(TWO_CURRENCIES));
+        await renderApp("/transactions");
+        await expect.element(page.getByRole("grid")).toBeVisible();
+        await pick("Amount", "radio", "Largest first");
+        await expect.poll(counterparties).toEqual(["Café Lumen", "Corner Market"]);
+
+        release();
+        await expect.poll(() => asked.toSorted()).toEqual(["/JPY-5", "/USD-5"]);
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      }
+
+      it("leaves the rows where they are when the rates arrive", async () => {
+        await sortedBeforeTheRates();
+
+        expect(counterparties()).toEqual(["Café Lumen", "Corner Market"]);
+      });
+
+      it("sorts by the rates that arrived once it's sorted another way", async () => {
+        await sortedBeforeTheRates();
+
+        await pick("Amount", "radio", "Smallest first");
+
+        await expect.poll(counterparties).toEqual(["Café Lumen", "Corner Market"]);
+        await pick("Amount", "radio", "Largest first");
+        await expect.poll(counterparties).toEqual(["Corner Market", "Café Lumen"]);
+      });
+
+      it("sorts by the rates that arrived when the same sort is picked again", async () => {
+        await sortedBeforeTheRates();
+
+        await pick("Amount", "radio", "Largest first");
+
+        await expect.poll(counterparties).toEqual(["Corner Market", "Café Lumen"]);
+      });
+
+      it("shows which way the amounts sort on their header", async () => {
+        await opened();
+
+        await pick("Amount", "radio", "Largest first");
+
+        await expect
+          .element(page.getByRole("columnheader", { name: /Amount/ }))
+          .toHaveAttribute("aria-sort", "descending");
+        await expect
+          .element(page.getByRole("columnheader", { name: /Date/ }))
+          .not.toHaveAttribute("aria-sort");
+      });
+    });
+
     it("filters the table from a header's menu", async () => {
       await opened();
 
@@ -1026,6 +1134,193 @@ describe("TransactionsPage", () => {
           WHERE id = '${NEWER}'`,
         ),
       ).toEqual([{ currency: "EUR", amount: -4620, conversions: "SGD" }]);
+    });
+  });
+
+  describe("exchange rates", () => {
+    /** Café Lumen's is in pounds, and its account displays in yen. */
+    const THREE_CURRENCIES = `${TWO_TRANSACTIONS};
+      UPDATE transactions SET currency = 'GBP' WHERE id = '${OLDER}';
+      UPDATE accounts SET display_currency = 'JPY' WHERE name = 'Everyday Checking'`;
+
+    // The transactions are of October 2026: their days' rates are in the chunks of key 5.
+    it("asks for the rates of the transactions' currencies and their accounts'", async () => {
+      const asked = serveRates(() => chunkOf(1.5));
+      await loggedIn(await storedDatabase(THREE_CURRENCIES));
+
+      await renderApp("/transactions");
+
+      await expect.element(page.getByRole("grid")).toBeVisible();
+      await expect.poll(() => asked.toSorted()).toEqual(["/GBP-5", "/JPY-5", "/USD-5"]);
+    });
+
+    it("asks for the rates of the currencies the transactions are converted to, but the euro", async () => {
+      const asked = serveRates(() => chunkOf(1.5));
+      await loggedIn(await storedDatabase(WITH_CONVERSIONS));
+
+      await renderApp("/transactions");
+
+      await expect.poll(() => asked.toSorted()).toEqual(["/SGD-5", "/USD-5"]);
+    });
+
+    describe("a transaction in another currency than its account displays in", () => {
+      /** Café Lumen's is 600 yen, in an account that displays in dollars. */
+      const IN_YEN = `${TWO_TRANSACTIONS};
+        UPDATE transactions SET currency = 'JPY', amount = -600 WHERE id = '${OLDER}'`;
+      /** A euro bought 1.25 dollars and 200 yen: 600 yen is 3.75 dollars. */
+      const rates = (path: string) =>
+        path === "/USD-5" ? chunkOf(1.25) : path === "/JPY-5" ? chunkOf(200) : undefined;
+      const remarksOf = async (counterparty: string) =>
+        (await cellOf(counterparty, REMARKS)).element().textContent;
+      const amountOf = async (counterparty: string) =>
+        (await cellOf(counterparty, AMOUNT)).element().textContent;
+
+      it("says about what it is in that currency once the rates arrive, after its remarks", async () => {
+        serveRates(rates);
+        await loggedIn(await storedDatabase(IN_YEN));
+
+        await renderApp("/transactions");
+
+        await expect.poll(() => remarksOf("Café Lumen")).toBe("(≈ $3.75)");
+        expect(await amountOf("Café Lumen")).toBe("¥600");
+        expect(await remarksOf("Corner Market")).toBe("");
+      });
+
+      it("says nothing more without the rates", async () => {
+        await loggedIn(await storedDatabase(IN_YEN));
+
+        await renderApp("/transactions");
+
+        await expect.poll(() => amountOf("Café Lumen")).toBe("¥600");
+        expect(await remarksOf("Café Lumen")).toBe("");
+      });
+
+      it("says a conversion stored as it is, with the rates or without", async () => {
+        serveRates(rates);
+        await loggedIn(
+          await storedDatabase(
+            `${IN_YEN}; INSERT INTO conversions VALUES ('${OLDER}', 'USD', -410)`,
+          ),
+        );
+
+        await renderApp("/transactions");
+
+        await expect.poll(() => remarksOf("Café Lumen")).toBe("($4.10)");
+      });
+
+      it("says the new amount's, when the amount is edited", async () => {
+        serveRates(rates);
+        await loggedIn(await storedDatabase(IN_YEN));
+        await renderApp("/transactions");
+        await expect.poll(() => remarksOf("Café Lumen")).toBe("(≈ $3.75)");
+
+        await userEvent.dblClick(page.getByText("¥600", { exact: true }).shown());
+        await page.getByRole("textbox", { name: "Amount" }).fill("1200");
+        await userEvent.keyboard("{Enter}");
+
+        await expect.poll(() => remarksOf("Café Lumen")).toBe("(≈ $7.50)");
+      });
+
+      it("says about what it is on a phone, in place of Not converted", async () => {
+        serveRates(rates);
+        await page.viewport(390, 800);
+        await loggedIn(await storedDatabase(IN_YEN));
+
+        await renderApp("/transactions");
+
+        const item = page.getByRole("listitem").filter({ hasText: "Café Lumen" });
+        await expect.element(item).toMatchTextContent(/¥600\s*≈ \$3\.75$/);
+      });
+
+      it("says it's not converted on a phone without the rates", async () => {
+        await page.viewport(390, 800);
+        await loggedIn(await storedDatabase(IN_YEN));
+
+        await renderApp("/transactions");
+
+        const item = page.getByRole("listitem").filter({ hasText: "Café Lumen" });
+        await expect.element(item).toMatchTextContent(/¥600\s*Not converted$/);
+      });
+    });
+
+    it("asks for the rates of an older transaction's day", async () => {
+      const asked = serveRates(() => chunkOf(1.5));
+      await loggedIn(
+        await storedDatabase(`${TWO_TRANSACTIONS};
+          UPDATE transactions SET naive_date = '2012-03-04' WHERE id = '${OLDER}'`),
+      );
+
+      await renderApp("/transactions");
+
+      await expect.poll(() => asked.toSorted()).toEqual(["/USD-3", "/USD-5"]);
+    });
+
+    it("asks for them once the page is shown, when another was opened first", async () => {
+      const asked = serveRates(() => chunkOf(1.5));
+      await loggedIn(await storedDatabase(TWO_TRANSACTIONS));
+      await renderApp("/");
+      await expect.element(page.getByText("Corner Market").shown()).toBeVisible();
+
+      await userEvent.click(page.getByRole("link", { name: "Transactions" }));
+
+      await expect.element(page.getByRole("grid")).toBeVisible();
+      await expect.poll(() => asked).toEqual(["/USD-5"]);
+    });
+
+    it("asks for nothing for a transaction changed to euros", async () => {
+      const asked = serveRates(() => chunkOf(1.5));
+      await loggedIn(await storedDatabase(TWO_TRANSACTIONS));
+      await renderApp("/transactions");
+      await expect.poll(() => asked).toEqual(["/USD-5"]);
+
+      await userEvent.dblClick(page.getByText("$46.20", { exact: true }).shown());
+      await userEvent.keyboard("EUR{Enter}");
+
+      await expect.element(page.getByText("€46.20", { exact: true }).shown()).toBeVisible();
+      expect(asked).toEqual(["/USD-5"]);
+    });
+
+    it("asks for the rates of a currency a transaction is changed to", async () => {
+      const asked = serveRates(() => chunkOf(1.5));
+      await loggedIn(await storedDatabase(TWO_TRANSACTIONS));
+      await renderApp("/transactions");
+      await expect.poll(() => asked).toEqual(["/USD-5"]);
+
+      await userEvent.dblClick(page.getByText("$46.20", { exact: true }).shown());
+      await userEvent.keyboard("GBP{Enter}");
+
+      await expect.poll(() => asked).toEqual(["/USD-5", "/GBP-5"]);
+    });
+
+    it.for([
+      ["fail", 500],
+      ["aren't there", 404],
+      ["never get there", new TypeError("Failed to fetch")],
+    ] as const)("lists the transactions as ever when the rates %s", async ([, answer]) => {
+      const showError = vi.spyOn(toast, "error");
+      const asked = serveRates(() => answer);
+      await loggedIn(await storedDatabase(TWO_TRANSACTIONS));
+
+      await renderApp("/transactions");
+
+      await expect.element(page.getByRole("grid")).toBeVisible();
+      await expect.poll(() => asked).toContain("/USD-5");
+      expect(columnTexts(COUNTERPARTY)).toEqual(["Corner Market", "Café Lumen"]);
+      expect(page.getByRole("alert").query()).toBeNull();
+      expect(showError).not.toHaveBeenCalled();
+    });
+
+    it("lists the transactions while the rates are still on their way", async () => {
+      let answer!: (chunk: ArrayBuffer) => void;
+      const asked = serveRates(() => new Promise<ArrayBuffer>((resolve) => (answer = resolve)));
+      await loggedIn(await storedDatabase(TWO_TRANSACTIONS));
+
+      await renderApp("/transactions");
+
+      await expect.element(page.getByRole("grid")).toBeVisible();
+      expect(columnTexts(COUNTERPARTY)).toEqual(["Corner Market", "Café Lumen"]);
+      expect(asked).toEqual(["/USD-5"]);
+      answer(chunkOf(1.5));
     });
   });
 });

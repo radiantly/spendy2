@@ -118,10 +118,12 @@ describe("LIST_TRANSACTIONS", () => {
     // Reversed, so the page's sort has to put each in its place.
     const reversed = rows.toReversed();
 
-    const sorted = sortOrder(reversed, DEFAULT_VIEW.sort, {
-      accounts: ["Travel"],
-      categories: ["Groceries"],
-    }).map((position) => reversed[position]!.id);
+    const sorted = sortOrder(
+      reversed,
+      DEFAULT_VIEW.sort,
+      { accounts: ["Travel"], categories: ["Groceries"] },
+      new Map(),
+    ).map((position) => reversed[position]!.id);
 
     expect(sorted).toEqual(rows.map(({ id }) => id));
   });

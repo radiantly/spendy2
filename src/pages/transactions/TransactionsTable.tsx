@@ -24,6 +24,7 @@ import {
 import type { HistoryDirection } from "../../lib/historyKey.ts";
 import type { TableActions } from "./ActionBar.tsx";
 import { columns, features, type CellEditor } from "./columns.ts";
+import type { DisplayAmount } from "./displayAmount.ts";
 import { selectBetween, selectionAnchor, textOffsetAtPoint, wordAt } from "./caret.ts";
 import { historyAvailable, type EditHandle } from "./editHandle.ts";
 import EditableCell, {
@@ -224,6 +225,11 @@ type TransactionsTableProps = {
   categories: readonly string[];
   accounts: readonly string[];
   currencies: readonly Currency[];
+  /**
+   * A row's amount in the currency its account displays in, for its remarks
+   * cell to say after its remarks (see `remarksNote`). Without, none does.
+   */
+  displayAmountOf?: (row: TransactionRow) => DisplayAmount | null;
   /** Changes to store; several at once when a range is cleared. */
   onCommit: (changes: TransactionChange[]) => void;
   /**
@@ -283,6 +289,9 @@ type TransactionsTableProps = {
  * as soon as it's pressed. Only the rows in (and near) the viewport are
  * rendered; the page scrolls as if all of them were there.
  */
+/** For a table that isn't told the rows' amounts in their accounts' currencies. */
+const noDisplayAmount = () => null;
+
 function TransactionsTable({
   rows,
   rowNumbers,
@@ -290,6 +299,7 @@ function TransactionsTable({
   categories,
   accounts,
   currencies,
+  displayAmountOf = noDisplayAmount,
   onCommit,
   lastUndoOrRedo,
   onUndoOrRedo,
@@ -318,6 +328,7 @@ function TransactionsTable({
     return (id: string) =>
       (numbers ??= new Map(rows.map((row, index) => [row.id, rowNumbers[index]!]))).get(id);
   }, [rows, rowNumbers]);
+  const noteContext = { rowNumberOf, displayAmountOf };
   // Where each row is, by id: worked out once one's looked for away from
   // where it was last found, and again only for other rows.
   const indexOf = useMemo(() => {
@@ -1265,7 +1276,7 @@ function TransactionsTable({
                       id={cellId(position)}
                       display={display}
                       highlights={pattern ? matchesIn(pattern, display) : undefined}
-                      note={meta.note?.(row, rowNumberOf)}
+                      note={meta.note?.(row, noteContext)}
                       align={meta.align}
                       tabular={meta.tabular}
                       editText={editText}

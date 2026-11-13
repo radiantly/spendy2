@@ -18,6 +18,7 @@ import {
   parseRemarks,
   type ParseResult,
 } from "./fields.ts";
+import type { DisplayAmount } from "./displayAmount.ts";
 import { marksNote } from "./marks.ts";
 import type { MenuConfig } from "./menu.ts";
 import type { MenuColumn } from "./view.ts";
@@ -77,6 +78,37 @@ function parseAmountIn(
   }));
 }
 
+/** What the notes are worked out from, besides the row. */
+export type NoteContext = {
+  /** A shown transaction's row number, by id. */
+  rowNumberOf: (id: string) => number | undefined;
+  /** The row's amount in the currency its account displays in (see `DisplayAmount`). */
+  displayAmountOf: (row: TransactionRow) => DisplayAmount | null;
+};
+
+/**
+ * What a row says of its amount, for one in another currency than its
+ * account displays in: its amount in that currency, in brackets, `($15.63)`. One the exchange rates made, rather than a
+ * conversion stored, is about that much: `(≈ $15.63)`. Null when it has
+ * neither, and when it needs none.
+ */
+export function displayAmountNote(row: TransactionRow, { displayAmountOf }: NoteContext) {
+  const display = displayAmountOf(row);
+  if (display === null || display.amount === null) return null;
+  const amount = formatMoney(display.amount, display.currency, { sign: "in" });
+  return `(${display.estimated ? "≈ " : ""}${amount})`;
+}
+
+/**
+ * What a row's remarks cell says after its remarks: what it's marked as (see
+ * `marksNote`), then its amount in its account's currency (see
+ * `displayAmountNote`). Null when it has neither.
+ */
+export function remarksNote(row: TransactionRow, context: NoteContext) {
+  const notes = [marksNote(row, context.rowNumberOf), displayAmountNote(row, context)];
+  return notes.filter((note) => note !== null).join(" ") || null;
+}
+
 export type TransactionColumnMeta = {
   /** The column's CSS grid track. */
   track: string;
@@ -87,10 +119,9 @@ export type TransactionColumnMeta = {
   display: (row: TransactionRow) => string;
   /**
    * What the cell shows after that, greyed and only while it isn't edited:
-   * what's worked out about the row, rather than typed in. `rowNumberOf`
-   * gives a shown transaction's row number, by id.
+   * what's worked out about the row, rather than typed in.
    */
-  note?: (row: TransactionRow, rowNumberOf: (id: string) => number | undefined) => string | null;
+  note?: (row: TransactionRow, context: NoteContext) => string | null;
   /** Absent for read-only columns. */
   editor?: CellEditor;
   /** Its header's menu, for sorting or filtering the transactions by the column. */
@@ -189,7 +220,7 @@ export const columns = helper.columns([
       track: "minmax(8rem, 2.5fr)",
       headerMenu: "remarks",
       display: (row) => row.remarks ?? "",
-      note: marksNote,
+      note: remarksNote,
       editor: {
         field: "remarks",
         editText: (row) => row.remarks ?? "",

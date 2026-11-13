@@ -4,15 +4,18 @@
  */
 
 import { compareNewestFirst, type ListedTransaction } from "../../db/queries/transactions.ts";
+import { dayOf } from "../../../currency/chunks.ts";
 import { resolvePeriod, type NaiveDate, type PeriodChoice } from "../../lib/period.ts";
+import { fallbackAmount } from "../../lib/rates/fallback.ts";
+import { EURO, type Rates } from "../../lib/rates/rates.ts";
 import { nameFinder } from "./fields.ts";
 
 export type SortDirection = "ascending" | "descending";
 
-export type SortColumn = "date" | "account" | "counterparty" | "category" | "remarks";
+export type SortColumn = "date" | "account" | "counterparty" | "category" | "amount" | "remarks";
 
-/** The columns, by their headers' menus (see ColumnMenus). */
-export type MenuColumn = SortColumn | "amount";
+/** The columns, by their headers' menus (see ColumnMenus): each one sorts. */
+export type MenuColumn = SortColumn;
 
 /** One column at a time sorts the transactions. */
 export type Sort = { column: SortColumn; direction: SortDirection };
@@ -222,15 +225,70 @@ function sortByText(
   return sortedOrder;
 }
 
+/** How large an amount is, whichever way the money went, as a number of its currency. */
+const sizeOf = (row: ListedTransaction) => Math.abs(row.amount) / 10 ** row.decimals;
+
+/**
+ * How large a transaction's amount is next to those in other currencies:
+ * in euros, by `rates` (see `fallbackAmount`). NaN when they can't tell.
+ * Any currency would order them the same, and the euro's rate is always there.
+ */
+function comparableSizes(rates: Rates) {
+  // Many transactions share a date: its day is worked out once.
+  const days = new Map<string, number | undefined>();
+  return (row: ListedTransaction) => {
+    let day = days.get(row.naive_date);
+    if (day === undefined && !days.has(row.naive_date))
+      days.set(row.naive_date, (day = dayOf(row.naive_date)));
+    if (day === undefined) return NaN;
+    return Math.abs(fallbackAmount(rates, row, day, EURO) ?? NaN);
+  };
+}
+
+/**
+ * Sorts `order` (positions in `rows`, newest first) by how large the
+ * amounts are, across currencies (see `comparableSizes`), keeping the
+ * transactions of the same size newest first. Those the rates can't tell the
+ * size of go last either way, in the same direction among themselves by
+ * their amounts as numbers, whatever their currencies.
+ */
+function sortByAmount(
+  rows: Rows,
+  order: readonly number[],
+  direction: SortDirection,
+  rates: Rates,
+) {
+  const comparable = comparableSizes(rates);
+  // By position in `rows`: the size to sort by, and whether the rates gave it.
+  const sizes = new Float64Array(rows.length);
+  const rated: number[] = [];
+  const unrated: number[] = [];
+  for (const position of order) {
+    const row = rows[position]!;
+    const size = comparable(row);
+    const known = !Number.isNaN(size);
+    sizes[position] = known ? size : sizeOf(row);
+    (known ? rated : unrated).push(position);
+  }
+  const bySize =
+    direction === "ascending"
+      ? (a: number, b: number) => sizes[a]! - sizes[b]!
+      : (a: number, b: number) => sizes[b]! - sizes[a]!;
+  // Stable: the same size stays newest first.
+  return [...rated.sort(bySize), ...unrated.sort(bySize)];
+}
+
 /**
  * Every transaction, those a view hides too, in the order `sort` puts them,
- * as positions in `rows`.
+ * as positions in `rows`. Only sorting by amount reads `rates`, and makes
+ * do with the ones there are.
  */
-export function sortOrder(rows: Rows, sort: Sort, names: ViewNames): number[] {
+export function sortOrder(rows: Rows, sort: Sort, names: ViewNames, rates: Rates): number[] {
   const order = Array.from(rows.keys());
   order.sort(byRecent(rows));
 
   const { column, direction } = sort;
+  if (column === "amount") return sortByAmount(rows, order, direction, rates);
   const textOf = sortTextOf(column, names);
   // Oldest first is newest first the other way round, the same day's too.
   if (textOf === null) return direction === "descending" ? order : order.reverse();
@@ -238,9 +296,9 @@ export function sortOrder(rows: Rows, sort: Sort, names: ViewNames): number[] {
 }
 
 /** The text `column` sorts transactions by, or null for the date. */
-function sortTextOf(column: SortColumn, names: ViewNames) {
+function sortTextOf(column: Exclude<SortColumn, "amount">, names: ViewNames) {
   const listed = listedNames(names);
-  const texts: Record<SortColumn, ((row: ListedTransaction) => string | null) | null> = {
+  const texts: Record<typeof column, ((row: ListedTransaction) => string | null) | null> = {
     date: null,
     account: listed.account,
     counterparty: (row) => row.counterparty,
@@ -251,8 +309,9 @@ function sortTextOf(column: SortColumn, names: ViewNames) {
 }
 
 /** Which of two transactions `sort` puts first, as `sortOrder` does: negative if `a`. */
-function compareBy(sort: Sort, names: ViewNames) {
+function compareBy(sort: Sort, names: ViewNames, rates: Rates) {
   const { column, direction } = sort;
+  if (column === "amount") return compareByAmount(direction, rates);
   const textOf = sortTextOf(column, names);
   if (textOf === null)
     return direction === "descending"
@@ -264,6 +323,20 @@ function compareBy(sort: Sort, names: ViewNames) {
     // Those without the text go last either way (see `sortByText`).
     if (x === null || y === null) return x === y ? compareNewestFirst(a, b) : x === null ? 1 : -1;
     return sign * collator.compare(x, y) || compareNewestFirst(a, b);
+  };
+}
+
+/** Which of two transactions sorting by amount puts first, as `sortByAmount` does. */
+function compareByAmount(direction: SortDirection, rates: Rates) {
+  const comparable = comparableSizes(rates);
+  const sign = direction === "ascending" ? 1 : -1;
+  return (a: ListedTransaction, b: ListedTransaction) => {
+    const [x, y] = [comparable(a), comparable(b)];
+    const [unratedA, unratedB] = [Number.isNaN(x), Number.isNaN(y)];
+    // Those without a size go last either way, by their amounts as numbers.
+    if (unratedA !== unratedB) return unratedA ? 1 : -1;
+    const difference = unratedA ? sizeOf(a) - sizeOf(b) : x - y;
+    return sign * difference || compareNewestFirst(a, b);
   };
 }
 
@@ -279,8 +352,9 @@ export function withArrived(
   rows: Rows,
   sort: Sort,
   names: ViewNames,
+  rates: Rates,
 ): number[] {
-  const compare = compareBy(sort, names);
+  const compare = compareBy(sort, names, rates);
   const before = (a: number, b: number) => compare(rows[a]!, rows[b]!) < 0;
   const placing = arrived.toSorted((a, b) => compare(rows[a]!, rows[b]!));
   const placed: number[] = [];

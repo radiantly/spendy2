@@ -15,6 +15,7 @@ import {
   LIST_DAILY_SPENDING,
   LIST_MONTHLY_TOTALS,
   LIST_RECENT_TRANSACTIONS,
+  LIST_UNCONVERTED,
 } from "./overview.ts";
 
 const sqlite3 = await sqlite3InitModule();
@@ -99,9 +100,209 @@ function add({
 
 const rows = (sql: string, bind?: BindingSpec) => db.selectObjects(sql, bind);
 const OCTOBER = { $display: "USD", $from: "2026-10-01", $to: "2026-10-31" };
+const OCTOBER_DATES = { $from: OCTOBER.$from, $to: OCTOBER.$to };
 const summary = (bind: BindingSpec = OCTOBER) => rows(GET_PERIOD_SUMMARY, bind)[0];
 /** An account without a display currency. */
 const addCash = () => db.exec("INSERT INTO accounts VALUES ('Cash', NULL, 'Cash', NULL)");
+
+/** `$fallbacks` as the queries take it: amounts in whole units, of a currency with two decimals. */
+const fallbacks = (...amounts: [id: string, amount: number][]) =>
+  JSON.stringify(amounts.map(([id, amount]) => [id, Math.round(amount * 100)]));
+
+describe("amounts from exchange rates ($fallbacks)", () => {
+  it("counts a transaction without a stored amount through the one it's given", () => {
+    add({ amount: -20 });
+    const cab = add({ amount: -10, currency: "GBP" });
+    const refund = add({ amount: 4, currency: "GBP" });
+
+    expect(summary()).toMatchObject({ spent: 20, income: 0 });
+    expect(summary({ ...OCTOBER, $fallbacks: fallbacks([cab, -12.5], [refund, 5]) })).toMatchObject(
+      { spent: 32.5, income: 5 },
+    );
+  });
+
+  it("says how many it counted that way, and how many it still left out", () => {
+    add({ amount: -20 });
+    add({ amount: -24, currency: "EUR", conversions: { USD: -26.4 } });
+    const cab = add({ amount: -10, currency: "GBP" });
+    add({ amount: -30, currency: "GBP" });
+    add({ amount: -40, currency: "JPY" });
+
+    expect(summary()).toMatchObject({ unconverted: 3, estimated: 0, skipped: 3 });
+    expect(summary({ ...OCTOBER, $fallbacks: fallbacks([cab, -12.5]) })).toMatchObject({
+      unconverted: 3,
+      estimated: 1,
+      skipped: 2,
+    });
+  });
+
+  it("never uses one for a transaction with a stored amount", () => {
+    const own = add({ amount: -20 });
+    const converted = add({ amount: -24, currency: "EUR", conversions: { USD: -26.4 } });
+
+    expect(
+      summary({ ...OCTOBER, $fallbacks: fallbacks([own, -999], [converted, -999]) }),
+    ).toMatchObject({ spent: 46.4, unconverted: 0, estimated: 0, skipped: 0 });
+  });
+
+  it("never uses one for a transaction in an account without a display currency", () => {
+    addCash();
+    const cash = add({ account: "Cash", amount: -10, currency: "GBP" });
+
+    expect(
+      summary({ ...OCTOBER, $display: "GBP", $fallbacks: fallbacks([cash, -999]) }),
+    ).toMatchObject({ spent: 10, estimated: 0, skipped: 0 });
+  });
+
+  it("leaves a transfer or a duplicate out of the totals and the counts, whatever it's given", () => {
+    const first = add({ amount: -10, currency: "GBP" });
+    const duplicate = add({ amount: -10, currency: "GBP", duplicateOf: first });
+    const transfer = add({ amount: -10, currency: "GBP", transfer: "Savings" });
+
+    expect(
+      summary({
+        ...OCTOBER,
+        $fallbacks: fallbacks([first, -12.5], [duplicate, -12.5], [transfer, -12.5]),
+      }),
+    ).toMatchObject({ spent: 12.5, unconverted: 1, estimated: 1, skipped: 0 });
+  });
+
+  it("does without amounts for transactions there aren't, or with none at all", () => {
+    add({ amount: -10, currency: "GBP" });
+
+    for (const $fallbacks of [fallbacks(["nobody", -5]), "[]", null])
+      expect(summary({ ...OCTOBER, $fallbacks })).toMatchObject({
+        spent: 0,
+        estimated: 0,
+        skipped: 1,
+      });
+  });
+
+  it("counts an amount of zero as an amount", () => {
+    const cab = add({ amount: -10, currency: "GBP" });
+
+    expect(summary({ ...OCTOBER, $fallbacks: fallbacks([cab, 0]) })).toMatchObject({
+      spent: 0,
+      estimated: 1,
+      skipped: 0,
+    });
+  });
+
+  it("counts them in the spending of each day, category and month", () => {
+    add({ amount: -20, category: "Groceries" });
+    const cab = add({ date: "2026-10-06", amount: -10, currency: "GBP", category: "Groceries" });
+    const bind = { ...OCTOBER, $fallbacks: fallbacks([cab, -12.5]) };
+
+    expect(rows(LIST_DAILY_SPENDING, bind)).toEqual([
+      { date: "2026-10-05", spent: 20 },
+      { date: "2026-10-06", spent: 12.5 },
+    ]);
+    expect(rows(LIST_CATEGORY_SPENDING, bind)).toEqual([{ category: "Groceries", spent: 32.5 }]);
+    expect(rows(LIST_MONTHLY_TOTALS, bind)).toEqual([{ month: "2026-10", income: 0, spent: 32.5 }]);
+  });
+
+  it("counts them in an account's money in and out, in the account's own currency", () => {
+    const cab = add({ amount: -10, currency: "GBP" });
+    const taxi = add({ account: "Travel", amount: -30, currency: "GBP" });
+    const bind = {
+      $from: OCTOBER.$from,
+      $to: OCTOBER.$to,
+      $fallbacks: fallbacks([cab, -12.5], [taxi, -35]),
+    };
+
+    const accounts = rows(LIST_ACCOUNT_ACTIVITY, bind);
+    expect(accounts.find(({ name }) => name === "Checking")).toMatchObject({ money_out: 12.5 });
+    expect(accounts.find(({ name }) => name === "Travel")).toMatchObject({ money_out: 35 });
+  });
+
+  it("lists a recent transaction's as its amount in the display currency, marked as estimated", () => {
+    const cab = add({ amount: -10, currency: "GBP", timestamp: 3 });
+    add({ amount: -24, currency: "EUR", conversions: { USD: -26.4 }, timestamp: 2 });
+    add({ amount: -20, timestamp: 1 });
+    add({ amount: -40, currency: "JPY", timestamp: 0 });
+    const bind = { ...OCTOBER, $limit: 5, $fallbacks: fallbacks([cab, -12.5]) };
+
+    expect(rows(LIST_RECENT_TRANSACTIONS, bind)).toMatchObject([
+      { conversion_amount: -1250, conversion_decimals: 2, conversion_estimated: 1 },
+      { conversion_amount: -2640, conversion_decimals: 2, conversion_estimated: 0 },
+      { conversion_amount: null, conversion_decimals: null, conversion_estimated: 0 },
+      { conversion_amount: null, conversion_decimals: null, conversion_estimated: 0 },
+    ]);
+  });
+});
+
+describe("LIST_UNCONVERTED", () => {
+  const ALL = { $from: "0000-01-01", $to: "9999-12-31" };
+  const unconverted = (bind: BindingSpec = ALL) => rows(LIST_UNCONVERTED, bind);
+
+  it("lists a transaction in another currency than its account's, without a conversion to it", () => {
+    const cab = add({ amount: -10, currency: "GBP" });
+
+    expect(unconverted()).toEqual([
+      {
+        id: cab,
+        naive_date: "2026-10-05",
+        currency: "GBP",
+        amount: -1000,
+        decimals: 2,
+        display: "USD",
+        display_decimals: 2,
+        conversions: "{}",
+      },
+    ]);
+  });
+
+  it("lists its conversions to other currencies, each in its own decimals", () => {
+    add({ amount: -10, currency: "GBP", conversions: { JPY: -2000, EUR: -11.5 } });
+
+    const [row] = unconverted();
+    expect(JSON.parse(row!.conversions as string)).toEqual({
+      JPY: { amount: -2000, decimals: 0 },
+      EUR: { amount: -1150, decimals: 2 },
+    });
+  });
+
+  it("leaves out a transaction in its account's currency, or converted to it", () => {
+    add({ amount: -20 });
+    add({ amount: -24, currency: "EUR", conversions: { USD: -26.4 } });
+
+    expect(unconverted()).toEqual([]);
+  });
+
+  it("goes by each account's own display currency", () => {
+    // Converted to dollars, which isn't what Travel displays in.
+    const taxi = add({
+      account: "Travel",
+      amount: -30,
+      currency: "GBP",
+      conversions: { USD: -40 },
+    });
+
+    expect(unconverted()).toMatchObject([{ id: taxi, display: "EUR" }]);
+  });
+
+  it("leaves out the transactions of an account without a display currency", () => {
+    addCash();
+    add({ account: "Cash", amount: -10, currency: "GBP" });
+
+    expect(unconverted()).toEqual([]);
+  });
+
+  it("lists transfers and duplicates too", () => {
+    const first = add({ amount: -10, currency: "GBP" });
+    add({ amount: -10, currency: "GBP", duplicateOf: first });
+    add({ amount: -10, currency: "GBP", transfer: "Savings" });
+
+    expect(unconverted()).toHaveLength(3);
+  });
+
+  it("only lists those from $from to $to, inclusive", () => {
+    const dates = ["2026-09-30", "2026-10-01", "2026-10-31", "2026-11-01"];
+    const ids = dates.map((date) => add({ date, amount: -10, currency: "GBP" }));
+
+    expect(unconverted(OCTOBER_DATES).map(({ id }) => id)).toEqual([ids[1], ids[2]]);
+  });
+});
 
 describe("LIST_CURRENCIES", () => {
   const currencies = () => rows(LIST_CURRENCIES).map(({ currency }) => currency);

@@ -1,0 +1,30 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "currency-cron",
+  "main": "index.ts",
+  "compatibility_date": "2026-11-10",
+  "minify": true,
+  // Nothing reaches it but its schedule.
+  "workers_dev": false,
+  "preview_urls": false,
+  // Once a day, in UTC: after the European Central Bank's rates of the day
+  // are out, at about 15:00 UTC. A rate that comes out later is written the
+  // day after.
+  "triggers": { "crons": ["30 16 * * *"] },
+  // So a run that failed, and what it logged, can be looked up.
+  "observability": { "enabled": true },
+  // The update runs in a Durable Object, for the CPU time it has there.
+  "durable_objects": {
+    "bindings": [{ "name": "UPDATER", "class_name": "Updater" }],
+  },
+  "exports": {
+    "Updater": { "type": "durable-object", "storage": "sqlite" },
+  },
+  "vars": {
+    "CURRENCY_ORIGIN": "https://currency.spendy2.com",
+    "CURRENCY_SCRIPT": "currency",
+  },
+  "secrets": {
+    "required": ["CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_TOKEN"],
+  },
+}
