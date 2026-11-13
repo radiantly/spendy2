@@ -12,9 +12,9 @@ export default defineConfig({
     react(),
     tailwindcss(),
     babel({ presets: [reactCompilerPreset()] }),
-    openapi({ app: "./worker/document.ts", fileName: "openapi.json" }),
+    openapi({ app: "./workers/spendy2/document.ts", fileName: "openapi.json" }),
     opaqueWorkerd(),
-    cloudflare(),
+    cloudflare({ configPath: "./workers/spendy2/wrangler.jsonc" }),
   ],
   worker: { format: "es" },
 });

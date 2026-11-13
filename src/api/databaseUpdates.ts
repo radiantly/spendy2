@@ -1,9 +1,9 @@
 /**
  * Watching the user's database for changes saved elsewhere, over the
- * server's WebSocket (see worker/routes/users/updates.ts), which tells the
+ * server's WebSocket (see workers/spendy2/routes/users/updates.ts), which tells the
  * socket the database's last part each time it changes.
  */
-import { DATABASE_UPDATES_CLOSE, databaseUpdateSchema } from "../../worker/schemas.ts";
+import { DATABASE_UPDATES_CLOSE, databaseUpdateSchema } from "../../workers/spendy2/schemas.ts";
 
 /** How often a keepalive is sent (ms), so nothing in between closes an idle socket. */
 export const PING_INTERVAL = 30_000;

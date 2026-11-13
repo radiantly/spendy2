@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { dayOf } from "../../../currency/chunks.ts";
+import { dayOf } from "../../../workers/currency/chunks.ts";
 import { chunkOf } from "../../test/rates.ts";
 import { chunksFor, rateOf, type Rates } from "./rates.ts";
 import { fill } from "./reader.ts";

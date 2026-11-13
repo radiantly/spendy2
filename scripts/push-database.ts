@@ -13,10 +13,10 @@
 import fs from "fs";
 import { intro, outro } from "@clack/prompts";
 import { DatabasePartError, encryptPart, readChain } from "../src/db/parts.ts";
-import type { DatabasePart } from "../worker/databaseParts.ts";
-import { databaseParts } from "./api.ts";
-import { parseFlags } from "./flags.ts";
-import { fail } from "./lib.ts";
+import type { DatabasePart } from "../workers/spendy2/databaseParts.ts";
+import { databaseParts } from "./lib/api.ts";
+import { parseFlags } from "./lib/flags.ts";
+import { fail } from "./lib/lib.ts";
 import {
   appendPart,
   databasePath,
@@ -24,9 +24,9 @@ import {
   LocalDatabaseError,
   partsPath,
   readParts,
-} from "./localDatabase.ts";
-import { MIGRATIONS } from "./sqlite.ts";
-import { userData } from "./userData.ts";
+} from "./lib/localDatabase.ts";
+import { MIGRATIONS } from "./lib/sqlite.ts";
+import { userData } from "./lib/userData.ts";
 
 const PULL_FIRST = "run npm run pull-database first";
 

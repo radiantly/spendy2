@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { NO_PREVIOUS_PART, sha256Hex } from "../../worker/databaseParts.ts";
+import { NO_PREVIOUS_PART, sha256Hex } from "../../workers/spendy2/databaseParts.ts";
 import { DatabaseOpenError, openDatabase, type Database } from "./database.ts";
 import { MIGRATIONS } from "./migrations.ts";
 import { encryptPart } from "./parts.ts";

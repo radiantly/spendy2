@@ -3,7 +3,7 @@
  * stored in their overview's currency, for the overview's queries to count
  * them through (see `$fallbacks` in the queries).
  */
-import { dayOf } from "../../../currency/chunks.ts";
+import { dayOf } from "../../../workers/currency/chunks.ts";
 import type { UnconvertedTransaction } from "../../db/queries/overview.ts";
 import { fallbackUnits } from "../../lib/rates/fallback.ts";
 import type { Amount } from "../../lib/money.ts";

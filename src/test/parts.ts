@@ -1,4 +1,4 @@
-import { readParts } from "../../worker/databaseParts.ts";
+import { readParts } from "../../workers/spendy2/databaseParts.ts";
 
 /**
  * The sha256 of the part `part` follows, as its AAD names it: the version of

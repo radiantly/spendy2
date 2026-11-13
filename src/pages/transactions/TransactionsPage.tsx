@@ -89,9 +89,7 @@ function TransactionsPage() {
   // different currencies by. Nothing waits for them, or minds if they never
   // come: a sort makes do with the ones there are when it's set, and stays
   // as it is when more arrive, as it does when a row is edited.
-  const rates = useRates(
-    loaded ? chunksFor(loaded.rows, displayCurrencies(loaded.accounts)) : [],
-  );
+  const rates = useRates(loaded ? chunksFor(loaded.rows, displayCurrencies(loaded.accounts)) : []);
   const canUndo = useSyncExternalStore(history.subscribeToStacks, () => history.canUndo);
   const canRedo = useSyncExternalStore(history.subscribeToStacks, () => history.canRedo);
   const undoOrRedo = useUndoRedo(history);

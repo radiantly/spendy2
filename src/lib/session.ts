@@ -1,6 +1,6 @@
 import { createStore, del, get, promisifyRequest, set } from "idb-keyval";
 import { z } from "zod";
-import { usernameSchema } from "../../worker/schemas.ts";
+import { usernameSchema } from "../../workers/spendy2/schemas.ts";
 
 /**
  * The persisted login. The KEK is a non-extractable CryptoKey, which

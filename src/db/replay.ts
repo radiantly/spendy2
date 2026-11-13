@@ -5,7 +5,7 @@
  *
  * Takes the migrations rather than importing the app's list, which only
  * Vite can bundle, so the scripts can make the same database from the same
- * parts (see scripts/localDatabase.ts).
+ * parts (see scripts/lib/localDatabase.ts).
  */
 import type { Database, Sqlite3Static } from "@sqlite.org/sqlite-wasm";
 import { applyChanges } from "./changes.ts";

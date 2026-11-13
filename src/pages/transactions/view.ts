@@ -4,7 +4,7 @@
  */
 
 import { compareNewestFirst, type ListedTransaction } from "../../db/queries/transactions.ts";
-import { dayOf } from "../../../currency/chunks.ts";
+import { dayOf } from "../../../workers/currency/chunks.ts";
 import { resolvePeriod, type NaiveDate, type PeriodChoice } from "../../lib/period.ts";
 import { fallbackAmount } from "../../lib/rates/fallback.ts";
 import { EURO, type Rates } from "../../lib/rates/rates.ts";

@@ -4,7 +4,7 @@
  * anywhere, it couldn't be fetched or just hasn't been yet is all the same
  * to whoever asks, who does without.
  */
-import { dayOf, position } from "../../../currency/chunks.ts";
+import { dayOf, position } from "../../../workers/currency/chunks.ts";
 import { rateAt } from "./reader.ts";
 
 /** What every rate is to: it has no chunks, and its own rate is 1. */

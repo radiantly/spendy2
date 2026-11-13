@@ -9,7 +9,11 @@
  * so a save only uploads what changed since.
  */
 import sqlite3InitModule, { type BindingSpec, type Database } from "@sqlite.org/sqlite-wasm";
-import { NO_PREVIOUS_PART, sha256Hex, type DatabasePart } from "../../worker/databaseParts.ts";
+import {
+  NO_PREVIOUS_PART,
+  sha256Hex,
+  type DatabasePart,
+} from "../../workers/spendy2/databaseParts.ts";
 import { applyChanges, ChangesConflictError, invert, Session } from "./changes.ts";
 import { MIGRATIONS } from "./migrations.ts";
 import { DatabasePartError, decryptPart, encryptPart, readChain } from "./parts.ts";

@@ -1,6 +1,6 @@
 /**
  * Reads exchange rates out of the chunks `currency.spendy2.com` publishes
- * (the format is in `currency/chunks.ts`). The rates are a fallback, for when
+ * (the format is in `workers/currency/chunks.ts`). The rates are a fallback, for when
  * a transaction has no conversion stored, and a best effort at one.
  *
  * A chunk has no rate for many of its days: weekends, holidays, the days
@@ -9,7 +9,7 @@
  *
  * Nothing here fetches (see load.ts).
  */
-import { RATE_BYTES } from "../../../currency/chunks.ts";
+import { RATE_BYTES } from "../../../workers/currency/chunks.ts";
 
 /** How many whole rates a chunk has: its days. */
 const daysOf = (chunk: ArrayBuffer) => Math.floor(chunk.byteLength / RATE_BYTES);

@@ -30,7 +30,7 @@ export default async function setup(project: TestProject) {
   fs.mkdirSync(assets);
   fs.mkdirSync(temporaryDirectory);
   const worker = await unstable_startWorker({
-    config: path.join(import.meta.dirname, "..", "..", "wrangler.jsonc"),
+    config: path.join(import.meta.dirname, "..", "..", "workers", "spendy2", "wrangler.jsonc"),
     assets,
     bindings: {
       OPAQUE_SERVER_SETUP: { type: "plain_text", value: opaque.server.createSetup() },

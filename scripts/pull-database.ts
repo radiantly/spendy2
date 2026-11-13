@@ -18,11 +18,11 @@ import { applyChanges, ChangesConflictError } from "../src/db/changes.ts";
 import { DatabaseTooNewError } from "../src/db/migrate.ts";
 import { DatabasePartError, encryptPart, readChain } from "../src/db/parts.ts";
 import { create, replay } from "../src/db/replay.ts";
-import { databaseEtagSchema } from "../worker/schemas.ts";
-import { NO_PREVIOUS_PART, type DatabasePart } from "../worker/databaseParts.ts";
-import { databaseParts } from "./api.ts";
-import { parseFlags } from "./flags.ts";
-import { fail } from "./lib.ts";
+import { databaseEtagSchema } from "../workers/spendy2/schemas.ts";
+import { NO_PREVIOUS_PART, type DatabasePart } from "../workers/spendy2/databaseParts.ts";
+import { databaseParts } from "./lib/api.ts";
+import { parseFlags } from "./lib/flags.ts";
+import { fail } from "./lib/lib.ts";
 import {
   databasePath,
   localChanges,
@@ -30,9 +30,9 @@ import {
   readParts,
   shelveDatabase,
   writeLocal,
-} from "./localDatabase.ts";
-import { MIGRATIONS, sqlite3 } from "./sqlite.ts";
-import { userData, type Session } from "./userData.ts";
+} from "./lib/localDatabase.ts";
+import { MIGRATIONS, sqlite3 } from "./lib/sqlite.ts";
+import { userData, type Session } from "./lib/userData.ts";
 
 /** The parts `bytes` holds, or undefined if they aren't a chain of parts. */
 async function chainOf(bytes: Uint8Array<ArrayBuffer>): Promise<DatabasePart[] | undefined> {

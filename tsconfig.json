@@ -3,7 +3,7 @@
   "references": [
     { "path": "./tsconfig.app.json" },
     { "path": "./tsconfig.node.json" },
-    { "path": "./tsconfig.worker.json" },
-    { "path": "./currency/tsconfig.json" }
+    { "path": "./workers/spendy2/tsconfig.json" },
+    { "path": "./workers/currency/tsconfig.json" }
   ]
 }

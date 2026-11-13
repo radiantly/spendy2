@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import sqlite3InitModule from "@sqlite.org/sqlite-wasm";
-import { NO_PREVIOUS_PART, readParts, sha256Hex } from "../../worker/databaseParts.ts";
+import { NO_PREVIOUS_PART, readParts, sha256Hex } from "../../workers/spendy2/databaseParts.ts";
 import { connect, RemoteError, type Remote } from "./rpc.ts";
 import type { DatabaseApi } from "./worker.ts";
 import { MIGRATIONS } from "./migrations.ts";

@@ -1,8 +1,8 @@
 import { reset } from "cloudflare:test";
 import * as opaque from "@serenity-kit/opaque";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { PASSWORD, forwardFetchToWorker } from "../../worker/test/helpers.ts";
-import { tokenSchema } from "../../worker/schemas.ts";
+import { PASSWORD, forwardFetchToWorker } from "../../workers/spendy2/test/helpers.ts";
+import { tokenSchema } from "../../workers/spendy2/schemas.ts";
 import { loginUser, logoutUser, registerUser } from "./auth.ts";
 import { downloadDatabase } from "./database.ts";
 

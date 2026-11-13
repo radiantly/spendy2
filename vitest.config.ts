@@ -68,7 +68,7 @@ export default defineConfig({
         plugins: [
           opaqueWorkerd(),
           cloudflareTest({
-            wrangler: { configPath: "./wrangler.jsonc" },
+            wrangler: { configPath: "./workers/spendy2/wrangler.jsonc" },
             miniflare: {
               bindings: {
                 OPAQUE_SERVER_SETUP: opaque.server.createSetup(),
@@ -80,8 +80,8 @@ export default defineConfig({
           }),
         ],
         test: {
-          name: "worker",
-          include: ["worker/**/*.test.ts", "src/api/**/*.test.ts"],
+          name: "spendy2",
+          include: ["workers/spendy2/**/*.test.ts", "src/api/**/*.test.ts"],
         },
       },
       {
@@ -89,7 +89,7 @@ export default defineConfig({
         // stub every request it makes.
         plugins: [
           cloudflareTest({
-            wrangler: { configPath: "./currency/cron/wrangler.jsonc" },
+            wrangler: { configPath: "./workers/currency/wrangler.jsonc" },
             miniflare: {
               bindings: { CLOUDFLARE_ACCOUNT_ID: "account", CLOUDFLARE_API_TOKEN: "token" },
             },
@@ -97,7 +97,7 @@ export default defineConfig({
         ],
         test: {
           name: "currency",
-          include: ["currency/**/*.test.ts"],
+          include: ["workers/currency/**/*.test.ts"],
         },
       },
       {

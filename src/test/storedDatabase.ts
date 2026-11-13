@@ -11,7 +11,7 @@
  *   vi.mock("../../api/databaseUpdates.ts", () => ({ watchDatabase: vi.fn() }));
  */
 import { vi } from "vitest";
-import { sha256Hex } from "../../worker/databaseParts.ts";
+import { sha256Hex } from "../../workers/spendy2/databaseParts.ts";
 import {
   appendDatabasePart,
   downloadDatabase,

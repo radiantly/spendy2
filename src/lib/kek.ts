@@ -4,7 +4,7 @@
  * per-upload AES-GCM data key.
  *
  * The derivation must stay stable: the scripts keep the KEK's bytes with
- * their session (see scripts/userData.ts), and changing `KEK_INFO` makes
+ * their session (see scripts/lib/userData.ts), and changing `KEK_INFO` makes
  * every existing wrapped key unrecoverable. Bump the version suffix only
  * alongside a migration.
  */

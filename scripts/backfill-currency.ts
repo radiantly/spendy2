@@ -1,25 +1,25 @@
 /**
- * Deploys the currency worker's rates from nothing (see currency/backfill.ts):
+ * Deploys the currency worker's rates from nothing (see workers/currency/backfill.ts):
  * every rate Frankfurter has, in place of whatever the worker had. Run it to
  * set the worker up, and again whenever its rates need putting right; the
  * daily update carries on from what it leaves.
  *
  * It needs CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN, a token that may
  * edit the worker's script: from the environment, or else from
- * currency/cron/.env.
+ * workers/currency/.env.
  *
  *   npm run deploy:currency
  */
 import path from "path";
 import { intro, log, outro, spinner } from "@clack/prompts";
-import { backfill } from "../currency/backfill.ts";
-import { today } from "../currency/chunks.ts";
-import { fail, readEnv } from "./lib.ts";
+import { backfill } from "../workers/currency/backfill.ts";
+import { today } from "../workers/currency/chunks.ts";
+import { fail, readEnv } from "./lib/lib.ts";
 
-/** The currency worker's name, as currency/cron/wrangler.jsonc has it. */
+/** The currency worker's name, as workers/currency/wrangler.jsonc has it. */
 const SCRIPT = "currency";
 
-const ENV_PATH = path.join(import.meta.dirname, "..", "currency", "cron", ".env");
+const ENV_PATH = path.join(import.meta.dirname, "..", "workers", "currency", ".env");
 
 intro("Backfill currency rates");
 
@@ -28,7 +28,7 @@ const accountId = env.CLOUDFLARE_ACCOUNT_ID;
 const apiToken = env.CLOUDFLARE_API_TOKEN;
 if (!accountId || !apiToken)
   fail(
-    "Set CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN, in the environment or in currency/cron/.env",
+    "Set CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN, in the environment or in workers/currency/.env",
   );
 
 const progress = spinner();

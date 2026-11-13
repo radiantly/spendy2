@@ -1,6 +1,6 @@
 /**
  * Encrypting and decrypting the parts the database is stored as; see
- * worker/databaseParts.ts for their format. Each part has a fresh AES-256-GCM
+ * workers/spendy2/databaseParts.ts for their format. Each part has a fresh AES-256-GCM
  * data key, wrapped with the KEK (AES-KW), and its AAD as AES-GCM's
  * additional data: the server reads the AAD to check the chain, and can't
  * change it without decrypting failing.
@@ -23,7 +23,7 @@ import {
   partChainError,
   readParts,
   type DatabasePart,
-} from "../../worker/databaseParts.ts";
+} from "../../workers/spendy2/databaseParts.ts";
 
 export type DatabasePartErrorCode =
   | "INVALID_FORMAT"

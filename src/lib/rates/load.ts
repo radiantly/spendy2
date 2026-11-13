@@ -1,6 +1,6 @@
 /**
  * Loads exchange rates from `currency.spendy2.com`, a chunk a request (the
- * format is in `currency/chunks.ts`), through TanStack Query.
+ * format is in `workers/currency/chunks.ts`), through TanStack Query.
  *
  * The rates are a fallback, and so is doing without them: a chunk that can't
  * be fetched is one without rates, and nothing waits for one. A chunk is
@@ -13,7 +13,7 @@ import {
   type QueryClient,
   type UseQueryResult,
 } from "@tanstack/react-query";
-import { FIRST_DAY, chunkPath, position } from "../../../currency/chunks.ts";
+import { FIRST_DAY, chunkPath, position } from "../../../workers/currency/chunks.ts";
 import { EURO, type ChunkRef, type Rates } from "./rates.ts";
 import { fill, lastRate, startsWithout } from "./reader.ts";
 

@@ -8,13 +8,13 @@
 import { confirm, intro, outro, spinner, text } from "@clack/prompts";
 import { encryptPart } from "../src/db/parts.ts";
 import { create } from "../src/db/replay.ts";
-import { databaseParts } from "./api.ts";
-import { booleanFlag, parseFlags, textFlag } from "./flags.ts";
-import { fail, onCancel } from "./lib.ts";
-import { MIGRATIONS, sqlite3 } from "./sqlite.ts";
-import { generateTestData } from "./testData.ts";
-import { userData } from "./userData.ts";
-import { NO_PREVIOUS_PART } from "../worker/databaseParts.ts";
+import { databaseParts } from "./lib/api.ts";
+import { booleanFlag, parseFlags, textFlag } from "./lib/flags.ts";
+import { fail, onCancel } from "./lib/lib.ts";
+import { MIGRATIONS, sqlite3 } from "./lib/sqlite.ts";
+import { generateTestData } from "./lib/seedData.ts";
+import { userData } from "./lib/userData.ts";
+import { NO_PREVIOUS_PART } from "../workers/spendy2/databaseParts.ts";
 
 function positiveWholeNumber(value: string | undefined) {
   if (!/^[1-9]\d*$/.test(value ?? "")) return "Enter a positive whole number";

@@ -1,9 +1,9 @@
 import * as opaque from "@serenity-kit/opaque";
 import { intro, outro, text, group } from "@clack/prompts";
 import path from "path";
-import { onCancel, readEnv, writeEnv } from "./lib.ts";
+import { onCancel, readEnv, writeEnv } from "./lib/lib.ts";
 
-const workerEnvPath = path.join(import.meta.dirname, "..", ".env");
+const workerEnvPath = path.join(import.meta.dirname, "..", "workers", "spendy2", ".env");
 
 intro(`Create dev .env`);
 

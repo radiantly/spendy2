@@ -1,4 +1,4 @@
-import { usernameSchema } from "../../../worker/schemas.ts";
+import { usernameSchema } from "../../../workers/spendy2/schemas.ts";
 
 const USERNAME_RULE = "Use 3–32 lowercase letters or numbers.";
 

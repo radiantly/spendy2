@@ -2,7 +2,7 @@
  * A transaction's amount in the currency its account displays in, for a
  * transaction in another: what the page shows beside its own amount.
  */
-import { dayOf } from "../../../currency/chunks.ts";
+import { dayOf } from "../../../workers/currency/chunks.ts";
 import {
   conversionTo,
   type AccountCurrency,

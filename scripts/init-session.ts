@@ -9,14 +9,20 @@ import { confirm, intro, outro, password, text } from "@clack/prompts";
 import path from "path";
 import { setTimeout } from "timers/promises";
 import { deriveKekBytes } from "../src/lib/kek.ts";
-import { usernameSchema } from "../worker/schemas.ts";
-import { send } from "./api.ts";
-import { booleanFlag, parseFlags, textFlag } from "./flags.ts";
-import { fail, required, url } from "./lib.ts";
-import { saveSession } from "./userData.ts";
+import { usernameSchema } from "../workers/spendy2/schemas.ts";
+import { send } from "./lib/api.ts";
+import { booleanFlag, parseFlags, textFlag } from "./lib/flags.ts";
+import { fail, required, url } from "./lib/lib.ts";
+import { saveSession } from "./lib/userData.ts";
 import { z } from "zod";
 
-const wranglerConfigPath = path.join(import.meta.dirname, "..", "wrangler.jsonc");
+const wranglerConfigPath = path.join(
+  import.meta.dirname,
+  "..",
+  "workers",
+  "spendy2",
+  "wrangler.jsonc",
+);
 
 /**
  * The URL of the deployed worker. Only a custom domain route maps to a URL,

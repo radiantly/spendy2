@@ -1,7 +1,7 @@
 import { reset } from "cloudflare:test";
 import * as opaque from "@serenity-kit/opaque";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { NO_PREVIOUS_PART, sha256Hex } from "../../worker/databaseParts.ts";
+import { NO_PREVIOUS_PART, sha256Hex } from "../../workers/spendy2/databaseParts.ts";
 import {
   chainedParts,
   concatBytes,
@@ -9,7 +9,7 @@ import {
   forwardFetchToWorker,
   loginToken,
   registerUser,
-} from "../../worker/test/helpers.ts";
+} from "../../workers/spendy2/test/helpers.ts";
 import {
   appendDatabasePart,
   downloadDatabase,

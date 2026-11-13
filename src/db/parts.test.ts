@@ -9,7 +9,7 @@ import {
   WRAPPED_KEY_OFFSET,
   readParts,
   sha256Hex,
-} from "../../worker/databaseParts.ts";
+} from "../../workers/spendy2/databaseParts.ts";
 import { deriveKek } from "../lib/kek.ts";
 import { EXPORT_KEY } from "../test/fixtures.ts";
 import { DatabasePartError, decryptPart, encryptPart, readChain } from "./parts.ts";

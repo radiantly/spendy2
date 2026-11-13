@@ -1,8 +1,8 @@
 import { reset } from "cloudflare:test";
 import * as opaque from "@serenity-kit/opaque";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { sha256Hex } from "../../worker/databaseParts.ts";
-import { tokenSchema } from "../../worker/schemas.ts";
+import { sha256Hex } from "../../workers/spendy2/databaseParts.ts";
+import { tokenSchema } from "../../workers/spendy2/schemas.ts";
 import {
   chainedParts,
   databasePart,
@@ -10,7 +10,7 @@ import {
   forwardWebSocketsToWorker,
   loginToken,
   registerUser,
-} from "../../worker/test/helpers.ts";
+} from "../../workers/spendy2/test/helpers.ts";
 import { logoutUser } from "./auth.ts";
 import { appendDatabasePart, replaceDatabase } from "./database.ts";
 import { PING_INTERVAL, RETRY_DELAYS, watchDatabase, type LatestPart } from "./databaseUpdates.ts";

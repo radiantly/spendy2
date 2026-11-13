@@ -37,7 +37,7 @@ jobs:
           node-version-file: package.json
           cache: npm
       - run: npm ci
-      - run: npx vitest run --project worker --project scripts
+      - run: npx vitest run --project spendy2 --project scripts
 
   test-browser:
     name: Test in ${{ matrix.browser }}
